@@ -4,16 +4,64 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux sandbox
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Restore exact dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify lockfile did not change
+        run: git diff --exit-code -- bun.lock
+      - name: Record observed platform capability
+        run: bun scripts/ci-platform.ts
+      - name: Full engineering gate
+        run: bun run check --reporter=junit --reporter-outfile=ci-results/tests.xml
+      - name: Report skipped tests and unavailable evidence
+        if: always()
+        run: python scripts/ci-report.py ci-results/tests.xml ci-results/platform.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checks-${{ matrix.os }}
+          path: ci-results/
+          if-no-files-found: error
+  sidecar:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install
-      - run: bun run typecheck
-      - run: bun test
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Python linter
+        run: python -m pip install ruff==0.16.9
+      - name: Python lint and protocol regressions (not real-model acceptance)
+        run: |
+          python -m ruff check --no-cache --select E9,F sidecar scripts/ci-report.py scripts/test
+          python -m py_compile sidecar/laya_server.py sidecar/test/fake/laya.py
+          python -m unittest discover -s sidecar/test -p 'test_*.py' -v
+          python -m unittest discover -s scripts/test -p 'test_*.py' -v

@@ -103,6 +103,29 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### CI matrix source and local evidence, 2026-09-30
+
+- Issue #1 adds GitHub-hosted Ubuntu/macOS/Windows checks with pinned Bun 1.4.2,
+  Node 26 and Python 3.12, frozen dependency restoration and unchanged-lockfile
+  verification. All jobs retain JUnit plus observed OS/sandbox metadata and a
+  separate JSON report of skipped test names and reasons. Missing reports fail;
+  Linux security-suite skips or unavailable bubblewrap fail the evidence gate.
+- macOS arm64, Darwin 27.0.0, Bun 1.4.2 at baseline `9aceeba` plus this CI patch:
+  `bun install --frozen-lockfile` restored without changing `bun.lock`;
+  `bun run check --reporter=junit --reporter-outfile=ci-results/tests.xml` exited
+  0: 622 pass, 12 skip, 0 fail, 2406 assertions, 634 tests / 36 files, 23.11 s.
+  `python3 scripts/ci-report.py ci-results/tests.xml ci-results/platform.json`
+  read those exact results; all 12 skips require Linux bubblewrap and are not
+  counted as passing macOS sandbox evidence.
+- Ruff 0.16.9 `--select E9,F` passed for sidecar and CI Python files. Three
+  Python HTTP protocol regressions with the explicitly fake Laya adapter and
+  four CI evidence/real corrupt frozen-lock rejection regressions passed. These
+  are engineering checks, not real-model or frontend acceptance.
+- Three-OS GitHub Actions runs and a repo-scoped Docker Actions runner are not
+  verified by these local results. Issue #1 stays open until their actual
+  platform results/artifacts are inspected; do not substitute container Linux
+  for native macOS/Windows evidence. No release/deployment is part of this patch.
+
 ### Exclusive runtime owner, 2026-09-30
 
 - Fixed the concurrent-start defect observed in the UX increment below. Ordinary

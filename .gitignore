@@ -11,4 +11,5 @@ dist/
 models/
 .DS_Store
 coverage/
+ci-results/
 /docs/superpowers/
