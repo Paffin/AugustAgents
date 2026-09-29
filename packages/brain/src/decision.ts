@@ -210,11 +210,14 @@ export interface LayaHttpOptions {
  * person's private text, so only a sidecar on this machine is accepted.
  */
 export function layaHttpTransport(url: string, options: LayaHttpOptions = {}): LayaPredictFn {
-  const parsed = new URL(url);
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new LayaTransportError("invalid Laya sidecar address"); }
+  if (!["http:", "https:"].includes(parsed.protocol) || !["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) {
     throw new LayaTransportError("the Laya sidecar must run on this machine (127.0.0.1)");
   }
-  const endpoint = `${url.replace(/\/+$/, "")}/predict`;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new LayaTransportError("the Laya sidecar address must not contain credentials, query or fragment");
+  parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/predict`;
+  const endpoint = parsed.href;
   const fetchFn = options.fetch ?? fetch;
   return async ({ state, question }) => {
     let response: Response;
@@ -222,6 +225,7 @@ export function layaHttpTransport(url: string, options: LayaHttpOptions = {}): L
       response = await fetchFn(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        redirect: "error",
         body: JSON.stringify({
           state,
           question: { id: question.id, instructions: question.instructions, options: question.options },

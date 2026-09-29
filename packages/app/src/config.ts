@@ -259,7 +259,8 @@ function parseLaya(v: unknown): LayaConfig | undefined {
   } catch {
     throw new ConfigError("laya.url is not a valid URL");
   }
-  if (!isLocalUrl(url)) throw new ConfigError("laya.url must point to this machine (127.0.0.1)");
+  if (!["http:", "https:"].includes(url.protocol) || !isLocalUrl(url)) throw new ConfigError("laya.url must use HTTP(S) on this machine (127.0.0.1)");
+  if (url.username || url.password || url.search || url.hash) throw new ConfigError("laya.url must not contain credentials, query or fragment");
   if (l.temperature !== undefined && !(typeof l.temperature === "number" && l.temperature > 0)) throw new ConfigError("laya.temperature must be positive");
   if (l.threshold !== undefined && !(typeof l.threshold === "number" && l.threshold > 0 && l.threshold <= 1)) throw new ConfigError("laya.threshold must be in (0, 1]");
   if (l.shadow !== undefined && typeof l.shadow !== "boolean") throw new ConfigError("laya.shadow must be true or false");

@@ -103,6 +103,23 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Local Laya transport privacy repair, 2026-09-29
+
+- The HTTP decision transport now rejects redirects, non-HTTP protocols, URL
+  credentials, query strings and fragments. Config parsing enforces the same
+  address boundary. A real pair of process-owned HTTP listeners verified that
+  a 307 redirect sends zero requests to its destination and returns a typed
+  transport error without private request text. This is a transport invariant,
+  not real-model acceptance.
+- Implementation-first full gate: `bun run check`, exit 0, 595 pass, 12 skip,
+  0 fail, 2228 expectations, 607 tests/35 files; test time 8.45 s. Platform
+  sandbox evidence remains skipped, not passed.
+- Native inference investigation located the [ONNX graph input/output contract](https://huggingface.co/mizchi/laya-multilingual-onnx/raw/main/README.md)
+  and the [reference prompt/tokenizer implementation](https://github.com/mizchi/laya-mlx/tree/main/web/packages/laya-web/src).
+  Native ONNX integration and useful frontend model decisions are not delivered
+  by this repair. Laya remains in shadow until independently verified outcomes
+  qualify activation; heuristic results must not be described as native Laya.
+
 ### Provider model discovery, 2026-09-29
 
 - Production templates no longer select a compiled model identifier. Setup reads

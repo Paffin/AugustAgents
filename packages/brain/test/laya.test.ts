@@ -20,6 +20,28 @@ const question: DecisionQuestion = {
 };
 
 describe("layaHttpTransport", () => {
+  // Safety/security invariant: private state stays at the explicitly configured local endpoint.
+  test("rejects ambiguous or non-HTTP sidecar addresses before dispatch", () => {
+    for (const url of ["not-a-url", "ftp://127.0.0.1", "http://owner:secret@127.0.0.1", "http://127.0.0.1?target=x", "http://127.0.0.1#x"]) {
+      expect(() => layaHttpTransport(url)).toThrow(LayaTransportError);
+    }
+  });
+
+  test("Safety: actual HTTP redirect cannot forward private state", async () => {
+    let forwarded = 0;
+    const destination = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
+      forwarded++; await request.text(); return Response.json({ probs: { "fs.read": 1, none: 0 } });
+    } });
+    const source = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, {
+      status: 307, headers: { location: `http://127.0.0.1:${destination.port}/predict` },
+    }) });
+    try {
+      const predict = layaHttpTransport(`http://127.0.0.1:${source.port}`);
+      await expect(predict({ state: "owner-private-state", question })).rejects.toThrow(LayaTransportError);
+      expect(forwarded).toBe(0);
+    } finally { source.stop(true); destination.stop(true); }
+  });
+
   test("only a sidecar on this machine is accepted", () => {
     expect(() => layaHttpTransport("https://laya.example.com")).toThrow(LayaTransportError);
     expect(() => layaHttpTransport("http://127.0.0.1:7788")).not.toThrow();
