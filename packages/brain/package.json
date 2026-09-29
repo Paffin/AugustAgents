@@ -7,5 +7,9 @@
     "@august/capabilities": "workspace:*",
     "@august/policy": "workspace:*"
   },
+  "optionalDependencies": {
+    "onnxruntime-node": "1.30.0",
+    "tokenizers": "0.23.2"
+  },
   "exports": { ".": "./src/index.ts" }
 }

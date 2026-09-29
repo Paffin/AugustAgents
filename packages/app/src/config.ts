@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { validateNativeLayaBundle, type NativeLayaBundle } from "@august/brain";
 
 export interface AugustConfig {
   /** Workspace part of session keys. */
@@ -19,7 +20,7 @@ export interface AugustConfig {
   dataDir: string;
   /** MCP servers to start. Listing one here is the person's own decision to trust it at the given level. */
   mcp: McpServerConfig[];
-  /** Laya sidecar. Absent: the heuristic engine stands in. */
+  /** Native Laya or a local sidecar. Absent: the heuristic engine stands in. */
   laya?: LayaConfig;
   /** Default isolation for MCP servers started as processes. */
   sandbox: SandboxMode;
@@ -49,7 +50,9 @@ export type SandboxMode = "auto" | "required" | "off";
 
 export interface LayaConfig {
   /** Sidecar URL, always on this machine. */
-  url: string;
+  url?: string;
+  /** Local ONNX bundle; mutually exclusive with url. */
+  onnx?: NativeLayaBundle;
   /** From "august calibrate". */
   temperature?: number;
   /** Calibrated confidence Laya needs to decide without the LLM. Default 0.7. */
@@ -252,20 +255,23 @@ function httpsUrl(v: unknown, where: string): string {
 function parseLaya(v: unknown): LayaConfig | undefined {
   if (v === undefined) return undefined;
   const l = v as Partial<LayaConfig> | null;
-  if (!l || typeof l !== "object" || typeof l.url !== "string") throw new ConfigError("laya.url is required");
-  let url: URL;
-  try {
-    url = new URL(l.url);
-  } catch {
-    throw new ConfigError("laya.url is not a valid URL");
+  if (!l || typeof l !== "object") throw new ConfigError("laya needs a local url or onnx bundle");
+  if ((l.url !== undefined) === (l.onnx !== undefined)) throw new ConfigError("configure exactly one of laya.url or laya.onnx");
+  let onnx: NativeLayaBundle | undefined;
+  if (l.onnx !== undefined) {
+    try { onnx = validateNativeLayaBundle(l.onnx); } catch (error) { throw new ConfigError((error as Error).message); }
+  } else {
+    let url: URL;
+    try { if (typeof l.url !== "string") throw new Error(); url = new URL(l.url); }
+    catch { throw new ConfigError("laya.url is not a valid URL"); }
+    if (!["http:", "https:"].includes(url.protocol) || !isLocalUrl(url)) throw new ConfigError("laya.url must use HTTP(S) on this machine (127.0.0.1)");
+    if (url.username || url.password || url.search || url.hash) throw new ConfigError("laya.url must not contain credentials, query or fragment");
   }
-  if (!["http:", "https:"].includes(url.protocol) || !isLocalUrl(url)) throw new ConfigError("laya.url must use HTTP(S) on this machine (127.0.0.1)");
-  if (url.username || url.password || url.search || url.hash) throw new ConfigError("laya.url must not contain credentials, query or fragment");
   if (l.temperature !== undefined && !(typeof l.temperature === "number" && l.temperature > 0)) throw new ConfigError("laya.temperature must be positive");
   if (l.threshold !== undefined && !(typeof l.threshold === "number" && l.threshold > 0 && l.threshold <= 1)) throw new ConfigError("laya.threshold must be in (0, 1]");
   if (l.shadow !== undefined && typeof l.shadow !== "boolean") throw new ConfigError("laya.shadow must be true or false");
   if (l.engine !== undefined && !(typeof l.engine === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(l.engine))) throw new ConfigError("laya.engine must be a short identifier like laya-2026-09");
-  return { url: l.url, temperature: l.temperature, threshold: l.threshold, shadow: l.shadow, ...(l.engine === undefined ? {} : { engine: l.engine }) };
+  return { ...(onnx ? { onnx } : { url: l.url }), temperature: l.temperature, threshold: l.threshold, shadow: l.shadow, ...(l.engine === undefined ? {} : { engine: l.engine }) };
 }
 
 function parseChannels(v: unknown): ChannelsConfig {

@@ -150,6 +150,20 @@ describe("Laya activation and calibration use verified outcomes", () => {
     expect(ev.data).toMatchObject({ forced: true, ready: false });
   });
 
+  test("Safety (REQ-FUNC-007): a new engine cannot activate using another checkpoint's verified outcomes", async () => {
+    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io); configureTestPricing(io.home);
+    const { path } = withLaya(home);
+    const app = open(home, scripted([{ tool: "none" }])); seed(app, 250, 245, 0.95);
+    expect(app.activationReport().ready).toBe(true); app.close();
+    const saved = loadConfig(path);
+    writeConfig(path, { ...saved, laya: { ...saved.laya!, engine: "different-checkpoint" } });
+    expect((await main(["laya", "activate"], io)).code).toBe(1);
+    expect(loadConfig(path).laya?.shadow).not.toBe(false);
+    expect(out.join("\n")).toContain("no verified examples yet");
+    writeConfig(path, saved);
+    expect((await main(["laya", "activate"], io)).code).toBe(0);
+  });
+
   test("calibrate needs verified data, fits one temperature per language and question, and writes an owner-only table", async () => {
     const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io); configureTestPricing(io.home); const { cfg } = withLaya(home);
     expect((await main(["calibrate"], io)).code).toBe(1); expect(out.join("\n")).toContain("needs at least 50");

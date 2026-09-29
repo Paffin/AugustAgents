@@ -7,8 +7,13 @@
   Bun 1.1.39 is the first release with text `bun.lock`; current development is
   observed on Bun 1.4.2. Sources: https://bun.sh/docs/pm/lockfile and
   https://bun.sh/guides/install/yarnlock, verified 2026-09-29.
-- Current Laya integration is a Python HTTP sidecar on loopback. Native ONNX/MLX
-  inference and a real qualified checkpoint remain the requested target (OUT-011).
+- Laya supports in-process native CPU ONNX inference (`laya.onnx`) or a Python
+  HTTP sidecar on loopback (`laya.url`), mutually exclusive. Native bundles pin
+  weights, tokenizer, tokenizer configuration and prompt limits by SHA-256.
+  Engine/calibration identity follows those contents, not a compiled model name.
+  Backend loading is lazy; invalid/unavailable native assets yield primary errors
+  and the cascade uses its LLM fallback. Native activation and local training
+  remain subject to independently verified, engine-specific outcomes (OUT-011).
 - Bun SQLite `runtime.db` schema v2/WAL now stores messages/runs/checkpoints and
   provider usage. Earlier Phase A evidence remains historical.
 - Maintained MCP SDK 1.31.0 is pinned behind the existing August adapter.
@@ -33,13 +38,15 @@
 
 ## Modules
 
-### Current source at `e596112`, observed 2026-09-29
+### Current source, observed 2026-09-29
 
 - `core`: lane queue, session keys, schema-v2 durable store with usage accounting,
   and audit/journal primitives. Current runtime acceptance is incomplete.
 - `agent`: orchestration of decision, arguments, policy, approval, execution,
   result, and response.
 - `brain`: typed decision engines, Laya/LLM cascade, calibration, and providers.
+  Native ONNX serializes inference and releases its session on shutdown. Exact
+  optional native dependencies are pinned; HTTP/LLM users do not import them.
 - `policy`: effects, taint, mandates, and loop guards.
 - `capabilities`: manifests, trust, registry, shortlist, and scanning.
 - `mcp`: protocol/transport adapter, server host, mapping, and sandbox wrapper.
@@ -92,7 +99,7 @@
 ### Observed and evolution contract
 
 - Current MCP stdio/HTTP, Keychain/Secret Service/file store, Telegram, web, and
-  Laya HTTP are adapters.
+  Laya HTTP/native ONNX are adapters.
 - `DurableRuntimeStore` is the selected local SQLite/WAL persistence adapter for
   OUT-002; channels remain unaware of storage details.
 - Test fakes are justified only at these public seams and must preserve active

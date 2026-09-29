@@ -15,9 +15,11 @@ The authoritative Agentic Foundation is listed in
 ## Current Focus
 
 Continue native Laya integration, billing correctness and runtime acceptance.
-Provider model discovery is implemented. A real pinned ONNX Laya export ran
-typed decisions under Bun without Python; App/frontend integration and its
-activation exam remain pending (see Verification). Frozen prices were removed;
+Provider model discovery is implemented. Native CPU ONNX Laya is integrated in
+App's shadow cascade; a useful web file/computation journey passed with real
+recorded model probabilities. The host-native standalone runtime is also verified;
+activation exam, local training and other platforms remain pending (see Verification).
+Frozen prices were removed;
 owner quotes and web task thresholds are validated. Real file reading, restart
 and zero-cost admission journeys pass locally. Preserve the full 28-outcome goal.
 

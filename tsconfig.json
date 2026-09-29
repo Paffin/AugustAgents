@@ -17,5 +17,5 @@
     "verbatimModuleSyntax": true,
     "paths": { "@august/*": ["./packages/*/src/index.ts"] }
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "scripts/**/*.ts"]
 }

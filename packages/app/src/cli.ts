@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
-import { DecisionCascade, HeuristicEngine } from "@august/brain";
+import { DecisionCascade, HeuristicEngine, NativeLayaTransport, nativeLayaIdentity } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
 import { LaneQueue, makeSessionKey } from "@august/core";
 import { startGateway, type RunningGateway } from "@august/gateway";
@@ -546,7 +546,7 @@ function laya(configPath: string, args: readonly string[], io: CliIo): CliResult
     const s = readStats(config);
     const report = app.activationReport();
     if (args[0] === undefined || args[0] === "status") {
-      io.print(config.laya ? `Laya sidecar: ${config.laya.url} (engine ${config.laya.engine ?? "laya"})` : "Laya: not connected (a heuristic stands in). See sidecar/laya_server.py.");
+      io.print(config.laya?.onnx ? `Native Laya ONNX: ${config.laya.onnx.directory} (engine ${nativeLayaIdentity(config.laya.onnx)})` : config.laya ? `Laya sidecar: ${config.laya.url} (engine ${config.laya.engine ?? "laya"})` : "Laya: not connected (a heuristic stands in). Configure laya.onnx or laya.url.");
       io.print(`Mode: ${config.laya?.shadow === false ? "deciding" : "shadow (the LLM decides, Laya is measured)"}`);
       io.print(`Verified outcomes: ${report.samples} examples with Laya's answer across ${report.questions.join(", ") || "no question types yet"}`);
       for (const q of report.perQuestion) io.print(`  ${q.questionId}: ${q.samples} samples, accuracy ${(q.accuracy * 100).toFixed(1)}% (lower bound ${(q.accuracyLowerBound * 100).toFixed(1)}%), calibration error ${q.ece.toFixed(3)}${q.passed ? " ✓" : ""}`);
@@ -556,7 +556,7 @@ function laya(configPath: string, args: readonly string[], io: CliIo): CliResult
     }
     if (args[0] === "activate") {
       if (!config.laya) {
-        io.print("Connect the Laya sidecar first (laya.url in the config).");
+        io.print("Connect native Laya or a local sidecar first (laya.onnx or laya.url in the config).");
         return { code: 1 };
       }
       const forced = args.includes("--force");
@@ -741,12 +741,19 @@ async function doctor(configPath: string, io: CliIo): Promise<CliResult> {
   else ok(`Sandbox: ${sandbox}`);
 
   if (config.laya) {
-    try {
-      const r = await (io.fetch ?? fetch)(`${config.laya.url.replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(2000) });
-      if (r.ok) ok(`Laya sidecar at ${config.laya.url}`);
-      else bad(`Laya sidecar answered HTTP ${r.status}`);
-    } catch {
-      bad(`Laya sidecar not reachable at ${config.laya.url} (python sidecar/laya_server.py)`);
+    if (config.laya.onnx) {
+      const native = new NativeLayaTransport(config.laya.onnx);
+      try { await native.ready(); ok(`Native Laya ONNX verified and loaded (${native.identity})`); }
+      catch { bad("Native Laya unavailable: check pinned bundle files and native runtime dependencies"); }
+      finally { await native.close(); }
+    } else {
+      try {
+        const r = await (io.fetch ?? fetch)(`${config.laya.url!.replace(/\/+$/, "")}/health`, { redirect: "error", signal: AbortSignal.timeout(2000) });
+        if (r.ok) ok(`Laya sidecar at ${config.laya.url}`);
+        else bad(`Laya sidecar answered HTTP ${r.status}`);
+      } catch {
+        bad(`Laya sidecar not reachable at ${config.laya.url} (python sidecar/laya_server.py)`);
+      }
     }
   } else {
     warn("Laya not connected; a heuristic stands in and decisions are logged for later");

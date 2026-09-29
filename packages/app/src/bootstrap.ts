@@ -13,6 +13,8 @@ import {
   OpenAiCompatibleProvider,
   UsageRequiredProvider,
   layaHttpTransport,
+  NativeLayaTransport,
+  nativeLayaIdentity,
   type DecisionEngine,
   type LlmProvider,
 } from "@august/brain";
@@ -23,7 +25,7 @@ import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, san
 import { MemoryExecutor, MemoryStore, memoryManifest } from "@august/memory";
 import { maxSensitivity } from "@august/policy";
 import { DistillationEngine, PatternStore, type Route } from "@august/ladder";
-import { LearningStore,VerifierSet, calibrationSamples, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
+import { LearningStore,VerifierSet, calibrationSamples, engineOf, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
 import { PolicyEngine } from "@august/policy";
 import { BuiltinExecutor, builtinManifest, clockManifest } from "./builtins.ts";
 import { ConfigError, loadConfig, resolveLlmPricing, writeConfig, type AugustConfig, type McpServerConfig } from "./config.ts";
@@ -156,10 +158,10 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const pricing = resolveLlmPricing(config);
   const llm = new UsageRequiredProvider(deps.llm ?? createLlm(config, deps, secrets));
 
-  // Laya decides when a sidecar is configured; until then a heuristic stands in.
+  // Native/sidecar Laya is explicit; until then a heuristic stands in.
   // Either way the cascade starts in shadow mode and earns its way out.
   let primary: DecisionEngine = new HeuristicEngine();
-  const engineId = config.laya?.engine ?? "laya";
+  const engineId = config.laya?.onnx ? nativeLayaIdentity(config.laya.onnx) : config.laya?.engine ?? "laya";
   const calibrationPath = join(config.dataDir, "calibration.json");
   const loadCalibration = (): CalibrationTable | undefined => {
     try { return existsSync(calibrationPath) ? parseCalibrationTable(JSON.parse(readFileSync(calibrationPath, "utf8"))) : undefined; }
@@ -167,7 +169,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     catch { return undefined; }
   };
   let laya: LayaEngine | undefined;
-  if (config.laya) primary = laya = new LayaEngine(layaHttpTransport(config.laya.url, { fetch: deps.fetch }), { temperature: config.laya.temperature, calibration: loadCalibration(), engine: engineId });
+  const nativeLaya = config.laya?.onnx ? new NativeLayaTransport(config.laya.onnx) : undefined;
+  if (config.laya) primary = laya = new LayaEngine(nativeLaya?.predict ?? layaHttpTransport(config.laya.url!, { fetch: deps.fetch }), { temperature: config.laya.temperature, calibration: loadCalibration(), engine: engineId });
   const cascade = new DecisionCascade({
     primary,
     fallback: new LlmChoiceEngine(llm),
@@ -508,7 +511,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       laya?.setCalibration(table);
       return { samples: samples.length, segments: Object.keys(table.fits).length, table };
     },
-    activationReport: () => evaluateActivation(learning.examples().examples),
+    activationReport: () => evaluateActivation(learning.examples().examples.filter(example => engineOf(example) === engineId)),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };
       for (const entry of config.mcp) {
@@ -524,6 +527,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       // Vouch for everything up to the last event before the journal is closed.
       try { audit.anchor(); } catch { /* the journal is still intact; the next run anchors it */ }
       mcp.closeAll();
+      if (nativeLaya) void nativeLaya.close();
       for (const proxy of proxies) void proxy.close();
       learning.close();
       patternStore.close();

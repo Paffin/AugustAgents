@@ -51,6 +51,14 @@ describe("config", () => {
     expect(good().gateway.token).not.toBe(good().gateway.token);
   });
 
+  test("Safety (REQ-FUNC-007): native Laya and sidecar selection are exclusive and content-pinned", () => {
+    const onnx = { directory: "/owner/models/laya", sha256: { model: "a".repeat(64), tokenizer: "b".repeat(64), tokenizerConfig: "c".repeat(64), modelConfig: "d".repeat(64) } };
+    expect(parseConfig({ ...good(), laya: { onnx } }).laya?.onnx).toEqual(onnx);
+    expect(() => parseConfig({ ...good(), laya: { onnx, url: "http://127.0.0.1:7788" } })).toThrow(/exactly one/);
+    expect(() => parseConfig({ ...good(), laya: {} })).toThrow(/exactly one/);
+    expect(() => parseConfig({ ...good(), laya: { onnx: { ...onnx, sha256: {} } } })).toThrow(/SHA-256/);
+  });
+
   test("refuses a key-looking apiKeyEnv, a short token and a bad port", () => {
     expect(() => parseConfig({ ...good(), llm: { ...good().llm, apiKeyEnv: "sk-abc123" } })).toThrow(/environment variable name/);
     expect(() => parseConfig({ ...good(), gateway: { port: 1, token: "short" } })).toThrow(/16/);

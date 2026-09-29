@@ -103,6 +103,54 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Native Laya App integration and host-native build, 2026-09-29
+
+- Added lazy CPU ONNX inference to App's existing shadow cascade; no Python,
+  HTTP model sidecar, automatic model download or compiled checkpoint identifier.
+  The four local bundle files must match configured SHA-256. The verified bytes
+  are passed directly to the runtime; the model path is not reopened after
+  verification. Weight/tokenizer/limits changes also change engine identity.
+  Activation and calibration consume only current-engine verified outcomes.
+- `bun install --frozen-lockfile` exits 0. Native versions are pinned in
+  `bun.lock`: onnxruntime-node 1.30.0, tokenizers 0.23.2. Bun blocks the optional
+  ONNX postinstall script; macOS CPU binaries are already bundled and work without
+  it. No CUDA download or global dependency installation was authorized/performed.
+- `bun run check` exits 0: 601 pass, 12 skip, 0 fail, 2258 expectations across
+  613 tests/36 files, test time 20.13 s. Native asset/replacement/lifecycle tests
+  were authored after implementation, not with TDD. An earlier run before the
+  new engine-switch regression had 600 pass / 12 skip / 0 fail in 22.97 s.
+  Compared with the prior 8.45 s gate, real installer cases now download/copy
+  native dependencies and dominate elapsed time; no coverage or timeout was
+  weakened to hide that cost. Sandbox/platform skips remain unavailable evidence.
+- Useful browser task through actual CLI gateway and loaded local provider:
+  read fresh `order.json`, preserve random reference `1627d412bf4f79a5`, compute
+  46893 + 37 = 46930. Run `182f51a5-2cb9-4396-962f-73d2f3dade8f` completed,
+  1 step, 933 input / 1936 output tokens, 118.03 s. File readback is unchanged.
+  After process restart, a Russian request recalled the reference and computed
+  46930 + 11 = 46941 without another tool call. Run
+  `2372cefd-2b5f-40c0-9e95-68fa008ca2c4` completed, 0 steps, 480 input / 546
+  output tokens, 14.94 s. Browser console reports no errors; rendered captures
+  inspected in owned `/private/tmp/august-native-laya.qHKxXd/`.
+- Native probabilities and engine identity are retained in actual learning rows.
+  On the first real shortlist Laya incorrectly chose `none` (0.67697), then
+  after reading chose `fs.read` (0.99668) when the LLM correctly finished. Shadow
+  fallback prevented repeated work; tainted-context training is excluded. Host
+  read verification and frontend answer feedback succeeded. This does **not**
+  qualify autonomous Laya: its activation exam/local training remain incomplete.
+- Plain `bun build --compile` initially failed native loading with a missing
+  `libonnxruntime.1.dylib`. The new `bun run build` embeds the host's CPU library;
+  lazy native loading extracts only that embedded asset into a process-owned
+  temporary directory and preloads it before N-API. Actual compiled diagnostic
+  executed the real graph, matching source probabilities (`fs.read` 0.87793).
+  Host-native App binary built successfully, 121736178 bytes before final
+  documentation-only closeout. Shared-library extraction cleanup is process-exit
+  best-effort; Windows DLL locks and other platform builds remain unverified.
+- After both completed journeys, the owned gateway and browser were stopped;
+  port 60152 is clear. Scratch models, binaries and evidence remain outside Git.
+- These are macOS arm64 prototype observations, not Linux/Windows matrix,
+  release signing, complete onboarding, qualified agent checkpoint, pricing/
+  budget completion or fulfillment of the full 28-outcome goal.
+
 ### Local Laya transport privacy repair, 2026-09-29
 
 - The HTTP decision transport now rejects redirects, non-HTTP protocols, URL
