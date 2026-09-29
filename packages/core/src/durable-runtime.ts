@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
 import type { SessionKey } from "./session.ts";
 
 export type MessageRole = "user" | "assistant";
@@ -53,8 +52,17 @@ function schema(db: Database): number {
   const row = db.query("SELECT value FROM runtime_meta WHERE key='schema_version'").get() as { value: string } | null;
   const version = Number(row?.value); if (![1, 2].includes(version)) throw new Error(`unsupported runtime schema ${row?.value ?? "missing"}`); return version;
 }
-function immutable(path: string): string { const url = pathToFileURL(path); url.searchParams.set("immutable", "1"); return url.href; }
-export function inspectRuntimeSchema(path: string): number { const db = new Database(immutable(path), { readonly: true }); try { return schema(db); } finally { db.close(); } }
+/**
+ * Read-only opens load a private in-memory image: the SQLite URI `immutable=1` flag is not honored by every
+ * platform build of bun:sqlite, and a plain read-only open of a WAL file creates -wal/-shm sidecars. WAL header
+ * flags are cleared on the copy only; the file on disk is never written.
+ */
+function openImmutable(path: string): Database {
+  const image = new Uint8Array(readFileSync(path));
+  if (image.length >= 100 && image[18] === 2 && image[19] === 2) { image[18] = 1; image[19] = 1; }
+  const db = Database.deserialize(image); db.run("PRAGMA query_only = ON"); return db;
+}
+export function inspectRuntimeSchema(path: string): number { const db = openImmutable(path); try { return schema(db); } finally { db.close(); } }
 function fileDigest(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 function migrateV1(path: string): void {
   let db = new Database(path); let version: number;
@@ -74,8 +82,7 @@ export class DurableRuntimeStore {
   constructor(path = ":memory:", options: DurableRuntimeStoreOptions = {}) {
     const fresh = path === ":memory:" || !existsSync(path);
     if (!fresh && !options.readOnly) migrateV1(path);
-    const source = options.readOnly && path !== ":memory:" ? immutable(path) : path;
-    this.db = new Database(source, options.readOnly ? { readonly: true } : undefined);
+    this.db = options.readOnly && path !== ":memory:" ? openImmutable(path) : new Database(path);
     this.db.run("PRAGMA foreign_keys = ON");
     if (fresh && !options.readOnly) {
       this.db.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); this.db.run("INSERT INTO runtime_meta VALUES ('schema_version','2')");
