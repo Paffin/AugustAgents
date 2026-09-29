@@ -72,6 +72,7 @@ export class DurableRuntimeStore {
   schemaVersion(): number { return Number((this.db.query("SELECT value FROM runtime_meta WHERE key='schema_version'").get() as { value: string }).value); }
   journalMode(): string { return (this.db.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode; }
   counts(): { messages: number; runs: number } { return { messages: (this.db.query("SELECT COUNT(*) count FROM messages").get() as { count: number }).count, runs: (this.db.query("SELECT COUNT(*) count FROM runs").get() as { count: number }).count }; }
+  taintSources(session: SessionKey): string[] { const sources = new Set<string>(); for (const row of this.db.query("SELECT checkpoint_json FROM runs WHERE session=? AND checkpoint_json IS NOT NULL").all(session) as Array<{ checkpoint_json: string }>) { const taint = (JSON.parse(row.checkpoint_json) as { taint?: { tainted?: unknown; sources?: unknown } }).taint; if (!taint || typeof taint.tainted !== "boolean" || !Array.isArray(taint.sources) || taint.sources.some((source) => typeof source !== "string") || taint.tainted !== (taint.sources.length > 0)) throw new Error("invalid persisted checkpoint taint"); for (const source of taint.sources) sources.add(source as string); } return [...sources].sort(); }
   appendMessage(session: SessionKey, role: MessageRole, content: string, now = Date.now()): ConversationMessage {
     return this.db.transaction(() => {
       const row = this.db.query("SELECT COALESCE(MAX(seq),0)+1 AS seq FROM messages WHERE session=?").get(session) as { seq: number };

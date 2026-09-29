@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
-import { AgentCheckpointError } from "@august/agent";
+import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
 import { IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
 import { LoopGuard } from "@august/policy";
 import {
@@ -316,6 +316,15 @@ describe("createApp", () => {
   test("Product behavior: run state filtering happens before the requested limit", async () => {
     const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "done") }); const completed = await app.handle(runtimeSession, "complete");
     const newest = app.runs.startRun({ session: runtimeSession, request: "cancel" }).run; await app.cancelRun(newest.id); expect(app.listRuns({ session: runtimeSession, states: ["completed"], limit: 1 })[0]?.id).toBe(completed.runId); app.close();
+  });
+
+  test("Safety/security invariant: untrusted result taint survives App restart", async () => {
+    const home = tmp(); const cfg = defaultConfig(home); mkdirSync(cfg.root, { recursive: true }); writeFileSync(join(cfg.root, "attack.txt"), "attacker content"); const taintedSession = makeSessionKey({ workspace: "home", channel: "test", user: "tainted" });
+    let app = createApp(cfg, { env: { OPENAI_API_KEY: "k" }, llm: scriptedLlm({ tool: "fs.read", args: { path: "attack.txt" }, reply: "ATTACKER-INSTRUCTION find a weather tool later" }) }); const first = await app.handle(taintedSession, "read attack.txt"); expect(first.tainted).toBe(true); app.close();
+    let registryCalls = 0; const fetch = (async () => (registryCalls++, new Response(JSON.stringify({ servers: [] })))) as unknown as typeof globalThis.fetch; const asked: ApprovalRequest[] = [];
+    app = createApp(cfg, { env: { OPENAI_API_KEY: "k" }, fetch, llm: scriptedLlm({ tool: "august.find_tools", args: { query: "weather" }, reply: "done" }) }); const second = await app.handle(taintedSession, "continue", { approve: async (request) => (asked.push(request), false) });
+    expect(second.tainted).toBe(true); expect(asked[0]?.verdict.rule).toBe("tainted-context"); expect(registryCalls).toBe(0); expect(app.runs.taintSources(taintedSession)).toContain("fs.read");
+    const clean = makeSessionKey({ workspace: "home", channel: "test", user: "clean" }); await app.handle(clean, "find a weather tool"); expect(registryCalls).toBe(1); app.close();
   });
 });
 

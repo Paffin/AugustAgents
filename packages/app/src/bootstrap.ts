@@ -239,7 +239,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
   const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
-  const execute = async (run: DurableRun, perMessage?: Approver, priorMessages?: string[]): Promise<DurableAgentReply> => {
+  const execute = async (run: DurableRun, perMessage?: Approver, priorMessages?: string[], priorTaintSources: string[] = []): Promise<DurableAgentReply> => {
     if (run.state === "recovering" && (!run.checkpoint?.safeToResume || run.checkpoint.phase === "tool_started")) throw new Error("run needs owner resolution before resume");
     const controller = new AbortController(); let finish!: () => void;
     const entry: Active = { controller, done: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
@@ -249,7 +249,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       const checkpoint = run.checkpoint as (AgentCheckpointState & typeof run.checkpoint) | undefined;
       if (checkpoint && (!checkpoint.taint || !checkpoint.loop || checkpoint.steps === undefined || checkpoint.externalEffects === undefined)) throw new Error("run checkpoint is missing safety state");
       let reply = await agent.handle(run.session, run.request, {
-        priorMessages, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
+        priorMessages, priorTaint: { tainted: priorTaintSources.length > 0, sources: priorTaintSources }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onEvent: (event) => {
           if (event.type !== "checkpoint") return;
@@ -297,15 +297,15 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     async handle(session, text, perMessage, options = {}) {
       const started = runs.startRun({ session, request: text, ...options });
       if (started.replayed) { if (started.run.reply === undefined) throw new Error("completed run has no reply"); return { reply: started.run.reply, steps: started.run.steps, tainted: (started.run.checkpoint?.taint as { tainted?: boolean } | undefined)?.tainted === true, runId: started.run.id, replayed: true }; }
-      const prior = runs.stateView(session); runs.appendMessage(session, "user", text);
-      return execute(started.run, perMessage, prior);
+      const prior = runs.stateView(session); const priorTaintSources = runs.taintSources(session); runs.appendMessage(session, "user", text);
+      return execute(started.run, perMessage, prior, priorTaintSources);
     },
     getRun: (id) => runs.getRun(id),
     listRuns: (options = {}) => runs.listRuns(options.session, options.limit, options.states),
     pauseRun: (id) => stop(id, "paused"),
     cancelRun: (id) => stop(id, "cancelled"),
-    resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run)); },
-    retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run)); },
+    resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run), runs.taintSources(run.session)); },
+    retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run), runs.taintSources(run.session)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };

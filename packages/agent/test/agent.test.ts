@@ -78,9 +78,10 @@ describe("AgentRuntime", () => {
     const decision = picks("none");
     const llm = fakeLlm({}, "remembered");
     const { agent } = build({ decision, llm, executor: executor() });
-    await agent.handle(session, "search notes: what was it?", { priorMessages: ["User: remember NEPTUNE-7429", "Assistant: okay"] });
+    const reply = await agent.handle(session, "search notes: what was it?", { priorMessages: ["User: remember NEPTUNE-7429", "Assistant: okay"] });
     expect(decision.asked[0]).toContain("NEPTUNE-7429");
     expect(llm.prompts.at(-1)!.at(-1)!.content).toContain("NEPTUNE-7429");
+    expect(reply.tainted).toBe(true);
   });
 
   test("Product behavior: StateView role labels alone do not invent a tool match", async () => {
@@ -131,6 +132,11 @@ describe("AgentRuntime", () => {
     const looped = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor() });
     const reply = await looped.agent.handle(session, "search", { checkpoint: { history: [], taint: { tainted: false, sources: [] }, loop: loop.snapshot(), steps: 3, externalEffects: 0 } });
     expect(reply.reply).toContain("Stopped");
+  });
+
+  test("Safety/reliability invariant: durable prior taint enters a fresh run", async () => {
+    const asked: ApprovalRequest[] = []; const ex = executor(); const { agent } = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: ex, approver: { approve: async (request) => (asked.push(request), false) } });
+    const reply = await agent.handle(session, "send", { priorTaint: { tainted: true, sources: ["web.fetch"] } }); expect(reply.tainted).toBe(true); expect(asked[0]?.verdict.rule).toBe("tainted-context"); expect(ex.calls).toHaveLength(0);
   });
 
   test("Safety/reliability invariant: restored prior context and scratch stay separate", async () => {

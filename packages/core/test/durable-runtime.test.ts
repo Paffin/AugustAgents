@@ -102,6 +102,12 @@ describe("DurableRuntimeStore", () => {
     store.transition(run.id, "running"); const finished = store.finishRun(run.id, "completed", "done", { steps: 1 }); expect(finished).toMatchObject({ state: "completed", reply: "done", steps: 1 }); expect(store.messages(session).at(-1)).toMatchObject({ role: "assistant", content: "done" }); store.close();
   });
 
+  test("Safety/reliability invariant: session taint survives terminal runs", () => {
+    const store = new DurableRuntimeStore(); const { run } = store.startRun({ session, request: "tainted" }); store.transition(run.id, "running");
+    store.checkpoint(run.id, { phase: "before_decision", safeToResume: true, history: [], taint: { tainted: true, sources: ["web.fetch"] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 }); store.finishRun(run.id, "completed", "done");
+    expect(store.taintSources(session)).toEqual(["web.fetch"]); store.close();
+  });
+
   test("Safety/reliability invariant: startup marks interrupted tool calls ambiguous", () => {
     const path = tempDb();
     let store = new DurableRuntimeStore(path);

@@ -93,6 +93,7 @@ export type AgentRunEvent =
   | { type: "stopped"; reason: NonNullable<AgentReply["stopReason"]> };
 export interface AgentExecutionContext {
   priorMessages?: readonly string[];
+  priorTaint?: ReturnType<TaintState["snapshot"]>;
   checkpoint?: AgentCheckpointState;
   signal?: AbortSignal;
   deadlineAt?: number;
@@ -143,7 +144,9 @@ export class AgentRuntime {
     const { journal } = this.options;
     const log = (kind: string, data: unknown) => journal.append({ kind, session, data }, this.now());
     if (context.checkpoint && (!context.checkpoint.taint || !context.checkpoint.loop)) throw new Error("checkpoint is missing safety state");
+    const priorTaint = new TaintState(context.priorTaint ?? (context.priorMessages?.length ? { tainted: true, sources: ["durable-prior-context"] } : undefined));
     const taint = new TaintState(context.checkpoint?.taint);
+    for (const source of priorTaint.snapshot().sources) taint.mark(source);
     const guard = new LoopGuard({ maxSteps: context.maxSteps ?? this.options.maxSteps ?? 12 });
     if (context.checkpoint) guard.restore(context.checkpoint.loop);
     if (context.maxSteps !== undefined && (!Number.isInteger(context.maxSteps) || context.maxSteps < 1)) throw new Error("invalid maxSteps");
