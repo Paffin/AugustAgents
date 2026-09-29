@@ -104,17 +104,23 @@ describe("python sidecar (with a fake laya module)", () => {
   const root = join(import.meta.dir, "../../../sidecar");
 
   async function start(mode: string, p: number): Promise<ChildProcess> {
-    const child = spawn("python3", [join(root, "laya_server.py"), "--port", String(p)], {
+    const child = spawn(process.env.AUGUST_TEST_PYTHON ?? "python3", [join(root, "laya_server.py"), "--port", String(p)], {
       env: { ...process.env, PYTHONPATH: join(root, "test/fake"), LAYA_FAKE: mode },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    for (let i = 0; i < 50; i++) {
+    let diagnostics = ""; let spawnError: Error | undefined;
+    child.stderr?.on("data", data => { diagnostics = (diagnostics + String(data)).slice(-2000); });
+    child.on("error", error => { spawnError = error; });
+    const deadline = Date.now() + 3500;
+    while (Date.now() < deadline) {
+      if (spawnError || child.exitCode !== null) break;
       try {
-        if ((await fetch(`http://127.0.0.1:${p}/health`)).ok) return child;
+        if ((await fetch(`http://127.0.0.1:${p}/health`, { signal: AbortSignal.timeout(250) })).ok) return child;
       } catch {}
       await Bun.sleep(100);
     }
-    throw new Error("sidecar did not start");
+    child.kill();
+    throw new Error(`fixture sidecar did not start: ${spawnError?.message ?? `exit=${child.exitCode}; ${diagnostics}`}`);
   }
 
   beforeAll(async () => {

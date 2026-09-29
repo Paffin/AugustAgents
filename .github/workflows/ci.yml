@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   check:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -25,11 +26,15 @@ jobs:
         with:
           node-version: 26
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: '3.12'
       - name: Install Linux sandbox
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap apparmor
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       - name: Restore exact dependencies
         run: bun install --frozen-lockfile
       - name: Verify lockfile did not change
@@ -37,6 +42,8 @@ jobs:
       - name: Record observed platform capability
         run: bun scripts/ci-platform.ts
       - name: Full engineering gate
+        env:
+          AUGUST_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
         run: bun run check --reporter=junit --reporter-outfile=ci-results/tests.xml
       - name: Report skipped tests and unavailable evidence
         if: always()
@@ -48,6 +55,7 @@ jobs:
           path: ci-results/
           if-no-files-found: error
   sidecar:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +69,7 @@ jobs:
         run: python -m pip install ruff==0.16.9
       - name: Python lint and protocol regressions (not real-model acceptance)
         run: |
-          python -m ruff check --no-cache --select E9,F sidecar scripts/ci-report.py scripts/test
+          python -m ruff check --no-cache --select E9,F sidecar scripts/ci-report.py scripts/test docker/github-runner
           python -m py_compile sidecar/laya_server.py sidecar/test/fake/laya.py
           python -m unittest discover -s sidecar/test -p 'test_*.py' -v
           python -m unittest discover -s scripts/test -p 'test_*.py' -v

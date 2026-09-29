@@ -126,6 +126,33 @@ only configuration intent.
   platform results/artifacts are inspected; do not substitute container Linux
   for native macOS/Windows evidence. No release/deployment is part of this patch.
 
+### First hosted matrix and runner engineering evidence, 2026-09-30
+
+- Published CI source `0f4284998325194f9ad93a47f5c5f9a210b04c67` ran in
+  [Actions run 36633432476](https://github.com/Paffin/AugustAgents/actions/runs/36633432476).
+  Sidecar lint/protocol job passed. Ubuntu engineering checks: 622 pass, 12 skip,
+  0 fail; evidence gate failed because installed bubblewrap was unavailable.
+  macOS: 619 pass, 12 skip, 1 fail (Python sidecar startup hook at 5000.92 ms).
+  Windows: 597 pass, 12 skip, 35 fail, 1 error, 2336 assertions / 644 tests in
+  166.46 s. Failures include POSIX-only permission expectations, path/socket
+  assumptions and child-process timeouts. All three platform artifacts were
+  uploaded. This is an observed failing matrix, not three-OS qualification.
+- Follow-up records unavailable bubblewrap probe stderr, reloads only Ubuntu's
+  packaged bwrap AppArmor profile on its ephemeral hosted VM, supplies the actual
+  setup-python executable, and fails fixture startup with bounded diagnostics
+  before the unchanged test hook deadline. These changes need a fresh matrix;
+  the previous failures are retained rather than erased by a selective rerun.
+- Optional Docker Linux ARM64 Actions runner assets use a digest-pinned Node
+  base and checksum-verified official runner 2.337.0. A named non-root container
+  with read-only root, private writable tmpfs, dropped capabilities and no network
+  ran the actual Listener's version command. Another observed pre-job hook check
+  accepted the approved manual main revision and refused PR/wrong-SHA jobs.
+  Bubblewrap in this constrained container was unavailable; no security setting
+  was weakened to conceal that gap. This is startup/policy engineering evidence
+  only: no registration token, connected runner or completed Actions job has yet
+  been established. See `docker/github-runner/README.md` for token-file and scope
+  requirements; never mount user credentials, a home or Docker socket.
+
 ### Exclusive runtime owner, 2026-09-30
 
 - Fixed the concurrent-start defect observed in the UX increment below. Ordinary

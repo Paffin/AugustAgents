@@ -1,0 +1,30 @@
+name: Approved main on local Docker runner
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    if: github.repository == 'Paffin/AugustAgents' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: [august-local-docker]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: git diff --exit-code -- bun.lock
+      - run: bun scripts/ci-platform.ts
+      - run: bun run check --reporter=junit --reporter-outfile=ci-results/tests.xml
+      - if: always()
+        run: python3 scripts/ci-report.py ci-results/tests.xml ci-results/platform.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checks-local-docker-arm64
+          path: ci-results/
+          if-no-files-found: error
