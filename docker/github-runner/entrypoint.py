@@ -16,13 +16,13 @@ def main():
         raise ValueError("A private registration token is required on stdin")
     shutil.copytree("/opt/actions-runner", "/runner", dirs_exist_ok=True)
     Path("/runner/approved-revision").write_text(revision)
-    environment = {**os.environ, "RUNNER_INPUT_TOKEN": token}
+    environment = {**os.environ, "ACTIONS_RUNNER_INPUT_TOKEN": token}
     registered = subprocess.run([
         "./config.sh", "--unattended", "--url", "https://github.com/Paffin/AugustAgents",
         "--name", os.environ["AUGUST_RUNNER_NAME"], "--labels", "august-local-docker",
         "--no-default-labels", "--ephemeral", "--disableupdate", "--work", "_work",
     ], env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
-    environment.pop("RUNNER_INPUT_TOKEN", None)
+    environment.pop("ACTIONS_RUNNER_INPUT_TOKEN", None)
     token = ""
     if registered.returncode:
         # Do not echo registration diagnostics, which may contain credentials.

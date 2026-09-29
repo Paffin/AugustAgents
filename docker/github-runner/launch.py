@@ -20,7 +20,7 @@ def command(context, image, revision, name):
             "--pids-limit=512", "--memory=4g", "--cpus=2", "--user=1000:1000",
             "--tmpfs", "/runner:rw,exec,nosuid,size=6g,uid=1000,gid=1000,mode=0700",
             "--tmpfs", "/tmp:rw,exec,nosuid,size=2g,uid=1000,gid=1000,mode=0700",
-            "--tmpfs", "/home/node:rw,nosuid,size=1g,uid=1000,gid=1000,mode=0700",
+            "--tmpfs", "/home/node:rw,exec,nosuid,size=1g,uid=1000,gid=1000,mode=0700",
             "--env", f"AUGUST_APPROVED_REVISION={revision}",
             "--env", f"AUGUST_RUNNER_NAME={name}", image]
 
@@ -40,14 +40,18 @@ def read_token(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--token-file", required=True, type=Path)
+    credential = parser.add_mutually_exclusive_group(required=True)
+    credential.add_argument("--token-file", type=Path)
+    credential.add_argument("--token-stdin", action="store_true")
     parser.add_argument("--revision", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--context", default="desktop-linux")
     parser.add_argument("--image", default="august-github-runner:2.337.0-arm64")
     args = parser.parse_args()
     invocation = command(args.context, args.image, args.revision, args.name)
-    token = read_token(args.token_file)
+    token = sys.stdin.readline(4096).strip() if args.token_stdin else read_token(args.token_file)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,2048}", token):
+        raise ValueError("Invalid short-lived token input")
     process = subprocess.Popen(invocation, stdin=subprocess.PIPE)
     process.stdin.write((token + "\n").encode())
     process.stdin.close()

@@ -108,19 +108,20 @@ describe("python sidecar (with a fake laya module)", () => {
       env: { ...process.env, PYTHONPATH: join(root, "test/fake"), LAYA_FAKE: mode },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let diagnostics = ""; let spawnError: Error | undefined;
+    let diagnostics = ""; let startup = ""; let probe = ""; let spawnError: Error | undefined;
     child.stderr?.on("data", data => { diagnostics = (diagnostics + String(data)).slice(-2000); });
+    child.stdout?.on("data", data => { startup = (startup + String(data)).slice(-1000); });
     child.on("error", error => { spawnError = error; });
     const deadline = Date.now() + 3500;
     while (Date.now() < deadline) {
       if (spawnError || child.exitCode !== null) break;
       try {
         if ((await fetch(`http://127.0.0.1:${p}/health`, { signal: AbortSignal.timeout(250) })).ok) return child;
-      } catch {}
+      } catch (error) { probe = (error as Error).message; }
       await Bun.sleep(100);
     }
     child.kill();
-    throw new Error(`fixture sidecar did not start: ${spawnError?.message ?? `exit=${child.exitCode}; ${diagnostics}`}`);
+    throw new Error(`fixture sidecar did not start: ${spawnError?.message ?? `exit=${child.exitCode}; stderr=${diagnostics}; stdout=${startup}; probe=${probe}`}`);
   }
 
   beforeAll(async () => {

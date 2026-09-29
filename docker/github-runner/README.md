@@ -35,6 +35,11 @@ python3 docker/github-runner/launch.py --token-file /absolute/private/registrati
 ```
 
 The launcher passes the token through stdin, not Docker configuration or argv.
+When the owner has explicitly designated a project `.env` containing `gh_token`,
+`bun docker/github-runner/register.ts APPROVED_40_CHARACTER_MAIN_SHA august-runner-owner-job`
+requests a short-lived repository registration token through GitHub's API and
+pipes only that token to the launcher. The PAT is not forwarded to the runner,
+printed, or put in command arguments. Do not commit the `.env` file.
 Registration uses the official runner's secret input environment in memory;
 that environment is removed before listening for a job. Failed registration
 diagnostics are withheld instead of possibly exposing credentials. The runner's

@@ -1,0 +1,7 @@
+# Only loaded on a disposable GitHub-hosted Ubuntu VM. Never apply to user hosts.
+# Ubuntu 24.04+ restricts unprivileged user namespaces; permit only bwrap's entrypoint.
+abi <abi/4.0>,
+include <tunables/global>
+profile august-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}

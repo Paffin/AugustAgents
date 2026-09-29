@@ -19,6 +19,7 @@ class RunnerTests(unittest.TestCase):
         for forbidden in ("--privileged", "--volume", "--mount", "--token"):
             self.assertNotIn(forbidden, args)
         self.assertFalse(any("RUNNER_INPUT_TOKEN" in arg or "docker.sock" in arg for arg in args))
+        self.assertIn("/home/node:rw,exec,nosuid,size=1g,uid=1000,gid=1000,mode=0700", args)
 
     def test_bad_identity_or_revision_is_refused(self):
         for revision, name in (("main", "august-runner-fixture"), ("a" * 40, "foreign-container")):

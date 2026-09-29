@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap apparmor
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r scripts/ci-bwrap.apparmor
       - name: Restore exact dependencies
         run: bun install --frozen-lockfile
       - name: Verify lockfile did not change

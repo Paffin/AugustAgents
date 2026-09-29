@@ -153,6 +153,30 @@ only configuration intent.
   been established. See `docker/github-runner/README.md` for token-file and scope
   requirements; never mount user credentials, a home or Docker socket.
 
+### Actual ephemeral runner registration and first job, 2026-09-30
+
+- The user-designated private `gh_token` authorized the repository registration
+  endpoint (201). Only its short-lived registration token was piped to the
+  container; the PAT was removed from launcher child environment. The official
+  secret input name is `ACTIONS_RUNNER_INPUT_TOKEN` (an initial incorrect-prefix
+  attempt failed and was not counted as registration).
+- GitHub inventory returned runner 21, `august-runner-owner-20260930`, online,
+  idle and with only `august-local-docker`. Container inspection confirmed no
+  host mounts, read-only root, no privileged mode, dropped capabilities, 4 GiB
+  memory and 512 PIDs. Approved main SHA `77f7b57` was checked before dispatch.
+- [Actual job run 36634182289](https://github.com/Paffin/AugustAgents/actions/runs/36634182289)
+  passed the pre-job guard and real checkout, then failed setup-bun with EACCES
+  executing `/home/node/.bun/bin/bun`. The private home tmpfs was non-executable;
+  it is now executable for installed runtime binaries without adding host mounts
+  or privilege. Regression coverage records this constraint. A new completed
+  job is still required; the failed job is not a successful engineering gate.
+- After the job the ephemeral runner removed its registration credentials and
+  unregistered; the owned container was removed normally. No foreign container
+  or Docker VM security configuration was changed. Hosted follow-up run
+  `36634003292` retained macOS sidecar startup failure and unavailable Ubuntu
+  packaged AppArmor profile; the next patch supplies a narrow bwrap-only CI
+  profile and richer bounded startup diagnostics, not broader test timeouts.
+
 ### Exclusive runtime owner, 2026-09-30
 
 - Fixed the concurrent-start defect observed in the UX increment below. Ordinary
