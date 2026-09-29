@@ -136,6 +136,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const sandbox = deps.sandboxKind ?? detectSandbox();
   const registryClient = new RegistryClient(config.registryUrl, deps.fetch);
   const configured = [...config.mcp];
+  const checkpointSecretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret].filter((name): name is string => Boolean(name)));
+  const registerCheckpointSecrets = (entry: McpServerConfig) => { for (const name of [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})]) checkpointSecretNames.add(name); };
+  configured.forEach(registerCheckpointSecrets);
 
   let mcp!: McpHost;
   const startServer = async (entry: McpServerConfig): Promise<string> => {
@@ -178,7 +181,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     takenIds: () => new Set([...configured.map((s) => s.id), ...registry.list().map((c) => c.manifest.id)]),
     fallback: new BuiltinExecutor(config.root),
     addServer: async (entry: McpServerConfig, plan: InstallPlan) => {
-      configured.push(entry);
+      configured.push(entry); registerCheckpointSecrets(entry);
       if (deps.configPath) {
         const current = loadConfig(deps.configPath);
         writeConfig(deps.configPath, { ...current, mcp: [...current.mcp, entry] });
@@ -231,9 +234,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     }
   };
 
-  const secretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret, ...config.mcp.flatMap((entry) => [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})])].filter((name): name is string => Boolean(name)));
-  const checkpointSecrets = [...secretNames].map((name) => resolveSecret(name, secrets, deps.env)).filter((value): value is string => Boolean(value));
-  const redactCheckpoint = (text: string) => checkpointSecrets.reduce((value, secret) => value.replaceAll(secret, "[redacted secret]"), text);
+  const redactCheckpoint = (text: string) => [...checkpointSecretNames].reduce((value, name) => { const secret = resolveSecret(name, secrets, deps.env); return secret ? value.replaceAll(secret, "[redacted secret]") : value; }, text);
 
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();

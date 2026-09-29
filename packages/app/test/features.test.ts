@@ -275,6 +275,15 @@ describe("finding and installing capabilities", () => {
     expect((await meta.call("clock.now", {})).content).toBe("fallback");
   });
 
+  test("Safety/reliability invariant: a runtime-installed server secret is redacted from durable scratch", async () => {
+    const home = tmp(); const store = new FileStore(join(home, ".august")); const config = { ...defaultConfig(home), registryUrl: "https://reg.example" }; const configPath = defaultConfigPath(home); writeConfig(configPath, config);
+    const app = createApp(config, { env: {}, home, secrets: store, fetch: registryFetch(), llm: planLlm([{ tool: "clock.now", args: {} }]), sandboxKind: "none", configPath });
+    await app.meta.call("august.find_tools", { query: "weather" }); expect((await app.meta.call("august.install_tool", { name: "io.github.acme/weather" })).content).toContain("WEATHER_KEY");
+    const secret = "tiny-secret"; store.set("WEATHER_KEY", secret); app.mcp.call = async () => ({ content: `safe weather ${secret}` });
+    const reply = await app.handle(makeSessionKey({ workspace: "home", channel: "test", user: "redaction" }), "what time is it?"); const checkpoint = JSON.stringify(app.getRun(reply.runId)?.checkpoint);
+    expect(checkpoint).toContain("safe weather"); expect(checkpoint).toContain("[redacted secret]"); expect(checkpoint).not.toContain(secret); app.close();
+  });
+
   test("two app sessions cannot replace or both consume one prepared install plan", async () => {
     const home = tmp();
     let registryCalls = 0;
