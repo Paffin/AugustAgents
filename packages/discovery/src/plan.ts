@@ -1,11 +1,14 @@
 import { scanText } from "@august/capabilities";
+import type { PackageRef } from "./artifact.ts";
 import type { RegistryServer } from "./registry.ts";
 
-/** Same shape as an entry in config.mcp. */
+/**
+ * What will be installed, before anything is fetched. A local server is a registry package, never a
+ * command: August resolves and verifies the exact artifact, installs it itself and records its identity.
+ */
 export interface PlannedServer {
   id: string;
-  command?: string;
-  args?: string[];
+  package?: PackageRef;
   url?: string;
   env?: Record<string, string>;
   envFrom?: string[];
@@ -48,9 +51,9 @@ function secretName(id: string, header: string): string {
 }
 
 /**
- * Turn a registry entry into a config entry, preferring a local stdio package
- * pinned to an exact version. Nothing floats to "latest": what the person
- * approves is what runs.
+ * Turn a registry entry into an install plan, preferring a local npm package pinned to an exact
+ * version. Nothing floats to "latest": what the person approves is what runs. Packages August cannot
+ * yet verify and contain (PyPI, container images) are refused with a reason rather than run loosely.
  */
 export function planInstall(server: RegistryServer, taken: ReadonlySet<string> = new Set()): InstallPlan {
   const scan = scanText(`${server.name}\n${server.description}`);
@@ -60,25 +63,12 @@ export function planInstall(server: RegistryServer, taken: ReadonlySet<string> =
   const secrets: InstallPlan["secrets"] = [];
   const missing: string[] = [];
 
-  const pkg = (server.packages ?? []).find(
-    (p) => (p.transport?.type ?? "stdio") === "stdio" && ["npm", "pypi", "oci"].includes(p.registryType),
-  );
+  const stdio = (server.packages ?? []).filter((p) => (p.transport?.type ?? "stdio") === "stdio");
+  const pkg = stdio.find((p) => p.registryType === "npm");
   if (pkg) {
     const version = pkg.version ?? server.version;
     if (!version || version === "latest" || !SAFE_ARG.test(version) || !SAFE_ARG.test(pkg.identifier)) {
       throw new PlanError(`"${server.name}" has no exact version to pin`);
-    }
-    let command: string;
-    let args: string[];
-    if (pkg.registryType === "npm") {
-      command = "npx";
-      args = ["-y", `${pkg.identifier}@${version}`];
-    } else if (pkg.registryType === "pypi") {
-      command = "uvx";
-      args = [`${pkg.identifier}==${version}`];
-    } else {
-      command = "docker";
-      args = ["run", "-i", "--rm", `${pkg.identifier}:${version}`];
     }
     const env: Record<string, string> = {};
     const envFrom: string[] = [];
@@ -93,7 +83,7 @@ export function planInstall(server: RegistryServer, taken: ReadonlySet<string> =
         missing.push(v.name);
       }
     }
-    const planned: PlannedServer = { id, command, args, trust: "community" };
+    const planned: PlannedServer = { id, package: { registry: "npm", name: pkg.identifier, version }, trust: "community" };
     if (Object.keys(env).length) planned.env = env;
     if (envFrom.length) planned.envFrom = envFrom;
     return {
@@ -102,7 +92,7 @@ export function planInstall(server: RegistryServer, taken: ReadonlySet<string> =
       server: planned,
       secrets,
       missing,
-      summary: `run ${command} ${args.join(" ")} as "${id}"`,
+      summary: `install npm package ${pkg.identifier}@${version} as "${id}" (verified, sandboxed, no network until you allow hosts)`,
     };
   }
 
@@ -129,5 +119,9 @@ export function planInstall(server: RegistryServer, taken: ReadonlySet<string> =
     };
   }
 
+  const unsupported = stdio.map((p) => p.registryType).filter((t) => t !== "npm");
+  if (unsupported.length) {
+    throw new PlanError(`"${server.name}" ships only as ${[...new Set(unsupported)].join("/")}, which August cannot verify and contain yet`);
+  }
   throw new PlanError(`"${server.name}" has no package or remote August can run`);
 }

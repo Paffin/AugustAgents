@@ -85,27 +85,27 @@ describe("RegistryClient", () => {
 });
 
 describe("planInstall", () => {
-  test("npm package: pinned npx command, secrets via envFrom, defaults as env, missing required listed", () => {
+  test("npm package: an exact package reference (never a command), secrets via envFrom, defaults as env, missing required listed", () => {
     const p = planInstall(npmServer);
     expect(p.server).toEqual({
       id: "github",
-      command: "npx",
-      args: ["-y", "@acme/github-mcp@1.2.0"],
+      package: { registry: "npm", name: "@acme/github-mcp", version: "1.2.0" },
       env: { GITHUB_HOST: "github.com" },
       envFrom: ["GITHUB_TOKEN"],
       trust: "community",
     });
     expect(p.secrets.map((s) => s.name)).toEqual(["GITHUB_TOKEN"]);
     expect(p.missing).toEqual(["ORG"]);
-    expect(p.summary).toContain("npx -y @acme/github-mcp@1.2.0");
+    expect(p.summary).toContain("install npm package @acme/github-mcp@1.2.0");
+    expect(p.summary).toContain("no network until you allow hosts");
+    expect(p.server).not.toHaveProperty("command");
   });
 
-  test("pypi uses uvx with ==version; oci uses docker", () => {
-    const py = planInstall({ ...npmServer, packages: [{ registryType: "pypi", identifier: "weather-mcp", version: "0.5.0" }] });
-    expect(py.server.command).toBe("uvx");
-    expect(py.server.args).toEqual(["weather-mcp==0.5.0"]);
-    const oci = planInstall({ ...npmServer, packages: [{ registryType: "oci", identifier: "ghcr.io/acme/mcp", version: "2" }] });
-    expect(oci.server.args).toEqual(["run", "-i", "--rm", "ghcr.io/acme/mcp:2"]);
+  test("PyPI and container-only servers are refused with a reason: August cannot verify or contain them yet", () => {
+    expect(() => planInstall({ ...npmServer, packages: [{ registryType: "pypi", identifier: "weather-mcp", version: "0.5.0" }] })).toThrow(/ships only as pypi.*cannot verify and contain/);
+    expect(() => planInstall({ ...npmServer, packages: [{ registryType: "oci", identifier: "ghcr.io/acme/mcp", version: "2" }] })).toThrow(/ships only as oci/);
+    // A supported package next to an unsupported one is still installable.
+    expect(planInstall({ ...npmServer, packages: [{ registryType: "pypi", identifier: "w", version: "1" }, ...npmServer.packages!] }).server.package?.name).toBe("@acme/github-mcp");
   });
 
   test("refuses floating versions and shell-looking identifiers", () => {

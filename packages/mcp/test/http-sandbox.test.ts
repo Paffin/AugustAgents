@@ -167,7 +167,7 @@ describe("sandbox", () => {
   const dir = mkdtempSync(join(tmpdir(), "august-sb-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const spec = { id: "s", command: "/usr/bin/node", args: ["server.js"] };
-  const base = { network: true, home: join(dir, "home"), realHome: "/home/dan" };
+  const base = { network: "open" as const, home: join(dir, "home"), realHome: "/home/dan" };
 
   test("bwrap hides homes and /run, gives a private home, and shares the network only when allowed", () => {
     const a = bwrapArgs(spec, base);
@@ -179,13 +179,13 @@ describe("sandbox", () => {
     expect(s).toContain("--unshare-all");
     expect(a).toContain("--share-net");
     expect(a.slice(-3)).toEqual(["--", "/usr/bin/node", "server.js"]);
-    expect(bwrapArgs(spec, { ...base, network: false })).not.toContain("--share-net");
+    expect(bwrapArgs(spec, { ...base, network: "none" })).not.toContain("--share-net");
     // The private home is mounted after /home is hidden, or it would be covered.
     expect(a.indexOf("--bind")).toBeGreaterThan(a.indexOf("/home"));
   });
 
   test("the macOS profile denies the real home and, when asked, the network", () => {
-    const p = seatbeltProfile({ ...base, network: false });
+    const p = seatbeltProfile({ ...base, network: "none" });
     expect(p).toContain('(deny file-read* file-write* (subpath "/home/dan"))');
     expect(p).toContain(`(allow file-read* file-write* (subpath "${base.home}"))`);
     expect(p).toContain("(deny network*)");
@@ -194,9 +194,46 @@ describe("sandbox", () => {
   });
 
   test("modes: off passes through, auto runs unisolated when nothing works, required refuses", () => {
-    expect(sandboxSpec(spec, { ...base, mode: "off", kind: "bwrap" })).toEqual({ spec, isolation: "none" });
+    expect(sandboxSpec(spec, { ...base, mode: "off", kind: "bwrap" })).toEqual({ spec, isolation: "none", egress: "open" });
     expect(sandboxSpec(spec, { ...base, mode: "auto", kind: "none" }).isolation).toBe("none");
     expect(() => sandboxSpec(spec, { ...base, mode: "required", kind: "none" })).toThrow(SandboxError);
+  });
+
+  test("read-only paths are shown inside the hidden home, after it is hidden", () => {
+    const a = bwrapArgs(spec, { ...base, readOnlyPaths: ["/home/dan/.august/data/capabilities/x", "/home/dan/.bun/bin/bun"] });
+    const s = a.join(" ");
+    expect(s).toContain("--ro-bind /home/dan/.august/data/capabilities/x /home/dan/.august/data/capabilities/x");
+    expect(s).toContain("--ro-bind /home/dan/.bun/bin/bun /home/dan/.bun/bin/bun");
+    // Mounted after every tmpfs and after the private home, or a path under /tmp, /home, /root or the home itself would be covered again.
+    expect(a.indexOf("/home/dan/.august/data/capabilities/x")).toBeGreaterThan(a.lastIndexOf("--tmpfs"));
+    expect(a.indexOf("/home/dan/.august/data/capabilities/x")).toBeGreaterThan(a.indexOf(base.home));
+    const mac = seatbeltProfile({ ...base, network: "none" }, ["/home/dan/.august/data/capabilities/x"]);
+    expect(mac).toContain('(allow file-read* (subpath "/home/dan/.august/data/capabilities/x"))');
+  });
+
+  test("egress attachments: unix bridges through a bound socket with no network at all, tcp allows only the proxy's loopback port", () => {
+    const unix = { kind: "unix" as const, socket: "/data/e.sock", runtime: "/usr/local/bin/bun", bridgeScript: "/data/bridge.js" };
+    const a = bwrapArgs(spec, { ...base, network: unix });
+    expect(a).not.toContain("--share-net");
+    expect(a.join(" ")).toContain("--ro-bind /usr/local/bin/bun /run/august/runtime");
+    expect(a.join(" ")).toContain("--ro-bind /data/bridge.js /run/august/bridge.js");
+    expect(a.join(" ")).toContain("--bind /data/e.sock /run/august/egress.sock");
+    expect(a.join(" ")).toContain("--setenv HTTPS_PROXY http://127.0.0.1:3128");
+    expect(a.join(" ")).toContain("--setenv NODE_USE_ENV_PROXY 1");
+    expect(a.slice(a.indexOf("--") + 1)).toEqual(["/bin/sh", "-c", '/run/august/runtime /run/august/bridge.js & exec "$@"', "sh", "/usr/bin/node", "server.js"]);
+    expect(a.indexOf("--tmpfs")).toBeLessThan(a.indexOf("/run/august/egress.sock"));
+    const tcp = { kind: "tcp" as const, port: 40123, token: "tok" };
+    const profile = seatbeltProfile({ ...base, network: tcp });
+    expect(profile).toContain("(deny network*)");
+    expect(profile.indexOf('(allow network-outbound (remote tcp "localhost:40123"))')).toBeGreaterThan(profile.indexOf("(deny network*)"));
+    const mac = sandboxSpec(spec, { ...base, network: tcp, mode: "required", kind: "sandbox-exec" });
+    expect(mac.egress).toBe("allowlist");
+    expect(mac.spec.env).toMatchObject({ HTTPS_PROXY: "http://august:tok@localhost:40123", NO_PROXY: "" });
+    expect(() => sandboxSpec(spec, { ...base, network: tcp, mode: "required", kind: "bwrap" })).toThrow(/cannot enforce/);
+    expect(() => sandboxSpec(spec, { ...base, network: unix, mode: "required", kind: "sandbox-exec" })).toThrow(/cannot enforce/);
+    expect(sandboxSpec(spec, { ...base, network: "none", mode: "required", kind: "bwrap" }).egress).toBe("none");
+    expect(sandboxSpec(spec, { ...base, network: "open", mode: "required", kind: "bwrap" }).egress).toBe("open");
+    expect(sandboxSpec(spec, { ...base, network: unix, mode: "required", kind: "bwrap" }).egress).toBe("allowlist");
   });
 
   test("wrapping creates a private home and swaps the command", () => {

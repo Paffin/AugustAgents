@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
 import { makeSessionKey } from "@august/core";
-import { RegistryClient } from "@august/discovery";
+import { RegistryClient, type ArtifactEvidence } from "@august/discovery";
+import { cleanupFakeNpm, fakeRegistry as fakeNpm } from "../../discovery/test/fake-npm.ts";
 import {
   FileStore,
   KeychainStore,
@@ -29,7 +30,7 @@ const tmp = () => {
   dirs.push(d);
   return d;
 };
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+afterAll(() => { cleanupFakeNpm(); dirs.forEach((d) => rmSync(d, { recursive: true, force: true })); });
 
 function makeIo(home: string, answers: Array<string | null> = [], extra: Partial<CliIo> = {}) {
   const out: string[] = [];
@@ -156,6 +157,36 @@ describe("secret, mcp, laya, calibrate, doctor commands", () => {
     expect((await main(["mcp", "rm", "gh"], io)).code).toBe(1);
   });
 
+  test("secret --for keeps a secret in one capability's namespace and never prints it", async () => {
+    const home = tmp(); const { io, out } = makeIo(home, ["cap-secret", "other"]);
+    expect((await main(["secret", "set", "--for", "notion", "API_KEY"], io)).code).toBe(0);
+    expect(io.secrets!.get("notion.API_KEY")).toBe("cap-secret"); expect(io.secrets!.get("API_KEY")).toBeUndefined();
+    await main(["secret", "list"], io); expect(out).toContain("notion.API_KEY"); expect(out.join("\n")).not.toContain("cap-secret");
+    expect((await main(["secret", "rm", "--for", "notion", "API_KEY"], io)).code).toBe(0); expect(io.secrets!.get("notion.API_KEY")).toBeUndefined();
+    for (const bad of [["secret", "set", "--for", "no.dots", "X"], ["secret", "set", "--for"], ["secret", "set", "--for", "notion", "lower"]]) expect((await main(bad, io)).code).toBe(1);
+  });
+
+  test("mcp allow/deny edit a server's egress hosts, list shows what it can reach, and rm deletes the installed package", async () => {
+    const home = tmp(); const { io, out } = makeIo(home);
+    await main(["init"], io);
+    const path = defaultConfigPath(home); const cfg = loadConfig(path);
+    const pin = { registry: "npm" as const, name: "p", version: "1.0.0", integrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`, treeSha256: "a".repeat(64), signature: "npm-registry-ecdsa" as const, entry: { runtime: "node" as const, file: "node_modules/p/bin.js" }, verifiedAt: "2026-01-01T00:00:00.000Z" };
+    writeConfig(path, { ...cfg, mcp: [{ id: "probe", artifact: pin, trust: "community" }] });
+    const dir = join(cfg.dataDir, "capabilities", "probe"); mkdirSync(join(dir, "node_modules"), { recursive: true }); writeFileSync(join(dir, "node_modules", "x.js"), "x");
+    await main(["mcp", "list"], io);
+    expect(out.some((l) => l.startsWith("probe  npm:p@1.0.0 (verified, registry-signed)  (trust: community; network: none)"))).toBe(true);
+    expect((await main(["mcp", "allow", "probe", "API.Github.com", "*.example.org"], io)).code).toBe(0);
+    expect(loadConfig(path).mcp[0]!.egress).toEqual(["api.github.com", "*.example.org"]);
+    await main(["mcp", "allow", "probe", "api.github.com", "db.example.net:5432"], io);
+    expect(loadConfig(path).mcp[0]!.egress).toEqual(["api.github.com", "*.example.org", "db.example.net:5432"]);
+    await main(["mcp", "list"], io); expect(out.some((l) => l.includes("egress: api.github.com, *.example.org, db.example.net:5432"))).toBe(true);
+    for (const bad of [["mcp", "allow", "probe"], ["mcp", "allow", "probe", "https://x.com"], ["mcp", "allow", "probe", "bad host"], ["mcp", "allow", "nope", "x.com"], ["mcp", "deny", "nope"]]) expect((await main(bad, io)).code).toBe(1);
+    expect((await main(["mcp", "deny", "probe"], io)).code).toBe(0); expect(loadConfig(path).mcp[0]).not.toHaveProperty("egress");
+    expect(existsSync(dir)).toBe(true);
+    expect((await main(["mcp", "rm", "probe"], io)).code).toBe(0);
+    expect(existsSync(dir)).toBe(false); expect(loadConfig(path).mcp).toEqual([]);
+  });
+
   test("laya status/activate follow the shadow statistics", async () => {
     const home = tmp();
     const { io, out } = makeIo(home);
@@ -242,7 +273,9 @@ const registryReply = {
 };
 
 function registryFetch(extra: Record<string, string> = {}): typeof fetch {
-  return (async (url: string) => {
+  return (async (url: string, init?: RequestInit) => {
+    // The local fake npm registry is real HTTP; everything else here is canned.
+    if (url.startsWith("http://127.0.0.1")) return globalThis.fetch(url, init);
     for (const [prefix, body] of Object.entries(extra)) if (url.startsWith(prefix)) return new Response(body);
     if (url.includes("/v0/servers")) return new Response(JSON.stringify(registryReply));
     return new Response("nope", { status: 404 });
@@ -252,9 +285,12 @@ function registryFetch(extra: Record<string, string> = {}): typeof fetch {
 describe("finding and installing capabilities", () => {
   // Product behavior: a Prepared Install Plan is the exact single-use contract
   // shared by search, approval preview, and installation.
-  test("MetaExecutor: search shows how each server would run; install persists through addServer", async () => {
-    const added: unknown[] = [];
-    let registryCalls = 0;
+  const weatherEvidence = (over: Partial<ArtifactEvidence> = {}): ArtifactEvidence => ({ ref: { registry: "npm", name: "@acme/weather-mcp", version: "2.0.0" }, integrity: `sha512-${Buffer.alloc(64, 7).toString("base64")}`, signature: "npm-registry-ecdsa", publisher: "acme", maintainers: ["acme"], installScripts: [], dependencyCount: 2, attestation: "absent", bin: { "weather-mcp": "bin.js" }, ...over });
+  const weatherPin = { registry: "npm" as const, name: "@acme/weather-mcp", version: "2.0.0", integrity: weatherEvidence().integrity, treeSha256: "a".repeat(64), signature: "npm-registry-ecdsa" as const, entry: { runtime: "node" as const, file: "node_modules/@acme/weather-mcp/bin.js" }, verifiedAt: "2026-01-01T00:00:00.000Z" };
+
+  test("MetaExecutor: search shows what would be installed; the approval shows the verified evidence; install persists an artifact pin, not a command", async () => {
+    const added: unknown[] = []; const installs: string[] = [];
+    let registryCalls = 0; let resolves = 0;
     const fetch = registryFetch();
     const meta = new MetaExecutor({
       registry: new CapabilityRegistry(),
@@ -265,26 +301,56 @@ describe("finding and installing capabilities", () => {
       skillsDir: tmp(),
       takenIds: () => new Set(),
       fallback: { call: async () => ({ content: "fallback" }) },
+      artifacts: { resolve: async () => (resolves += 1, weatherEvidence()), install: async (_e, id) => (installs.push(id), weatherPin) },
+      containment: () => ({ ok: true }),
       addServer: async (entry) => (added.push(entry), "installed"),
     });
     const found = await meta.call("august.find_tools", { query: "weather" });
     expect(found.content).toContain("io.github.acme/weather@2.0.0");
-    expect(found.content).toContain("npx -y @acme/weather-mcp@2.0.0");
+    expect(found.content).toContain("install npm package @acme/weather-mcp@2.0.0");
+    expect(found.content).not.toContain("npx");
     expect(found.content).toContain("needs WEATHER_KEY");
-    expect(await meta.describeCall("august.install_tool", { name: "io.github.acme/weather" })).toContain("needs secrets: WEATHER_KEY");
+    const preview = await meta.describeCall("august.install_tool", { name: "io.github.acme/weather" });
+    expect(preview).toContain("needs secrets: WEATHER_KEY");
+    expect(preview).toContain("registry signature verified");
+    expect(preview).toContain("published by acme");
+    expect(preview).toContain("no network until you allow hosts");
     expect((await meta.call("august.install_tool", { name: "io.github.acme/weather" })).content).toBe("installed");
-    expect(added).toEqual([{ id: "weather", command: "npx", args: ["-y", "@acme/weather-mcp@2.0.0"], envFrom: ["WEATHER_KEY"], trust: "community" }]);
+    expect(added).toEqual([{ id: "weather", envFrom: ["WEATHER_KEY"], trust: "community", artifact: weatherPin }]);
+    expect(installs).toEqual(["weather"]); expect(resolves).toBe(1);
     expect((await meta.call("august.install_tool", { name: "io.github.x/unknown" })).isError).toBe(true);
     expect(added).toHaveLength(1);
     expect(registryCalls).toBe(1);
     expect((await meta.call("clock.now", {})).content).toBe("fallback");
   });
 
+  test("Safety/security invariant: community code is not installed without a sandbox or without a registry signature, and nothing is fetched or run", async () => {
+    const mk = (over: { evidence?: ArtifactEvidence; containment?: () => { ok: true } | { ok: false; reason: string } }) => {
+      const installs: string[] = []; const added: unknown[] = [];
+      const meta = new MetaExecutor({
+        registry: new CapabilityRegistry(), registryClient: new RegistryClient("https://reg.example", registryFetch()), skillsDir: tmp(), takenIds: () => new Set(), fallback: { call: async () => ({ content: "" }) },
+        artifacts: { resolve: async () => over.evidence ?? weatherEvidence(), install: async (_e, id) => (installs.push(id), weatherPin) },
+        containment: over.containment ?? (() => ({ ok: true })), addServer: async (e) => (added.push(e), "installed"),
+      });
+      return { meta, installs, added };
+    };
+    const unsigned = mk({ evidence: weatherEvidence({ signature: "none" }) });
+    await unsigned.meta.call("august.find_tools", { query: "weather" });
+    expect(await unsigned.meta.describeCall("august.install_tool", { name: "io.github.acme/weather" })).toContain("not signed by the package registry");
+    expect((await unsigned.meta.call("august.install_tool", { name: "io.github.acme/weather" })).isError).toBe(true);
+    const noSandbox = mk({ containment: () => ({ ok: false, reason: "no working sandbox was found" }) });
+    await noSandbox.meta.call("august.find_tools", { query: "weather" });
+    expect(await noSandbox.meta.describeCall("august.install_tool", { name: "io.github.acme/weather" })).toContain("needs a sandbox");
+    const refused = await noSandbox.meta.call("august.install_tool", { name: "io.github.acme/weather" });
+    expect(refused.isError).toBe(true); expect(refused.content).toContain("needs a sandbox");
+    for (const x of [unsigned, noSandbox]) { expect(x.installs).toEqual([]); expect(x.added).toEqual([]); }
+  });
+
   test("Safety/reliability invariant: a runtime-installed server secret is redacted from durable scratch", async () => {
-    const home = tmp(); const store = new FileStore(join(home, ".august")); const config = { ...defaultConfig(home), registryUrl: "https://reg.example" }; const configPath = defaultConfigPath(home); writeConfig(configPath, config);
-    const app = createApp(config, { env: {}, home, secrets: store, fetch: registryFetch(), llm: planLlm([{ tool: "clock.now", args: {} }]), sandboxKind: "none", configPath });
-    await app.meta.call("august.find_tools", { query: "weather" }); expect((await app.meta.call("august.install_tool", { name: "io.github.acme/weather" })).content).toContain("WEATHER_KEY");
-    const secret = "tiny-secret"; store.set("WEATHER_KEY", secret); app.mcp.call = async () => ({ content: `safe weather ${secret}` });
+    const home = tmp(); const store = new FileStore(join(home, ".august")); const npm = fakeNpm([{ name: "@acme/weather-mcp", version: "2.0.0" }]); const config = { ...defaultConfig(home), registryUrl: "https://reg.example", npmRegistryUrl: npm.url }; const configPath = defaultConfigPath(home); writeConfig(configPath, config);
+    const app = createApp(config, { env: {}, home, secrets: store, fetch: registryFetch(), llm: planLlm([{ tool: "clock.now", args: {} }]), sandboxKind: "bwrap", configPath });
+    await app.meta.call("august.find_tools", { query: "weather" }); expect((await app.meta.call("august.install_tool", { name: "io.github.acme/weather" })).content).toContain("august secret set --for weather WEATHER_KEY");
+    const secret = "tiny-secret"; store.set("weather.WEATHER_KEY", secret); app.mcp.call = async () => ({ content: `safe weather ${secret}` });
     const reply = await app.handle(makeSessionKey({ workspace: "home", channel: "test", user: "redaction" }), "what time is it?"); const checkpoint = JSON.stringify(app.getRun(reply.runId)?.checkpoint);
     expect(checkpoint).toContain("safe weather"); expect(checkpoint).toContain("[redacted secret]"); expect(checkpoint).not.toContain(secret); app.close();
   });
@@ -293,7 +359,8 @@ describe("finding and installing capabilities", () => {
     const home = tmp();
     let registryCalls = 0;
     const versions = ["2.0.0", "3.0.0"];
-    const fetch = (async () => {
+    const fetch = (async (url: string, init?: RequestInit) => {
+      if (String(url).startsWith("http://127.0.0.1")) return globalThis.fetch(url, init);
       const version = versions[Math.min(registryCalls++, versions.length - 1)]!;
       return new Response(JSON.stringify({
         servers: [{ server: { ...registryReply.servers[0]!.server, version, packages: [{ registryType: "npm", identifier: "@acme/weather-mcp", version, environmentVariables: [{ name: "WEATHER_KEY", isSecret: true }] }] } }],
@@ -316,10 +383,11 @@ describe("finding and installing capabilities", () => {
         return "done";
       },
     };
-    const config = { ...defaultConfig(home), registryUrl: "https://reg.example" };
+    const npm = fakeNpm([{ name: "@acme/weather-mcp", version: "2.0.0" }]);
+    const config = { ...defaultConfig(home), registryUrl: "https://reg.example", npmRegistryUrl: npm.url };
     const configPath = defaultConfigPath(home);
     writeConfig(configPath, config);
-    const app = createApp(config, { env: {}, home, llm, fetch, sandboxKind: "none", secrets: new FileStore(join(home, ".august")), configPath });
+    const app = createApp(config, { env: {}, home, llm, fetch, sandboxKind: "bwrap", secrets: new FileStore(join(home, ".august")), configPath });
     const a = makeSessionKey({ workspace: "home", channel: "test", user: "a" });
     const b = makeSessionKey({ workspace: "home", channel: "test", user: "b" });
     await app.handle(a, "SEARCH A");
@@ -341,7 +409,7 @@ describe("finding and installing capabilities", () => {
     const installResults = app.journal.list().filter((e) => e.kind === "tool.result" && (e.data as { tool?: string }).tool === "august.install_tool");
     expect(previews.every((p) => p.includes("@2.0.0") && !p.includes("@3.0.0"))).toBe(true);
     expect(installResults.map((e) => (e.data as { failed: boolean }).failed).sort()).toEqual([false, true]);
-    expect(loadConfig(configPath).mcp).toEqual([{ id: "weather", command: "npx", args: ["-y", "@acme/weather-mcp@2.0.0"], envFrom: ["WEATHER_KEY"], trust: "community" }]);
+    expect(loadConfig(configPath).mcp).toEqual([{ id: "weather", envFrom: ["WEATHER_KEY"], trust: "community", artifact: expect.objectContaining({ registry: "npm", name: "@acme/weather-mcp", version: "2.0.0", integrity: npm.integrity("@acme/weather-mcp"), signature: "npm-registry-ecdsa" }) }]);
     expect(registryCalls).toBe(2);
     app.close();
   });
@@ -353,17 +421,19 @@ describe("finding and installing capabilities", () => {
       { tool: "august.install_tool", args: { name: "io.github.acme/weather" } },
     ]);
     const prompts: string[] = [];
-    const { io, out } = makeIo(home, ["I need weather forecasts, find and install a tool", "y", "exit"], { llm, fetch: registryFetch(), env: { OPENAI_API_KEY: "k" } });
+    const { io, out } = makeIo(home, ["I need weather forecasts, find and install a tool", "y", "exit"], { llm, fetch: registryFetch(), env: { OPENAI_API_KEY: "k" }, sandboxKind: "bwrap" });
     const ask = io.ask;
     io.ask = async (p) => (prompts.push(p), ask(p));
     await main(["init"], io);
     const cfgPath = defaultConfigPath(home);
-    writeConfig(cfgPath, { ...loadConfig(cfgPath), registryUrl: "https://reg.example" });
+    const npm = fakeNpm([{ name: "@acme/weather-mcp", version: "2.0.0" }]);
+    writeConfig(cfgPath, { ...loadConfig(cfgPath), registryUrl: "https://reg.example", npmRegistryUrl: npm.url });
     await main(["chat"], io);
     expect(prompts.filter((p) => p.includes("Allow once?"))).toHaveLength(1);
     const text = out.join("\n");
     expect(text).toContain("august.install_tool wants to run");
-    expect(text).toContain("install io.github.acme/weather@2.0.0: run npx -y @acme/weather-mcp@2.0.0");
+    expect(text).toContain("install io.github.acme/weather@2.0.0: npm @acme/weather-mcp@2.0.0");
+    expect(text).toContain("registry signature verified");
     expect(loadConfig(cfgPath).mcp.map((s) => s.id)).toEqual(["weather"]);
   });
 

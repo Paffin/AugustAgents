@@ -55,6 +55,8 @@ export interface McpCallResult {
 }
 
 export class McpError extends Error {
+  /** What the server wrote to stderr before it failed. For the person debugging it: never for a model, a log or a tool result. */
+  diagnostics?: string;
   constructor(message: string) {
     super(message);
     this.name = "McpError";
@@ -308,7 +310,9 @@ export class McpConnection extends SdkSession {
       requireSupportedVersion(spec.id, transport.protocolVersion);
     } catch (error) {
       conn.close();
-      throw error instanceof McpError && /could not start|older than/.test(error.message) ? error : describeFailure(spec.id, "initialize", error, transport.exit);
+      const failure = error instanceof McpError && /could not start|older than/.test(error.message) ? error : describeFailure(spec.id, "initialize", error, transport.exit);
+      if (transport.stderrTail) failure.diagnostics = transport.stderrTail;
+      throw failure;
     }
     return conn;
   }

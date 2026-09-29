@@ -27,6 +27,8 @@ export interface AugustConfig {
   skillsDir: string;
   /** Registry used to find new MCP servers. */
   registryUrl: string;
+  /** Package registry the packages of those servers are resolved and installed from. Default https://registry.npmjs.org. */
+  npmRegistryUrl?: string;
   channels: ChannelsConfig;
 }
 
@@ -68,8 +70,18 @@ export interface McpServerConfig {
   headersFrom?: Record<string, string>;
   /** Overrides the global sandbox mode for this server. */
   sandbox?: SandboxMode;
-  /** Let a sandboxed server reach the network. Default true. */
+  /**
+   * Let the server reach any host. Default false for community servers and true for servers the owner
+   * configured by hand. A community server that needs the network lists the hosts in `egress` instead.
+   */
   network?: boolean;
+  /**
+   * Hosts (or `*.example.com`, optionally `host:port`) the server may reach, through August's egress
+   * proxy. Everything else, including private addresses, is refused. Exclusive with `network: true`.
+   */
+  egress?: string[];
+  /** The exact artifact August fetched and verified for this server; what runs is checked against it at every start. */
+  artifact?: ArtifactPin;
   args?: string[];
   /** Plain settings. Never put secrets here; use envFrom. */
   env?: Record<string, string>;
@@ -81,6 +93,22 @@ export interface McpServerConfig {
   sensitivity?: "public" | "personal" | "secret";
   /** Per tool (the server's own tool name): the arguments that hold the path a write or delete lands on. Without it, a writing tool asks every time. */
   targetArgs?: Record<string, string[]>;
+}
+
+/** Identity of an installed package, recorded when the owner approved it. */
+export interface ArtifactPin {
+  registry: "npm" | "pypi";
+  name: string;
+  version: string;
+  /** The registry's digest of the published file: `sha512-<base64>` (npm) or `sha256:<hex>` (PyPI). */
+  integrity: string;
+  /** sha256 over the installed file tree, recomputed and compared before every start. */
+  treeSha256: string;
+  /** How the identity was established: the registry's own signature over name, version and integrity. */
+  signature: "npm-registry-ecdsa" | "none";
+  /** The command inside the installed tree that starts the server. */
+  entry: { runtime: "node" | "bun" | "python"; file: string };
+  verifiedAt: string;
 }
 
 export class ConfigError extends Error {
@@ -158,6 +186,7 @@ export function parseConfig(value: unknown): AugustConfig {
     sandbox,
     skillsDir,
     registryUrl,
+    ...(c.npmRegistryUrl === undefined ? {} : { npmRegistryUrl: httpsUrl(c.npmRegistryUrl, "npmRegistryUrl").replace(/\/+$/, "") }),
     laya: parseLaya(c.laya),
     channels: parseChannels(c.channels),
     llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, pricing: parsePricing(c.llm?.pricing) },
@@ -236,6 +265,22 @@ function parseChannels(v: unknown): ChannelsConfig {
 }
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+/** A host, `*.suffix`, or either with `:port`. No schemes, paths or wildcards elsewhere. */
+export const EGRESS_ENTRY = /^(?:\*\.)?(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?::[0-9]{1,5})?$/;
+
+function parseArtifact(value: unknown, where: string): void {
+  const a = value as Partial<ArtifactPin> | null;
+  const bad = (what: string): never => { throw new ConfigError(`${where}.artifact ${what}`); };
+  if (!a || typeof a !== "object") return bad("must be an object");
+  if (a.registry !== "npm" && a.registry !== "pypi") bad("registry must be npm or pypi");
+  for (const k of ["name", "version", "integrity", "treeSha256", "verifiedAt"] as const) if (typeof a[k] !== "string" || a[k]!.length === 0) bad(`${k} must be a non-empty string`);
+  if (a.registry === "npm" && !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(a.integrity!)) bad("integrity must be sha512-<base64> for npm");
+  if (a.registry === "pypi" && !/^sha256:[0-9a-f]{64}$/.test(a.integrity!)) bad("integrity must be sha256:<hex> for pypi");
+  if (!/^[0-9a-f]{64}$/.test(a.treeSha256!)) bad("treeSha256 must be 64 hex characters");
+  if (a.signature !== "npm-registry-ecdsa" && a.signature !== "none") bad("signature must be npm-registry-ecdsa or none");
+  const entry = a.entry as ArtifactPin["entry"] | undefined;
+  if (!entry || !["node", "bun", "python"].includes(entry.runtime) || typeof entry.file !== "string" || entry.file.length === 0 || entry.file.startsWith("/") || entry.file.split("/").includes("..")) bad("entry must name a runtime and a relative file");
+}
 const SERVER_ID = /^[A-Za-z0-9_-]+$/;
 
 function parseMcp(value: unknown): McpServerConfig[] {
@@ -251,13 +296,21 @@ function parseMcp(value: unknown): McpServerConfig[] {
     seen.add(s.id);
     const hasCommand = typeof s.command === "string" && s.command.length > 0;
     const hasUrl = typeof s.url === "string" && s.url.length > 0;
-    if (hasCommand === hasUrl) throw new ConfigError(`${where} needs either command or url`);
+    const hasArtifact = s.artifact !== undefined;
+    if ([hasCommand, hasUrl, hasArtifact].filter(Boolean).length !== 1) throw new ConfigError(`${where} needs exactly one of command, url or artifact`);
     if (hasUrl) httpsUrl(s.url, `${where}.url`);
     if (s.headersFrom !== undefined && !(typeof s.headersFrom === "object" && s.headersFrom !== null && Object.values(s.headersFrom).every((n) => typeof n === "string" && ENV_NAME.test(n)))) {
       throw new ConfigError(`${where}.headersFrom must map header names to secret names`);
     }
     if (s.sandbox !== undefined) parseSandbox(s.sandbox, `${where}.sandbox`);
     if (s.network !== undefined && typeof s.network !== "boolean") throw new ConfigError(`${where}.network must be true or false`);
+    if (s.egress !== undefined) {
+      if (!Array.isArray(s.egress) || s.egress.length === 0 || !s.egress.every((h) => typeof h === "string" && EGRESS_ENTRY.test(h))) {
+        throw new ConfigError(`${where}.egress must list hosts like api.example.com, *.example.com or host:port`);
+      }
+      if (s.network === true) throw new ConfigError(`${where}: egress and network:true exclude each other`);
+    }
+    if (s.artifact !== undefined) parseArtifact(s.artifact, where);
     if (s.args !== undefined && !(Array.isArray(s.args) && s.args.every((a) => typeof a === "string"))) throw new ConfigError(`${where}.args must be a list of strings`);
     if (s.envFrom !== undefined && !(Array.isArray(s.envFrom) && s.envFrom.every((n) => typeof n === "string" && ENV_NAME.test(n)))) {
       throw new ConfigError(`${where}.envFrom must list environment variable names`);
@@ -276,7 +329,7 @@ function parseMcp(value: unknown): McpServerConfig[] {
       }
     }
     const out: McpServerConfig = { id: s.id };
-    for (const k of ["command", "url", "headersFrom", "sandbox", "network", "args", "env", "envFrom", "trust", "sensitivity", "targetArgs"] as const) {
+    for (const k of ["command", "url", "headersFrom", "sandbox", "network", "args", "env", "envFrom", "trust", "sensitivity", "targetArgs", "egress", "artifact"] as const) {
       if (s[k] !== undefined) (out as unknown as Record<string, unknown>)[k] = s[k];
     }
     return out;

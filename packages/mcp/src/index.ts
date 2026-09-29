@@ -3,3 +3,4 @@ export * from "./map.ts";
 export * from "./host.ts";
 export * from "./sandbox.ts";
 export * from "./http.ts";
+export * from "./egress.ts";
