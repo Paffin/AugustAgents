@@ -10,6 +10,7 @@ import {
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
 import { EventJournal } from "@august/core";
+import { McpHost } from "@august/mcp";
 import { PolicyEngine } from "@august/policy";
 import { BuiltinExecutor, builtinManifest, clockManifest } from "./builtins.ts";
 import { ConfigError, type AugustConfig } from "./config.ts";
@@ -29,6 +30,9 @@ export interface App {
   cascade: DecisionCascade;
   registry: CapabilityRegistry;
   policy: PolicyEngine;
+  mcp: McpHost;
+  /** Start the MCP servers from the config. One failing server never stops the others. */
+  startServers(): Promise<{ started: string[]; failed: Array<{ id: string; error: string }> }>;
 }
 
 function isLocal(baseUrl: string): boolean {
@@ -65,16 +69,36 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   registry.install(builtinManifest, "verified");
   registry.install(clockManifest, "verified");
 
+  const mcp = new McpHost(registry, { fallback: new BuiltinExecutor(config.root) });
   const journal = new EventJournal(join(config.dataDir, "journal.db"));
   const policy = new PolicyEngine();
   const agent = new AgentRuntime({
     registry,
-    executor: new BuiltinExecutor(config.root),
+    executor: mcp,
     decision: cascade,
     llm,
     policy,
     journal,
     approver: deps.approver ?? denyAll,
   });
-  return { agent, journal, cascade, registry, policy };
+  const startServers = async () => {
+    const started: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    for (const server of config.mcp) {
+      try {
+        const env: Record<string, string> = { ...server.env };
+        for (const name of server.envFrom ?? []) {
+          const value = deps.env[name];
+          if (value === undefined) throw new Error(`${name} is not set`);
+          env[name] = value;
+        }
+        await mcp.add({ id: server.id, command: server.command, args: server.args, env }, server.trust ?? "community");
+        started.push(server.id);
+      } catch (error) {
+        failed.push({ id: server.id, error: (error as Error).message });
+      }
+    }
+    return { started, failed };
+  };
+  return { agent, journal, cascade, registry, policy, mcp, startServers };
 }

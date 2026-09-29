@@ -125,12 +125,12 @@ describe("built-in file tools", () => {
 
 /** Answers by schema name: which tool, which arguments, the final text. */
 function scriptedLlm(plan: { tool: string; args: Record<string, unknown>; reply: string }): LlmProvider {
-  let decided = 0;
   return {
     name: "scripted",
-    async complete(_m, options) {
+    async complete(messages, options) {
       const name = options?.jsonSchema?.name;
-      if (name === "decision") return JSON.stringify({ choice: decided++ === 0 ? plan.tool : "none" });
+      // Pick the tool until a result is in the state, then say none.
+      if (name === "decision") return JSON.stringify({ choice: messages.some((m) => m.content.includes("Result of")) ? "none" : plan.tool });
       if (name === "arguments") return JSON.stringify(plan.args);
       return plan.reply;
     },
@@ -237,5 +237,59 @@ describe("createApp", () => {
     const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" } });
     expect(app.cascade.shadowMode).toBe(true);
     expect(app.registry.enabledTools().map((t) => t.name).sort()).toEqual(["clock.now", "fs.list", "fs.read"]);
+  });
+});
+
+describe("mcp servers from the config", () => {
+  const FAKE = join(import.meta.dir, "../../mcp/test/fake-server.ts");
+  const server = (over: object = {}) => ({ id: "fake", command: process.execPath, args: [FAKE], env: { FAKE_MODE: "normal" }, ...over });
+  const withMcp = (home: string, mcp: unknown) => ({ ...defaultConfig(home), mcp }) as never;
+
+  test("validates ids, duplicates, env names and trust", () => {
+    const base = defaultConfig("/h");
+    const bad = (mcp: unknown) => () => parseConfig({ ...base, mcp });
+    expect(bad([{ id: "a.b", command: "x" }])).toThrow(/id/);
+    expect(bad([{ id: "a", command: "x" }, { id: "a", command: "y" }])).toThrow(/twice/);
+    expect(bad([{ id: "a", command: "x", envFrom: ["sk-123"] }])).toThrow(/environment variable names/);
+    expect(bad([{ id: "a", command: "x", trust: "verified" }])).toThrow(/trust/);
+    expect(bad([{ id: "a" }])).toThrow(/command/);
+    expect(bad("nope")).toThrow(/list/);
+    expect(() => parseConfig({ ...base, mcp: [{ id: "a", command: "x", trust: "known" }] })).not.toThrow();
+  });
+
+  test("a config without mcp still loads", () => {
+    const { mcp: _drop, ...old } = defaultConfig("/h");
+    expect(parseConfig(old).mcp).toEqual([]);
+  });
+
+  test("starts servers, reports failures, and one failure does not stop the rest", async () => {
+    const home = tmp();
+    const cfg = parseConfig(withMcp(home, [server(), server({ id: "broken", command: "/no/such/binary" }), server({ id: "needs", envFrom: ["MISSING_KEY"] })]));
+    const app = createApp(cfg, { env: { OPENAI_API_KEY: "k", PATH: process.env.PATH }, llm: scriptedLlm({ tool: "none", args: {}, reply: "" }) });
+    try {
+      const r = await app.startServers();
+      expect(r.started).toEqual(["fake"]);
+      expect(r.failed.map((f) => f.id).sort()).toEqual(["broken", "needs"]);
+      expect(r.failed.find((f) => f.id === "needs")!.error).toContain("MISSING_KEY is not set");
+      expect(app.registry.enabledTools().map((t) => t.name)).toContain("fake.echo");
+    } finally {
+      app.mcp.closeAll();
+    }
+  });
+
+  test("chat uses an MCP tool, but asks first because a community server may reach the network", async () => {
+    const home = tmp();
+    const llm = scriptedLlm({ tool: "fake.echo", args: { text: "pong" }, reply: "The server said pong." });
+    const { io, out, prompts } = makeIo(home, ["echo pong with the fake server", "n", "echo pong with the fake server", "y", "exit"], llm);
+    await main(["init"], io);
+    const path = defaultConfigPath(home);
+    const cfg = loadConfig(path);
+    writeConfig(path, parseConfig({ ...cfg, mcp: [server()] }));
+    io.env = { ...io.env, PATH: process.env.PATH };
+    await main(["chat"], io);
+    expect(out).toContain("Tools from: fake");
+    expect(prompts.filter((p) => p.includes("Allow once?"))).toHaveLength(2);
+    expect(out.some((l) => l.includes("was not approved"))).toBe(true);
+    expect(out).toContain("The server said pong.");
   });
 });

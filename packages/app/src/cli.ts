@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
 import { makeSessionKey } from "@august/core";
 import { startGateway, type RunningGateway } from "@august/gateway";
-import { createApp, type AppDeps } from "./bootstrap.ts";
+import { createApp, type App, type AppDeps } from "./bootstrap.ts";
 import { ConfigError, defaultConfig, defaultConfigPath, loadConfig, writeConfig } from "./config.ts";
 
 export interface CliIo {
@@ -55,7 +55,7 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
       case "chat":
         return await chat(configPath, io);
       case "serve":
-        return serve(configPath, io);
+        return await serve(configPath, io);
       default:
         io.print(HELP);
         return { code: command === undefined || command === "help" || command === "--help" ? 0 : 1 };
@@ -87,7 +87,9 @@ function init(configPath: string, force: boolean, io: CliIo): CliResult {
 
 async function chat(configPath: string, io: CliIo): Promise<CliResult> {
   const config = loadConfig(configPath);
-  const { agent } = createApp(config, { env: io.env, fetch: io.fetch, llm: io.llm, approver: terminalApprover(io) });
+  const app = createApp(config, { env: io.env, fetch: io.fetch, llm: io.llm, approver: terminalApprover(io) });
+  const { agent } = app;
+  await reportServers(app, io);
   const session = makeSessionKey({ workspace: config.workspace, channel: "cli", user: "local" });
   io.print('Ready. Type "exit" to quit.');
   for (;;) {
@@ -101,20 +103,36 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
       io.print("Something went wrong.");
     }
   }
+  app.mcp.closeAll();
   return { code: 0 };
 }
 
-function serve(configPath: string, io: CliIo): CliResult {
+async function reportServers(app: App, io: CliIo): Promise<void> {
+  const { started, failed } = await app.startServers();
+  if (started.length) io.print(`Tools from: ${started.join(", ")}`);
+  for (const f of failed) io.print(`Could not start "${f.id}": ${f.error}`);
+}
+
+async function serve(configPath: string, io: CliIo): Promise<CliResult> {
   const config = loadConfig(configPath);
   // No one is at a terminal to approve here, so controlled actions are refused.
-  const { agent } = createApp(config, { env: io.env, fetch: io.fetch, llm: io.llm });
-  const gateway = startGateway({
+  const app = createApp(config, { env: io.env, fetch: io.fetch, llm: io.llm });
+  const { agent } = app;
+  await reportServers(app, io);
+  const inner = startGateway({
     hostname: "127.0.0.1",
     port: config.gateway.port,
     token: config.gateway.token,
     workspace: config.workspace,
     onMessage: async ({ session, text }) => ({ reply: (await agent.handle(session, text)).reply }),
   });
+  const gateway: RunningGateway = {
+    port: inner.port,
+    stop: () => {
+      inner.stop();
+      app.mcp.closeAll();
+    },
+  };
   io.print(`Gateway on http://127.0.0.1:${gateway.port} (token is in ${configPath})`);
   return { code: 0, gateway };
 }

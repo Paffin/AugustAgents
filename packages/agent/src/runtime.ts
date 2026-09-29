@@ -28,8 +28,12 @@ export interface ToolResult {
 /** Talks to the real tool servers (MCP, skills, builtins). */
 export interface ToolExecutor {
   call(tool: string, args: Record<string, unknown>): Promise<ToolResult>;
-  /** What the server advertises right now; used to catch rug pulls before a call. */
-  liveDescriptors?(capabilityId: string): Promise<readonly ToolDescriptor[]>;
+  /**
+   * What the server advertises right now; used to catch rug pulls before a
+   * call. Returns undefined for capabilities that cannot change under us
+   * (built-ins), which skips the check.
+   */
+  liveDescriptors?(capabilityId: string): Promise<readonly ToolDescriptor[] | undefined>;
 }
 
 export interface ApprovalRequest {
@@ -141,7 +145,7 @@ export class AgentRuntime {
         const capabilityId = descriptor.name.split(".")[0]!;
         if (this.options.executor.liveDescriptors) {
           const live = await this.options.executor.liveDescriptors(capabilityId);
-          if (this.options.registry.verify(capabilityId, live) === "changed") {
+          if (live && this.options.registry.verify(capabilityId, live) === "changed") {
             log("capability.changed", { capability: capabilityId });
             return await this.finish(
               text,

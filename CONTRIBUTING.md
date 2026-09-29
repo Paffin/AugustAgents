@@ -3,7 +3,7 @@
 1. `bun install`
 2. Ветка от `main`, небольшие PR.
 3. Перед PR: `bun run check` (typecheck + тесты) должен проходить.
-4. Любое изменение в `packages/policy`, `packages/capabilities` и `packages/gateway` требует теста, который воспроизводит атаку или ошибку, которую оно закрывает.
+4. Любое изменение в `packages/policy`, `packages/capabilities`, `packages/gateway` и `packages/mcp` требует теста, который воспроизводит атаку или ошибку, которую оно закрывает.
 5. Коммиты: короткое императивное описание, зачем изменение, а не что.
 
 ## Принципы

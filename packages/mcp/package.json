@@ -1,16 +1,11 @@
 {
-  "name": "@august/app",
+  "name": "@august/mcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "august": "./src/bin.ts" },
   "dependencies": {
     "@august/agent": "workspace:*",
-    "@august/brain": "workspace:*",
     "@august/capabilities": "workspace:*",
-    "@august/core": "workspace:*",
-    "@august/gateway": "workspace:*",
-    "@august/mcp": "workspace:*",
     "@august/policy": "workspace:*"
   },
   "exports": { ".": "./src/index.ts" }
