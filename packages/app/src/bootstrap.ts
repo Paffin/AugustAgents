@@ -461,16 +461,30 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       } else {
         run = runs.finishRun(run.id, "completed", reply.reply, { steps: reply.steps });
       }
+      runs.clearSettledStop(run.id);
       const feedbackId = await learnFrom(run, reply, { startedAt: segmentStart, llmCalls, usageBefore, route });
       return { ...reply, runId: run.id, replayed: false, ...(run.state === "completed" && feedbackId ? { feedbackId } : {}) };
     } catch (error) {
-      const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, current.checkpoint?.phase === "tool_started" && !current.checkpoint.safeToResume ? "recovering" : "failed", { error: (error as Error).message });
+      const current = runs.getRun(run.id);
+      if (current && !["completed", "failed", "cancelled"].includes(current.state)) {
+        const uncertain = current.checkpoint?.phase === "tool_started";
+        if (entry.desired && (entry.desired === "cancelled" || !uncertain)) {
+          runs.finishRun(run.id, entry.desired, uncertain ? "Cancelled further work. A started external effect may be uncertain." : `Stopped: ${entry.desired}.`, { error: (error as Error).message });
+          runs.clearSettledStop(run.id);
+        } else runs.transition(run.id, uncertain ? "recovering" : "failed", { error: (error as Error).message });
+      }
       throw error;
     } finally { approver.bySession.delete(run.session); active.delete(run.id); entry.finish(); saveStats(); }
   };
   const stop = async (id: string, desired: "paused" | "cancelled"): Promise<DurableRun> => {
-    const entry = active.get(id); if (!entry) { const run = runs.getRun(id); if (!run) throw new Error(`unknown run ${id}`); return runs.transition(id, desired); }
-    entry.desired = desired; entry.controller.abort(); await entry.done; return runs.getRun(id)!;
+    const effective = runs.requestStop(id, desired);
+    const entry = active.get(id);
+    if (!entry) {
+      const run = runs.getRun(id)!;
+      const result = run.state === effective ? run : runs.transition(id, effective);
+      runs.clearSettledStop(id); return result;
+    }
+    entry.desired = effective; entry.controller.abort(); await entry.done; return runs.getRun(id)!;
   };
 
   return {

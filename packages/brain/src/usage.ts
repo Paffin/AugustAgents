@@ -7,6 +7,9 @@ export interface LlmUsage {
 export type LlmUsageObserver = (usage: LlmUsage) => void | Promise<void>;
 
 export interface LlmCallControls {
+  /** Owner cancellation applies to in-flight generation as well as call admission. */
+  signal?: AbortSignal;
+  deadlineAt?: number;
   onUsage?: LlmUsageObserver;
   requireUsage?: boolean;
   maxTokens?: number;

@@ -136,14 +136,17 @@ export class DecisionCascade implements DecisionEngine {
   }
 
   async decide(input: DecisionInput, question: DecisionQuestion): Promise<CascadeDecision> {
+    input.signal?.throwIfAborted();
     this.counters.total += 1;
     let primary: DecisionResult | undefined;
     try {
       primary = await this.options.primary.decide(input, question);
     } catch (error) {
       if (error instanceof LlmUsageError || error instanceof LlmUsageObserverError) throw error;
+      input.signal?.throwIfAborted();
       this.counters.primaryErrors += 1;
     }
+    input.signal?.throwIfAborted();
 
     if (primary && !this.shadow && primary.confidence >= this.threshold) {
       this.counters.primaryAnswers += 1;

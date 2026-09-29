@@ -41,6 +41,10 @@ owner's tasks recovering. Ordinary store opens now leave active state alone;
 App atomically claims an exclusive local-process owner before recovery. A second
 CLI is refused without interrupting a live web task. CLI attachment to an existing
 gateway and broader host/platform recovery qualification remain open.
+In-flight HTTP model cancellation and durable owner stop intents are implemented:
+live pause took 221 ms; cancel survived an owned gateway SIGKILL/restart.
+Reported usage before abort is retained, but an interrupted call with no receipt
+still has unknown billing; GitHub #2/#3 are not fully closed by this increment.
 
 ## Active Risks
 

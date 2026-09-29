@@ -200,6 +200,36 @@ describe("LayaEngine", () => {
 });
 
 describe("OpenAiCompatibleProvider", () => {
+  test("owner abort interrupts a real in-flight HTTP connection without retry or fallback", async () => {
+    let received!: () => void; const started = new Promise<void>(resolve => { received = resolve; }); let calls = 0;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { calls++; received(); return new Promise<Response>(() => {}); } });
+    try {
+      const controller = new AbortController(); const second = scripted("must not run");
+      const first = new OpenAiCompatibleProvider({ baseUrl: String(server.url), model: "owned-http-fixture" });
+      const result = new FallbackProvider([first, second]).complete([], { signal: controller.signal });
+      await started; controller.abort();
+      await expect(result).rejects.toMatchObject({ name: "AbortError" });
+      expect(calls).toBe(1); expect(second.calls).toHaveLength(0);
+    } finally { await server.stop(true); }
+  });
+
+  test("usage parsed before owner abort is retained exactly once, without another provider", async () => {
+    const controller = new AbortController(); const reported: LlmUsage[] = [];
+    const first = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example", model: "m", fetch: (async () => used("already received")) as unknown as typeof fetch });
+    const second = scripted("must not run");
+    await expect(new FallbackProvider([first, second]).complete([], { signal: controller.signal, onUsage: usage => { reported.push(usage); controller.abort(); } })).rejects.toMatchObject({ name: "AbortError" });
+    expect(reported).toHaveLength(1); expect(second.calls).toHaveLength(0);
+  });
+
+  test("abort also interrupts a pending retry delay and pre-aborted calls enter no provider", async () => {
+    const controller = new AbortController(); let sleeping!: () => void; const started = new Promise<void>(resolve => { sleeping = resolve; }); let calls = 0;
+    const first = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example", model: "m", fetch: (async () => { calls++; return new Response("", { status: 429 }); }) as unknown as typeof fetch, sleep: async () => { sleeping(); return new Promise<void>(() => {}); } });
+    const second = scripted("must not run"); const fallback = new FallbackProvider([first, second]);
+    const result = fallback.complete([], { signal: controller.signal }); await started; controller.abort();
+    await expect(result).rejects.toMatchObject({ name: "AbortError" }); expect(calls).toBe(1); expect(second.calls).toHaveLength(0);
+    await expect(new FallbackProvider([second]).complete([], { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" }); expect(second.calls).toHaveLength(0);
+  });
+
   const ok = (content: string) =>
     new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
   const used = (content: string, value: unknown = { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 }) =>

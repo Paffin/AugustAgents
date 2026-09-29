@@ -103,6 +103,41 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### In-flight model abort and durable stop intent — partial issue #2, 2026-09-30
+
+- Run cancellation/deadline now reaches expansion, decision, argument generation,
+  answer generation and HTTP Laya transports. Owner abort interrupts fetch and
+  retry backoff; neither provider nor decision fallback starts after abort.
+  Usage already parsed is reported before interruption; usage persistence errors
+  remain fatal rather than being hidden as a successful cancellation.
+- Owner pause/cancel intent is committed in runtime metadata before aborting the
+  controller. Exclusive-owner recovery applies that intent before execution;
+  cancellation cannot downgrade to pause. Uncertain tool-start pause remains
+  recovering, never resumable; cancelled further work retains an explicit warning
+  when a started external effect is uncertain. This does not undo an effect.
+- Actual local-model/browser journey in the retained owned fixture:
+  `8b90b6d8-7950-466b-9695-6232b03f6c18` paused in 220.7 ms while the real
+  argument HTTP request was pending; transport observed `AbortError` and no
+  further tool ran. Prior parsed decision usage (533 input / 513 output tokens,
+  1 microdollar configured estimate) remained persisted. Earlier fresh decision
+  pause `ce08b245-d341-4828-a44a-21a1eb45d287` took 287.1 ms.
+- Actual Cancel on `effb9dfa-796f-4907-b070-635995c9ce23`, immediately followed
+  by SIGKILL of the validated owned gateway PID 77795, restored as `cancelled`
+  through the browser after restart, not running/recovering. No owner services
+  were terminated; source `order.json` remained unchanged. Captures retained at
+  `/private/tmp/august-task-controls.O4O0qH/abort-{paused,cancel-restart}.png`.
+- Regressions exercise an actual pending HTTP socket, abortable retry delay,
+  parsed-usage preservation, no fallback, child-process exit with durable intent,
+  restart idempotence, monotonic cancellation and uncertain-effect blocking.
+  `bun --no-env-file test`: 628 pass, 12 skip, 0 fail; 2439 assertions /
+  640 tests / 36 files, 20.47s. Typecheck and host-native build pass. Tests did not
+  load the owner's newly supplied GitHub `.env` credentials.
+- **Issue #2 is NOT closed:** an interrupted provider request without a usage
+  receipt still has unknown billing. Displayed totals are received reports, not
+  proof of zero charge for that interruption. Durable attempt/reservation and
+  reconciliation work remains under #2/#3; complete native/platform/external
+  effect qualification and the full 28-outcome goal remain open.
+
 ### CI matrix source and local evidence, 2026-09-30
 
 - Issue #1 adds GitHub-hosted Ubuntu/macOS/Windows checks with pinned Bun 1.4.2,

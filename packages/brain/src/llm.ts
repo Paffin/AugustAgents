@@ -39,7 +39,9 @@ export class LlmUsageObserverError extends Error {
 }
 
 function callLimit(controls: LlmCallControls): number | undefined {
+  controls.signal?.throwIfAborted();
   controls.beforeCall?.();
+  if (controls.deadlineAt !== undefined && Date.now() >= controls.deadlineAt) throw new DOMException("Run deadline exceeded", "TimeoutError");
   const remaining = controls.remainingTokens?.();
   const limit = remaining === undefined ? controls.maxTokens : Math.min(controls.maxTokens ?? remaining, remaining);
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
@@ -93,10 +95,20 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       } catch (error) {
         lastError = error;
         if (!(error instanceof LlmError) || !error.retryable || attempt === retries) break;
-        await this.sleep(250 * 2 ** attempt);
+        opts.signal?.throwIfAborted();
+        await this.retryDelay(250 * 2 ** attempt, opts.signal);
       }
     }
     throw lastError;
+  }
+
+  private async retryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return this.sleep(ms);
+    signal.throwIfAborted();
+    let abort!: () => void;
+    const cancelled = new Promise<never>((_, reject) => { abort = () => reject(signal.reason); signal.addEventListener("abort", abort, { once: true }); });
+    try { await Promise.race([this.sleep(ms), cancelled]); }
+    finally { signal.removeEventListener("abort", abort); }
   }
 
   private async once(messages: readonly ChatMessage[], opts: CompleteOptions): Promise<string> {
@@ -117,14 +129,18 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     if (this.options.apiKey) headers.authorization = `Bearer ${this.options.apiKey}`;
 
     let response: Response;
+    const timeout = Math.min(this.options.timeoutMs ?? 60_000, opts.deadlineAt === undefined ? Infinity : Math.max(1, opts.deadlineAt - Date.now()));
+    const timed = AbortSignal.timeout(timeout);
     try {
       response = await this.fetchFn(`${this.options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.options.timeoutMs ?? 60_000),
+        signal: opts.signal ? AbortSignal.any([opts.signal, timed]) : timed,
       });
     } catch (error) {
+      opts.signal?.throwIfAborted();
+      opts.beforeCall?.();
       // Network failures and timeouts are worth retrying; never echo the request (it holds the key).
       throw new LlmError(`${this.name}: request failed (${(error as Error).name})`, true);
     }
@@ -137,6 +153,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     const usage = parseUsage(json.usage);
     if (opts.requireUsage && !usage) throw new LlmUsageError(`${this.name}: response had no usage`);
     if (usage && opts.onUsage) { try { await opts.onUsage(usage); } catch (error) { throw new LlmUsageObserverError(error); } }
+    opts.signal?.throwIfAborted();
     if (typeof content !== "string" || content.length === 0) {
       throw new LlmError(`${this.name}: response had no text`, false);
     }
@@ -165,11 +182,13 @@ export class FallbackProvider implements LlmProvider {
   async complete(messages: readonly ChatMessage[], options?: CompleteOptions): Promise<string> {
     const failures: string[] = [];
     for (const provider of this.providers) {
-      options?.beforeCall?.();
+      callLimit(options ?? {});
       try {
         return await provider.complete(messages, options);
       } catch (error) {
         if (error instanceof LlmUsageObserverError || error instanceof LlmUsageError) throw error;
+        options?.signal?.throwIfAborted();
+        if (options?.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw error;
         options?.beforeCall?.();
         failures.push(`${provider.name}: ${(error as Error).message}`);
       }
@@ -213,7 +232,7 @@ export class LlmChoiceEngine implements DecisionEngine {
       },
     ];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const controls = { maxTokens: input.maxCompletionTokens, onUsage: input.onUsage, requireUsage: input.requireUsage, beforeCall: input.beforeCall, remainingTokens: input.remainingTokens };
+      const controls = { signal: input.signal, deadlineAt: input.deadlineAt, maxTokens: input.maxCompletionTokens, onUsage: input.onUsage, requireUsage: input.requireUsage, beforeCall: input.beforeCall, remainingTokens: input.remainingTokens };
       const text = await this.provider.complete(messages, { ...controls, maxTokens: callLimit(controls), jsonSchema: { name: "decision", schema } });
       const value = parseJson(text);
       if (validateArgs(schema, value).length === 0) {

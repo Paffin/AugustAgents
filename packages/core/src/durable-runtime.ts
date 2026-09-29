@@ -123,6 +123,19 @@ export class DurableRuntimeStore {
           const receipt = JSON.stringify({ pid: process.pid, nonce: randomUUID() });
           this.db.query("INSERT OR REPLACE INTO runtime_meta (key,value) VALUES ('runtime_owner',?)").run(receipt);
           this.db.run("UPDATE runs SET state='recovering', updated_at=? WHERE state IN ('created','running','waiting_approval','waiting_external','verifying')", [Date.now()]);
+          // A durable owner stop wins over restart's generic interrupted classification.
+          for (const intent of this.db.query("SELECT key,value FROM runtime_meta WHERE key GLOB 'run_stop:*'").all() as Array<{ key: string; value: string }>) {
+            const id = intent.key.slice("run_stop:".length), desired = this.requestedStop(id);
+            const run = this.getRun(id); if (!run || !desired) throw new Error("invalid persisted stop intent");
+            if (run.state === "cancelled" || run.state === desired || (TERMINAL.has(run.state) && desired === "paused")) { this.db.query("DELETE FROM runtime_meta WHERE key=?").run(intent.key); continue; }
+            const uncertain = run.checkpoint?.phase === "tool_started";
+            if (desired === "paused" && uncertain) continue; // Never turn an uncertain effect into a resumable pause.
+            const reply = uncertain ? "Cancelled further work. A started external effect may be uncertain." : `Stopped: ${desired}.`;
+            const now = Date.now(), seq = (this.db.query("SELECT COALESCE(MAX(seq),0)+1 seq FROM messages WHERE session=?").get(run.session) as { seq: number }).seq;
+            this.db.query("INSERT INTO messages VALUES (?,?,?,?,?)").run(run.session, seq, "assistant", reply, now);
+            this.db.query("UPDATE runs SET state=?,reply=?,error=?,updated_at=? WHERE id=?").run(desired, reply, uncertain ? "cancelled-uncertain-effect" : run.error ?? desired, now, id);
+            this.db.query("DELETE FROM runtime_meta WHERE key=?").run(intent.key);
+          }
           this.ownerReceipt = receipt;
         }).immediate();
       } catch (error) { this.db.close(); throw error; }
@@ -183,6 +196,26 @@ export class DurableRuntimeStore {
     }).immediate();
   }
   getRun(id: string): DurableRun | undefined { const row = this.db.query("SELECT * FROM runs WHERE id=?").get(id) as RunRow | null; return row ? toRun(row) : undefined; }
+  requestedStop(id: string): "paused" | "cancelled" | undefined {
+    const row = this.db.query("SELECT value FROM runtime_meta WHERE key=?").get(`run_stop:${id}`) as { value: string } | null;
+    if (!row) return undefined;
+    if (row.value !== "paused" && row.value !== "cancelled") throw new Error("invalid persisted stop intent");
+    return row.value;
+  }
+  /** Commit intent before interrupting any in-flight operation. Cancellation cannot be downgraded. */
+  requestStop(id: string, desired: "paused" | "cancelled"): "paused" | "cancelled" {
+    if (desired !== "paused" && desired !== "cancelled") throw new Error("invalid stop intent");
+    return this.db.transaction(() => {
+      const run = this.getRun(id); if (!run || TERMINAL.has(run.state)) throw new Error("run is not active");
+      const effective = this.requestedStop(id) === "cancelled" ? "cancelled" : desired;
+      this.db.query("INSERT OR REPLACE INTO runtime_meta (key,value) VALUES (?,?)").run(`run_stop:${id}`, effective);
+      return effective;
+    }).immediate();
+  }
+  clearSettledStop(id: string): void {
+    const run = this.getRun(id), intent = this.requestedStop(id);
+    if (intent && run && (run.state === intent || TERMINAL.has(run.state))) this.db.query("DELETE FROM runtime_meta WHERE key=?").run(`run_stop:${id}`);
+  }
   recordUsage(id: string, usage: UsageDelta, pricing: UsagePricing, now = Date.now()): { run: DurableRun; exhausted?: UsageBudgetExhaustion } {
     validateUsage(usage); validatePricing(pricing);
     return this.db.transaction(() => { const before = this.getRun(id); if (!before) throw new Error(`unknown run ${id}`); if (TERMINAL.has(before.state)) throw new Error("cannot record usage for a terminal run"); const input = before.usage.inputTokens + usage.inputTokens; const output = before.usage.outputTokens + usage.outputTokens; if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || !Number.isSafeInteger(input + output)) throw new Error("usage total exceeds safe integer range"); const numerator = BigInt(input) * BigInt(pricing.inputMicrosPerMillion) + BigInt(output) * BigInt(pricing.outputMicrosPerMillion); const cost = Number((numerator + 999_999n) / 1_000_000n); if (!Number.isSafeInteger(cost)) throw new Error("usage cost exceeds safe integer range"); this.db.query("UPDATE runs SET input_tokens=?,output_tokens=?,cost_micros=?,updated_at=? WHERE id=?").run(input, output, cost, now, id); const run = this.getRun(id)!; const exhausted: UsageBudgetExhaustion | undefined = run.usage.totalTokens >= run.budget.maxTokens ? "token-budget" : run.usage.costMicros > 0 && run.usage.costMicros >= run.budget.maxCostMicros ? "cost-budget" : undefined; return exhausted ? { run, exhausted } : { run }; }).immediate();

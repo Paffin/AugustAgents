@@ -317,7 +317,7 @@ export class AgentRuntime {
       const exhausted = context.modelBudgetExhaustion?.();
       if (exhausted) throw new RunControlError(exhausted);
     };
-    const llmControls = (): LlmCallControls => ({ onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: modelControl });
+    const llmControls = (): LlmCallControls => ({ signal: context.signal, deadlineAt: context.deadlineAt, onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: modelControl });
     const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
       try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history, context.redactCheckpoint), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
       catch (error) { throw new AgentCheckpointError(error); }
@@ -454,6 +454,7 @@ export class AgentRuntime {
             log("shortlist.expanded", { before, after: shortlist.length });
           } catch (error) {
             if (error instanceof RunControlError || error instanceof LlmUsageError || error instanceof LlmUsageObserverError) throw error;
+            control();
             log("shortlist.expand-failed", {});
           }
         }
@@ -471,7 +472,7 @@ export class AgentRuntime {
         const choice = await chooseTool(
           this.options.decision,
           offered,
-          { state, tainted: taint.snapshot().tainted, onUsage: controls.onUsage, requireUsage: controls.requireUsage, maxCompletionTokens: controls.maxTokens, remainingTokens: controls.remainingTokens, beforeCall: controls.beforeCall },
+          { state, tainted: taint.snapshot().tainted, signal: controls.signal, deadlineAt: controls.deadlineAt, onUsage: controls.onUsage, requireUsage: controls.requireUsage, maxCompletionTokens: controls.maxTokens, remainingTokens: controls.remainingTokens, beforeCall: controls.beforeCall },
           TOOL_CHOICE_INSTRUCTIONS,
         );
         control();
@@ -514,6 +515,8 @@ export class AgentRuntime {
       }
     } catch (error) {
       if (error instanceof AgentCheckpointError || error instanceof LlmUsageObserverError) throw error;
+      if (context.signal?.aborted) error = new RunControlError("cancelled");
+      else if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) error = new RunControlError("deadline");
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });

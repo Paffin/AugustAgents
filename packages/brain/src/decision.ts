@@ -21,6 +21,8 @@ export interface DecisionQuestion {
 }
 
 export interface DecisionInput {
+  signal?: AbortSignal;
+  deadlineAt?: number;
   state: string;
   /** The state contains text from an untrusted source. */
   tainted: boolean;
@@ -112,6 +114,8 @@ export class HeuristicEngine implements DecisionEngine {
   }
 }
 export interface LayaPredictRequest {
+  signal?: AbortSignal;
+  deadlineAt?: number;
   state: string;
   question: DecisionQuestion;
 }
@@ -168,7 +172,9 @@ export class LayaEngine implements DecisionEngine {
 
   async decide(input: DecisionInput, question: DecisionQuestion): Promise<DecisionResult> {
     validateQuestion(question);
-    const raw = await this.predict({ state: clipState(input.state, this.maxStateChars), question });
+    input.signal?.throwIfAborted();
+    const raw = await this.predict({ state: clipState(input.state, this.maxStateChars), question, ...(input.signal ? { signal: input.signal } : {}), ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}) });
+    input.signal?.throwIfAborted();
     const keys = question.options.map((o) => o.key);
     const ordered = keys.map((k) => {
       const p = raw.probs[k];
@@ -219,7 +225,10 @@ export function layaHttpTransport(url: string, options: LayaHttpOptions = {}): L
   parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/predict`;
   const endpoint = parsed.href;
   const fetchFn = options.fetch ?? fetch;
-  return async ({ state, question }) => {
+  return async ({ state, question, signal, deadlineAt }) => {
+    signal?.throwIfAborted();
+    const timeout = Math.min(options.timeoutMs ?? 5000, deadlineAt === undefined ? Infinity : Math.max(1, deadlineAt - Date.now()));
+    const timed = AbortSignal.timeout(timeout);
     let response: Response;
     try {
       response = await fetchFn(endpoint, {
@@ -230,9 +239,10 @@ export function layaHttpTransport(url: string, options: LayaHttpOptions = {}): L
           state,
           question: { id: question.id, instructions: question.instructions, options: question.options },
         }),
-        signal: AbortSignal.timeout(options.timeoutMs ?? 5000),
+        signal: signal ? AbortSignal.any([signal, timed]) : timed,
       });
     } catch (error) {
+      signal?.throwIfAborted();
       throw new LayaTransportError(`Laya sidecar unreachable (${(error as Error).name})`);
     }
     if (!response.ok) throw new LayaTransportError(`Laya sidecar HTTP ${response.status}`);

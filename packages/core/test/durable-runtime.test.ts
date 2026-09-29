@@ -161,6 +161,41 @@ describe("DurableRuntimeStore", () => {
     expect(() => new DurableRuntimeStore(path, { readOnly: true, exclusiveOwner: true })).toThrow(/read-only/);
   });
 
+  test("durable pause/cancel intent survives abrupt owner exit, and cancel cannot be downgraded", () => {
+    const moduleUrl = new URL("../src/durable-runtime.ts", import.meta.url).href;
+    for (const desired of ["paused", "cancelled"] as const) {
+      const path = tempDb();
+      const child = spawnSync(process.execPath, ["--eval", `import { DurableRuntimeStore } from ${JSON.stringify(moduleUrl)}; const s=new DurableRuntimeStore(${JSON.stringify(path)},{exclusiveOwner:true}); const r=s.startRun({session:"home:test:u",request:"owned interrupted model"}).run; s.transition(r.id,"running"); s.checkpoint(r.id,{phase:"before_decision",safeToResume:true,history:[]}); s.requestStop(r.id,${JSON.stringify(desired)}); ${desired === "cancelled" ? 'if(s.requestStop(r.id,"paused")!=="cancelled")throw Error("cancel downgraded");' : ""} process.exit(0);`], { encoding: "utf8" });
+      expect(child.status).toBe(0);
+      const restarted = new DurableRuntimeStore(path, { exclusiveOwner: true });
+      const run = restarted.listRuns()[0]!; expect(run.state).toBe(desired); expect(run.reply).toBe(`Stopped: ${desired}.`);
+      expect(restarted.requestedStop(run.id)).toBeUndefined(); expect(restarted.messages(session)).toHaveLength(1);
+      restarted.close(); const again = new DurableRuntimeStore(path, { exclusiveOwner: true });
+      expect(again.messages(session)).toHaveLength(1); expect(again.getRun(run.id)?.state).toBe(desired); again.close();
+    }
+  });
+
+  test("recovered pause cannot make an uncertain effect resumable; cancelled further work never replays it", () => {
+    for (const desired of ["paused", "cancelled"] as const) {
+      const path = tempDb(), store = new DurableRuntimeStore(path, { exclusiveOwner: true });
+      const run = store.startRun({ session, request: "uncertain owned call" }).run; store.transition(run.id, "running");
+      store.checkpoint(run.id, { phase: "tool_started", safeToResume: false, history: [] }); store.requestStop(run.id, desired); store.close();
+      const restarted = new DurableRuntimeStore(path, { exclusiveOwner: true });
+      expect(restarted.getRun(run.id)?.state).toBe(desired === "paused" ? "recovering" : "cancelled");
+      expect(() => restarted.transition(run.id, "running")).toThrow(InvalidRunTransitionError);
+      if (desired === "cancelled") expect(restarted.getRun(run.id)?.reply).toContain("effect may be uncertain");
+      else expect(restarted.requestedStop(run.id)).toBe("paused"); restarted.close();
+    }
+  });
+
+  test("accepted cancel survives an intervening runtime failure, preserving its error", () => {
+    const path = tempDb(), owner = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    const run = owner.startRun({ session, request: "owned failure after cancel" }).run; owner.transition(run.id, "running");
+    owner.requestStop(run.id, "cancelled"); owner.transition(run.id, "failed", { error: "owned accounting failure" }); owner.close();
+    const restarted = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    expect(restarted.getRun(run.id)?.state).toBe("cancelled"); expect(restarted.getRun(run.id)?.error).toBe("owned accounting failure"); restarted.close();
+  });
+
   test("Product behavior: retry creates a new related run", () => {
     const store = new DurableRuntimeStore();
     const { run } = store.startRun({ session, request: "retry me", idempotencyKey: "old" });
