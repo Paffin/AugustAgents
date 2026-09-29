@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FallbackProvider, LlmAttemptObserverError, LlmUsageError, OpenAiCompatibleProvider, UsageRequiredProvider, type LlmAttemptEvent, type LlmProvider, type LlmUsage } from "../src/index.ts";
+import { FallbackProvider, LlmAttemptObserverError, LlmUsageError, LlmUsageObserverError, OpenAiCompatibleProvider, UsageRequiredProvider, type LlmAttemptEvent, type LlmProvider, type LlmUsage } from "../src/index.ts";
 
 // Public transport/accounting safety contracts. Actual owned sockets, NOT real-model acceptance.
 const servers: Server[] = []; const directories: string[] = [];
@@ -134,6 +134,36 @@ describe("durable LLM attempt public lifecycle", () => {
     await expect(new UsageRequiredProvider(missing).complete(messages, { onAttempt: event => { events.push(event); } })).rejects.toBeInstanceOf(LlmUsageError);
     expect(events.map(event => event.type)).toEqual(["started", "failed"]);
     expect(events[1]).toMatchObject({ id: events[0]!.id, outcome: "unknown", reason: "provider_error" });
+  });
+
+  test("standalone fallback treats an opaque adapter's usage observer failure as fatal without a backup call", async () => {
+    const backup = await endpoint((_request, response) => reply(response));
+    const events: LlmAttemptEvent[] = [];
+    const opaque: LlmProvider = { name: "owned opaque observer", async complete(_messages, options) {
+      await options?.onUsage?.(receipt); return "opaque fixture";
+    } };
+    await expect(new FallbackProvider([opaque, provider(backup.url)]).complete(messages, {
+      onAttempt: event => { events.push(event); }, onUsage: () => { throw new Error("owned usage persistence failure"); },
+    })).rejects.toBeInstanceOf(LlmUsageObserverError);
+    expect(backup.hits()).toBe(0);
+    expect(events.map(event => event.type)).toEqual(["started", "receipt"]);
+    expect(finalEvents(events)).toHaveLength(1);
+  });
+
+  test("optional usage may return text but still finalizes missing HTTP and opaque receipts as unknown", async () => {
+    const remote = await endpoint((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ choices: [{ message: { content: "optional HTTP fixture" } }] }));
+    });
+    const events: LlmAttemptEvent[] = [];
+    await expect(provider(remote.url).complete(messages, { onAttempt: event => { events.push(event); } })).resolves.toBe("optional HTTP fixture");
+    expect(events.map(event => event.type)).toEqual(["started", "failed"]);
+    expect(events[1]).toMatchObject({ id: events[0]!.id, outcome: "unknown", reason: "invalid_response" });
+    events.length = 0;
+    const opaque: LlmProvider = { name: "owned optional adapter", async complete() { return "optional opaque fixture"; } };
+    await expect(new FallbackProvider([opaque]).complete(messages, { onAttempt: event => { events.push(event); } })).resolves.toBe("optional opaque fixture");
+    expect(events.map(event => event.type)).toEqual(["started", "failed"]);
+    expect(events[1]).toMatchObject({ id: events[0]!.id, outcome: "unknown", reason: "invalid_response" });
   });
 
   test("physical retries and fallback requests have distinct IDs, with one receipt for the successful request", async () => {
