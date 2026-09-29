@@ -21,7 +21,15 @@ export interface DurableRun {
   createdAt: number; updatedAt: number;
 }
 export interface StartRunInput { session: SessionKey; request: string; idempotencyKey?: string; budget?: RunBudgetRequest; retryOf?: string; now?: number }
-export interface DurableRuntimeStoreOptions { readOnly?: boolean }
+export interface DurableRuntimeStoreOptions {
+  readOnly?: boolean;
+  /** Runtime owners recover interrupted work; ordinary storage handles never do. Local host only. */
+  exclusiveOwner?: boolean;
+}
+
+export class RuntimeOwnerInUseError extends Error {
+  constructor() { super("This runtime already has a live owner. Stop its gateway or CLI before starting another runtime."); this.name = "RuntimeOwnerInUseError"; }
+}
 
 export class IdempotencyConflictError extends Error { constructor(public readonly runId: string) { super(`idempotency key belongs to another request (${runId})`); this.name = "IdempotencyConflictError"; } }
 export class RunInProgressError extends Error { constructor(public readonly runId: string, public readonly state: RunState) { super(`run ${runId} is already ${state}`); this.name = "RunInProgressError"; } }
@@ -79,7 +87,10 @@ function migrateV1(path: string): void {
 
 export class DurableRuntimeStore {
   private readonly db: Database;
+  private ownerReceipt?: string;
+  private closed = false;
   constructor(path = ":memory:", options: DurableRuntimeStoreOptions = {}) {
+    if (options.readOnly && options.exclusiveOwner) throw new Error("read-only storage cannot own a runtime");
     const fresh = path === ":memory:" || !existsSync(path);
     if (!fresh && !options.readOnly) migrateV1(path);
     this.db = options.readOnly && path !== ":memory:" ? openImmutable(path) : new Database(path);
@@ -95,7 +106,27 @@ export class DurableRuntimeStore {
     for (const row of this.db.query("SELECT budget_json FROM runs").all() as Array<{ budget_json: string }>) parseBudget(row.budget_json);
     if (this.db.query("SELECT id FROM runs WHERE input_tokens < 0 OR output_tokens < 0 OR cost_micros < 0 LIMIT 1").get()) throw new Error("invalid persisted run usage");
     if (!options.readOnly && path !== ":memory:") { this.db.run("PRAGMA journal_mode = WAL"); chmodSync(path, 0o600); }
-    if (!options.readOnly) this.db.run("UPDATE runs SET state='recovering', updated_at=? WHERE state IN ('created','running','waiting_approval','waiting_external','verifying')", [Date.now()]);
+    if (options.exclusiveOwner) {
+      try {
+        this.db.transaction(() => {
+          const previous = this.db.query("SELECT value FROM runtime_meta WHERE key='runtime_owner'").get() as { value: string } | null;
+          if (previous) {
+            let owner: { pid?: unknown; nonce?: unknown };
+            try { owner = JSON.parse(previous.value); } catch { throw new Error("invalid runtime owner receipt; recovery refused"); }
+            if (!owner || !Number.isSafeInteger(owner.pid) || (owner.pid as number) <= 0 || typeof owner.nonce !== "string") throw new Error("invalid runtime owner receipt; recovery refused");
+            let alive = true;
+            try { process.kill(owner.pid as number, 0); }
+            catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") alive = false; }
+            // Permission errors or PID reuse are uncertainty, never permission to take over.
+            if (alive) throw new RuntimeOwnerInUseError();
+          }
+          const receipt = JSON.stringify({ pid: process.pid, nonce: randomUUID() });
+          this.db.query("INSERT OR REPLACE INTO runtime_meta (key,value) VALUES ('runtime_owner',?)").run(receipt);
+          this.db.run("UPDATE runs SET state='recovering', updated_at=? WHERE state IN ('created','running','waiting_approval','waiting_external','verifying')", [Date.now()]);
+          this.ownerReceipt = receipt;
+        }).immediate();
+      } catch (error) { this.db.close(); throw error; }
+    }
   }
 
   schemaVersion(): number { return Number((this.db.query("SELECT value FROM runtime_meta WHERE key='schema_version'").get() as { value: string }).value); }
@@ -168,7 +199,11 @@ export class DurableRuntimeStore {
   finishRun(id: string, to: "completed" | "failed" | "cancelled" | "paused", reply: string, patch: { error?: string; steps?: number; externalEffects?: number; now?: number } = {}): DurableRun { return this.db.transaction(() => { let run = this.getRun(id); if (!run) throw new Error(`unknown run ${id}`); if (to === "completed" && run.state !== "verifying") { if (!TRANSITIONS[run.state].has("verifying")) throw new InvalidRunTransitionError(run.state, "verifying"); this.db.query("UPDATE runs SET state='verifying' WHERE id=?").run(id); run = { ...run, state: "verifying" }; } if (!TRANSITIONS[run.state].has(to)) throw new InvalidRunTransitionError(run.state, to); const seq = (this.db.query("SELECT COALESCE(MAX(seq),0)+1 seq FROM messages WHERE session=?").get(run.session) as { seq: number }).seq; this.db.query("INSERT INTO messages VALUES (?,?,?,?,?)").run(run.session, seq, "assistant", reply, patch.now ?? Date.now()); this.db.query("UPDATE runs SET state=?,reply=?,error=COALESCE(?,error),steps=COALESCE(?,steps),external_effects=COALESCE(?,external_effects),updated_at=? WHERE id=?").run(to, reply, patch.error ?? null, patch.steps ?? null, patch.externalEffects ?? null, patch.now ?? Date.now(), id); return this.getRun(id)!; }).immediate(); }
   retryRun(id: string, options: { idempotencyKey?: string; budget?: RunBudgetRequest; now?: number } = {}): { run: DurableRun; replayed: boolean } { const old = this.getRun(id); if (!old || !["failed", "cancelled"].includes(old.state)) throw new Error("only failed or cancelled runs can retry"); if (!options.idempotencyKey) throw new Error("retry requires a new idempotency key"); const used = this.db.query("SELECT id FROM runs WHERE session=? AND idempotency_key=?").get(old.session, options.idempotencyKey) as { id: string } | null; if (used) throw new IdempotencyConflictError(used.id); return this.startRun({ session: old.session, request: old.request, idempotencyKey: options.idempotencyKey, budget: options.budget ?? old.budget, retryOf: old.id, now: options.now }); }
   resolveRun(id: string, resolution: "abandon" | "confirm_not_executed"): DurableRun { const run = this.getRun(id); if (!run || run.state !== "recovering") throw new Error("run is not recovering"); if (resolution === "abandon") return this.transition(id, "failed", { error: "owner abandoned ambiguous run" }); const cp = run.checkpoint; if (!cp || cp.phase !== "tool_started") throw new Error("run has no ambiguous tool checkpoint"); this.checkpoint(id, { ...cp, phase: "before_decision", safeToResume: true }); return this.transition(id, "paused"); }
-  close(): void { this.db.close(); }
+  close(): void {
+    if (this.closed) return;
+    if (this.ownerReceipt) this.db.query("DELETE FROM runtime_meta WHERE key='runtime_owner' AND value=?").run(this.ownerReceipt);
+    this.db.close(); this.closed = true;
+  }
 }
 
 interface MessageRow { session: string; seq: number; role: MessageRole; content: string; created_at: number }

@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
 import { DecisionCascade, HeuristicEngine, NativeLayaTransport, nativeLayaIdentity } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
-import { LaneQueue, makeSessionKey, type DurableRun } from "@august/core";
+import { LaneQueue, RuntimeOwnerInUseError, makeSessionKey, type DurableRun } from "@august/core";
 import { startGateway, type GatewayRunView, type RunningGateway } from "@august/gateway";
 import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/memory";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
@@ -129,7 +129,7 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
         return { code: command === undefined || command === "help" || command === "--help" ? 0 : 1 };
     }
   } catch (error) {
-    if (error instanceof ConfigError || error instanceof SecretError || error instanceof MasterKeyError) {
+    if (error instanceof ConfigError || error instanceof SecretError || error instanceof MasterKeyError || error instanceof RuntimeOwnerInUseError) {
       io.print(`Error: ${error.message}`);
       return { code: 1 };
     }

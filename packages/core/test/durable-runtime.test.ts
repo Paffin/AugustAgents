@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   IdempotencyConflictError,
   InvalidRunTransitionError,
   RunInProgressError,
+  RuntimeOwnerInUseError,
   inspectRuntimeSchema,
   makeSessionKey,
 } from "../src/index.ts";
@@ -125,13 +127,38 @@ describe("DurableRuntimeStore", () => {
     store.checkpoint(run.id, { phase: "tool_started", safeToResume: false, history: [], lastTool: "mail.send", argsHash: "abc" });
     store.transition(run.id, "waiting_external");
     store.close();
-    store = new DurableRuntimeStore(path);
+    store = new DurableRuntimeStore(path, { exclusiveOwner: true });
     expect(store.getRun(run.id)?.state).toBe("recovering");
     expect(() => store.transition(run.id, "running")).toThrow(InvalidRunTransitionError);
     const resolved = store.resolveRun(run.id, "confirm_not_executed");
     expect(resolved.state).toBe("paused");
     expect(resolved.checkpoint?.safeToResume).toBe(true);
     store.close();
+  });
+
+  test("Safety/reliability invariant: only an exclusive runtime owner recovers work; observers never interrupt it", () => {
+    const path = tempDb(); const owner = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    const run = owner.startRun({ session, request: "running task" }).run; owner.transition(run.id, "running");
+    const observer = new DurableRuntimeStore(path);
+    expect(observer.getRun(run.id)?.state).toBe("running");
+    expect(() => new DurableRuntimeStore(path, { exclusiveOwner: true })).toThrow(RuntimeOwnerInUseError);
+    expect(owner.getRun(run.id)?.state).toBe("running"); observer.close();
+    expect(() => new DurableRuntimeStore(path, { exclusiveOwner: true })).toThrow(RuntimeOwnerInUseError);
+    owner.close(); owner.close();
+    const replacement = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    expect(replacement.getRun(run.id)?.state).toBe("recovering"); replacement.close();
+  });
+
+  test("Safety/reliability invariant: actual exited owner is reclaimed without replaying its uncertain tool", () => {
+    const path = tempDb(); const moduleUrl = new URL("../src/durable-runtime.ts", import.meta.url).href;
+    const child = spawnSync(process.execPath, ["--eval", `import { DurableRuntimeStore } from ${JSON.stringify(moduleUrl)}; const s = new DurableRuntimeStore(${JSON.stringify(path)}, {exclusiveOwner:true}); const r = s.startRun({session:"home:test:u", request:"owned crash"}).run; s.transition(r.id,"running"); s.checkpoint(r.id,{phase:"tool_started",safeToResume:false,history:[]}); process.exit(0);`], { encoding: "utf8" });
+    expect(child.status).toBe(0);
+    const replacement = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    const run = replacement.listRuns()[0]!; expect(run.state).toBe("recovering");
+    expect(() => replacement.transition(run.id, "running")).toThrow(InvalidRunTransitionError); replacement.close();
+    const bad = new Database(path); bad.query("INSERT INTO runtime_meta VALUES ('runtime_owner',?)").run("invalid-owned-fixture"); bad.close();
+    expect(() => new DurableRuntimeStore(path, { exclusiveOwner: true })).toThrow(/invalid runtime owner/);
+    expect(() => new DurableRuntimeStore(path, { readOnly: true, exclusiveOwner: true })).toThrow(/read-only/);
   });
 
   test("Product behavior: retry creates a new related run", () => {

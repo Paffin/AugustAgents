@@ -157,7 +157,13 @@ initial provider setup and the complete owner control center remain incomplete.
 Phase A persists the Run and current user message before execution, loads a
 bounded prior StateView, commits safe/unsafe checkpoints around decision,
 approval, and tool calls, then persists the assistant reply and terminal state
-before returning. Restart marks interrupted active runs `recovering`; an unsafe
+before returning. App first claims an exclusive local runtime owner in SQLite
+metadata, in the same immediate transaction as recovery. A living or uncertain
+PID blocks another App; a confirmed exited PID can be replaced. Close removes
+only the owner's exact random receipt. Ordinary storage handles do not classify
+active work as interrupted. This is a single-local-host contract, not a distributed
+lease or support for shared network filesystems; CLI attachment to a running
+gateway remains outstanding. Owner restart marks interrupted active runs `recovering`; an unsafe
 tool-start checkpoint requires explicit owner resolution and is never replayed
 automatically. Session taint sources are reconstructed from durable checkpoints
 for new, resumed, and retried runs, preventing untrusted tool content from

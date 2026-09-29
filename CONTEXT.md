@@ -36,8 +36,11 @@ Responsive web workspace navigation and multi-line input are implemented;
 CLI/TG commands now expose task state and safe continuation without using the
 model for command routing. This is an initial functional UX increment, not
 complete competitor parity. Live simultaneous CLI/gateway verification exposed
-a shared-runtime startup defect: a second writable store marks a still-running
-owner's tasks recovering. Multi-process recovery must be fixed and reverified.
+a shared-runtime startup defect: a second writable store marked a still-running
+owner's tasks recovering. Ordinary store opens now leave active state alone;
+App atomically claims an exclusive local-process owner before recovery. A second
+CLI is refused without interrupting a live web task. CLI attachment to an existing
+gateway and broader host/platform recovery qualification remain open.
 
 ## Active Risks
 

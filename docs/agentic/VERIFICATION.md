@@ -103,6 +103,32 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Exclusive runtime owner, 2026-09-30
+
+- Fixed the concurrent-start defect observed in the UX increment below. Ordinary
+  `DurableRuntimeStore` opens no longer rewrite active run states. App acquires
+  `exclusiveOwner` before opening other stateful services; SQLite immediate
+  transaction binds its PID/nonce receipt and interrupted-work recovery. A live
+  or uncertain PID refuses takeover; only ESRCH permits replacing a stale owner.
+  Normal close releases only its own exact receipt; failed App construction
+  releases the newly acquired runtime handle.
+- Actual CLI/gateway/browser replay against the owned configuration:
+  web task `51115883-61bb-4d9d-8087-4638332c1b89` remained `running` after two
+  concurrent CLI attempts. Each CLI exited 1 with an actionable owner-in-use
+  message, rather than opening a second App or rewriting recovery state. Actual
+  model usage subsequently advanced (430 input / 149 output); this evidence
+  establishes owner exclusion, not successful completion of the file task.
+- Regressions preserve multiple ordinary storage handles, observer state,
+  duplicate-owner rejection, normal handover, and an actual child process exiting
+  without releasing its receipt. Replacement recovers the abandoned run but
+  cannot replay an uncertain tool-start checkpoint. Corrupt receipts and
+  read-only ownership requests fail closed.
+- `bun run check`: 622 pass, 12 skip, 0 fail; 2406 assertions / 634 tests /
+  36 files, 20.32s. Typecheck passes. Local macOS evidence only: PID reuse blocks
+  conservatively; cross-host/copied-active-receipt and network-filesystem leases
+  are not qualified. CLI-as-gateway-client is still required for simultaneous
+  terminal/web use, rather than two independent runtime owners.
+
 ### Owner workspace UX increment, 2026-09-30
 
 - Responsive web navigation separates Chat, Tasks and Secrets; multi-line input

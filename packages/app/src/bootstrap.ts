@@ -160,6 +160,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir), { env: deps.env, keyDir });
   const pricing = resolveLlmPricing(config);
   const llm = new UsageRequiredProvider(deps.llm ?? createLlm(config, deps, secrets));
+  // Claim before opening the other writable stores or reconstructing runtime state.
+  const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"), { exclusiveOwner: true });
+  try {
 
   // Native/sidecar Laya is explicit; until then a heuristic stands in.
   // Either way the cascade starts in shadow mode and earns its way out.
@@ -332,7 +335,6 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   }
   const verifierSet = new VerifierSet(builtinVerifiers({ root: config.root, skillsDir: config.skillsDir, registry }));
   const learning = new LearningStore(join(config.dataDir, "learning.db"), { verifiers: verifierSet.ids() });
-  const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"));
   const patternStore = new PatternStore(join(config.dataDir, "patterns.db"));
   const distill = new DistillationEngine({ store: patternStore });
   const policy = new PolicyEngine();
@@ -535,8 +537,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       learning.close();
       patternStore.close();
       memory.close();
-      runs.close();
       saveStats();
+      runs.close();
     },
   };
+  } catch (error) { runs.close(); throw error; }
 }
