@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { CapabilityRegistry } from "@august/capabilities";
 import {
   McpHost,
+  McpError,
   McpHttpConnection,
+  guardedFetch,
   SandboxError,
   bwrapArgs,
-  parseSse,
   sandboxSpec,
   seatbeltProfile,
 } from "../src/index.ts";
@@ -40,9 +41,9 @@ function defaultReply(msg: any): Response {
   if (msg.id === undefined) return new Response(null, { status: 202 });
   switch (msg.method) {
     case "initialize":
-      return json({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: {} } }, { "mcp-session-id": "sess-1" });
+      return json({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "web", version: "1" } } }, { "mcp-session-id": "sess-1" });
     case "tools/list":
-      return json({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "search", description: "search the web" }] } });
+      return json({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "search", description: "search the web", inputSchema: { type: "object" } }] } });
     case "tools/call":
       return new Response(
         `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/progress" })}\n\n` +
@@ -77,7 +78,7 @@ describe("McpHttpConnection", () => {
     handler = (msg) => (msg?.method === "tools/list" ? new Response("no", { status: 500 }) : undefined);
     const c = await McpHttpConnection.connect({ id: "web", url: url() });
     await expect(c.listTools()).rejects.toThrow(/HTTP 500/);
-    handler = (msg) => (msg?.method === "tools/list" ? json({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "x", description: "y".repeat(5000) }] } }) : undefined);
+    handler = (msg) => (msg?.method === "tools/list" ? json({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "x", description: "y".repeat(5000), inputSchema: { type: "object" } }] } }) : undefined);
     const small = await McpHttpConnection.connect({ id: "web", url: url() }, { maxMessageBytes: 1000 });
     await expect(small.listTools()).rejects.toThrow(/too large/);
     handler = () => undefined;
@@ -107,9 +108,58 @@ describe("McpHttpConnection", () => {
     expect((await host.call("web.search", { q: "x" })).content).toBe("found x");
     host.closeAll();
   });
+});
 
-  test("parseSse keeps only JSON data blocks", () => {
-    expect(parseSse("data: {\"a\":1}\n\n: ping\n\ndata: junk\n\ndata: {\"b\":\ndata: 2}\n\n")).toEqual([{ a: 1 }, { b: 2 }]);
+// Suite category: External compatibility contract (MCP streamable HTTP via the official SDK transport, DEC-0007).
+describe("MCP streamable HTTP adapter (official SDK)", () => {
+  test("speaks the SDK's newest revision first, identifies itself, and never opens the server push stream", async () => {
+    await Bun.sleep(30); seen.length = 0; handler = () => undefined;
+    const c = await McpHttpConnection.connect({ id: "web", url: url() });
+    await c.listTools();
+    expect(seen.find((m) => m.body?.method === "initialize")!.body).toMatchObject({ method: "initialize", params: { protocolVersion: "2025-11-25", clientInfo: { name: "august" } } });
+    expect(seen.some((m) => m.method === "GET")).toBe(false);
+    expect(seen.filter((m) => m.method === "POST" && m.body?.method !== "initialize" && m.body?.method !== "notifications/initialized").every((m) => m.headers.get("mcp-protocol-version") === "2025-06-18")).toBe(true);
+    c.close();
+  });
+
+  test("refuses a server that negotiates an older revision", async () => {
+    handler = (msg) => (msg?.method === "initialize" ? json({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "old", version: "1" } } }) : undefined);
+    await expect(McpHttpConnection.connect({ id: "web", url: url() })).rejects.toThrow(/speaks MCP 2024-11-05, older than the supported 2025-06-18/);
+    handler = () => undefined;
+  });
+
+  test("errors carry the status only: a hostile body, headers and credentials never reach the message", async () => {
+    handler = (msg) => (msg?.method === "tools/list" ? new Response("SECRET-BODY Bearer T", { status: 503 }) : undefined);
+    const c = await McpHttpConnection.connect({ id: "web", url: url(), headers: { authorization: "Bearer T" } });
+    const error = await c.listTools().catch((e) => e as Error);
+    expect((error as Error).message).toBe("web: HTTP 503");
+    handler = () => undefined;
+  });
+
+  test("a server that never answers times out with a clear error", async () => {
+    handler = (msg) => (msg?.method === "tools/call" ? new Promise<Response>(() => undefined) as never : undefined);
+    const c = await McpHttpConnection.connect({ id: "web", url: url() }, { requestTimeoutMs: 200 });
+    await expect(c.callTool("search", {})).rejects.toThrow(/^web: tools\/call timed out$/);
+    handler = () => undefined; c.close();
+  });
+
+  test("an oversized event stream is cut off at the limit", async () => {
+    handler = (msg) => (msg?.method === "tools/call" ? new Response(`data: ${"x".repeat(5000)}\n\n`.repeat(50), { headers: { "content-type": "text/event-stream" } }) : undefined);
+    const c = await McpHttpConnection.connect({ id: "web", url: url() }, { maxMessageBytes: 2000, requestTimeoutMs: 400 });
+    await expect(c.callTool("search", {})).rejects.toThrow(McpError);
+    handler = () => undefined; c.close();
+  });
+
+  test("guardedFetch: no push stream, bounded bodies, and the answer keeps its status and headers", async () => {
+    const inner = (async (_u: unknown, init?: RequestInit) => new Response("y".repeat(100), { status: 201, headers: { "x-h": "1", "mcp-session-id": String(init?.method) } })) as unknown as typeof fetch;
+    const guarded = guardedFetch(inner, 50);
+    expect((await guarded("http://x", { method: "GET" })).status).toBe(405);
+    expect((await guarded("http://x")).status).toBe(405);
+    const post = await guarded("http://x", { method: "POST" });
+    expect([post.status, post.headers.get("x-h")]).toEqual([201, "1"]);
+    await expect(post.text()).rejects.toThrow(/too large/);
+    const small = await guardedFetch((async () => new Response("ok")) as unknown as typeof fetch, 50)("http://x", { method: "POST" });
+    expect(await small.text()).toBe("ok");
   });
 });
 

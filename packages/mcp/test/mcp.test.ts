@@ -94,6 +94,55 @@ describe("McpConnection", () => {
   });
 });
 
+// Suite category: External compatibility contract (MCP protocol via the official SDK, DEC-0007). Consumers: MCP servers speaking
+// 2025-06-18 or newer. Older revisions have no evidenced consumer and are refused; sunset condition: add evidence here to admit one.
+describe("MCP protocol adapter (official SDK)", () => {
+  test("accepts the revisions it supports, including the SDK's newest and the one August spoke before", async () => {
+    for (const version of ["2025-06-18", "2025-11-25"]) {
+      const c = await connect("normal", {}, { env: { FAKE_MODE: "normal", FAKE_PROTOCOL: version } });
+      expect((await c.listTools()).length).toBe(3);
+    }
+  });
+
+  test("refuses a server that only speaks an older revision, before listing anything, and leaves no process behind", async () => {
+    for (const version of ["2025-03-26", "2024-11-05"]) {
+      const started = Date.now();
+      await expect(connect("normal", {}, { env: { FAKE_MODE: "normal", FAKE_PROTOCOL: version } })).rejects.toThrow(new RegExp(`speaks MCP ${version}, older than the supported 2025-06-18`));
+      expect(Date.now() - started).toBeLessThan(2500);
+    }
+    const { host: h, registry } = host();
+    await expect(h.add(spec("normal", { env: { FAKE_MODE: "normal", FAKE_PROTOCOL: "2024-11-05" } }), "known")).rejects.toThrow(/older than/);
+    expect(registry.list()).toHaveLength(0); expect(h.serverIds).toEqual([]);
+  });
+
+  test("a tools/list that breaks the spec is refused as a whole, never installed partially", async () => {
+    await expect((await connect("nonconformant")).listTools()).rejects.toThrow(/tools\/list returned an invalid response/);
+    const { host: h, registry } = host();
+    await expect(h.add(spec("nonconformant"), "known")).rejects.toThrow(McpError);
+    expect(registry.list()).toHaveLength(0);
+  });
+
+  test("failure text names the server and the method, never arguments or server-controlled detail", async () => {
+    const c = await connect("crash");
+    const error = await c.callTool("echo", { text: "secret-argument-123" }).catch((e) => e as Error);
+    expect(error).toBeInstanceOf(McpError);
+    expect((error as Error).message).toMatch(/^fake: server exited \(3\)$/);
+    expect((error as Error).message).not.toContain("secret-argument-123");
+  });
+
+  test("a server request we do not implement is answered with an error instead of hanging the server", async () => {
+    const c = await connect("ask-back");
+    expect((await c.listTools()).length).toBe(3);
+    expect(c.alive).toBe(true);
+  });
+
+  test("an oversized line from the server ends the connection instead of buffering without bound", async () => {
+    const c = await connect("flood", { maxMessageBytes: 4096 });
+    await expect(c.callTool("echo", {})).rejects.toThrow(/too large|exited|closed/);
+    expect(c.alive).toBe(false);
+  });
+});
+
 describe("effects and mapping", () => {
   const readOnly = { name: "r", annotations: { readOnlyHint: true, openWorldHint: false } };
 

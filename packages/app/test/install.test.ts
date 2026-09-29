@@ -15,6 +15,9 @@ function run(env: Record<string, string>, input = "") {
   return { ...r, home };
 }
 
+// Product behavior: a real install resolves the pinned lockfile from the network, so these tests get a real timeout.
+const INSTALL_TIMEOUT_MS = 90_000;
+
 describe("install.sh", () => {
   test("installs from a local checkout, adds the command, and points to setup", () => {
     const r = run({ AUGUST_SOURCE: repo });
@@ -27,7 +30,10 @@ describe("install.sh", () => {
     expect(existsSync(join(r.home, ".august/app/.git"))).toBe(false);
     const help = spawnSync(launcher, ["help"], { env: { PATH: process.env.PATH!, HOME: r.home }, encoding: "utf8" });
     expect(help.stdout).toContain("august setup");
-  });
+    // The installed copy carries its own pinned dependencies, including the MCP SDK the app imports at startup.
+    expect(existsSync(join(r.home, ".august/app/node_modules/@modelcontextprotocol/sdk/package.json"))).toBe(true);
+    expect(existsSync(join(r.home, ".august/app/node_modules/typescript"))).toBe(false);
+  }, INSTALL_TIMEOUT_MS);
 
   test("the installed command runs setup from piped answers", () => {
     const r = run({ AUGUST_SOURCE: repo });
@@ -35,7 +41,7 @@ describe("install.sh", () => {
     const s = spawnSync(launcher, ["setup"], { env: { PATH: process.env.PATH!, HOME: r.home }, input: "3\nllama3.2\n1\n", encoding: "utf8" });
     expect(s.status).toBe(0);
     expect(JSON.parse(readFileSync(join(r.home, ".august/config.json"), "utf8")).llm.model).toBe("llama3.2");
-  });
+  }, INSTALL_TIMEOUT_MS);
 
   test("refuses odd refs and a folder that is not August", () => {
     expect(run({ AUGUST_REF: "main;rm -rf ~" }).status).not.toBe(0);
