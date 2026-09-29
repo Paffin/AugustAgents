@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { ToolExecutor, ToolResult } from "@august/agent";
+import type { ToolCallContext, ToolExecutor, ToolResult } from "@august/agent";
 import type { CapabilityManifest, CapabilityRegistry } from "@august/capabilities";
 import {
   ArtifactError,
@@ -122,7 +122,7 @@ export class MetaExecutor implements ToolExecutor {
     return this.o.fallback.describeCall?.(tool, args);
   }
 
-  async call(tool: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async call(tool: string, args: Record<string, unknown>, context?: ToolCallContext): Promise<ToolResult> {
     try {
       switch (tool) {
         case "august.find_tools":
@@ -154,7 +154,7 @@ export class MetaExecutor implements ToolExecutor {
     } catch (error) {
       return { content: (error as Error).message, isError: true };
     }
-    return this.o.fallback.call(tool, args);
+    return this.o.fallback.call(tool, args, context);
   }
 
   private evidenceFor(plan: InstallPlan): Promise<ArtifactEvidence> {

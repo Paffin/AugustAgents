@@ -20,6 +20,8 @@ import { CapabilityRegistry } from "@august/capabilities";
 import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, makeSessionKey, type SessionKey } from "@august/core";
 import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
 import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
+import { MemoryExecutor, MemoryStore, memoryManifest } from "@august/memory";
+import { maxSensitivity } from "@august/policy";
 import { DistillationEngine, PatternStore, type Route } from "@august/ladder";
 import { LearningStore,VerifierSet, calibrationSamples, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
 import { PolicyEngine } from "@august/policy";
@@ -75,6 +77,8 @@ export interface App {
   learning: LearningStore;
   /** Patterns learned from verified repeated work, and their place on the ladder. */
   distill: DistillationEngine;
+  /** What the owner asked August to remember, with where each entry came from. */
+  memory: MemoryStore;
   /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
   feedback(session: SessionKey, runId: string, verdict: "success" | "failure", note?: string): void;
   /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
@@ -163,6 +167,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const registry = new CapabilityRegistry();
   registry.install(builtinManifest, "verified");
   registry.install(clockManifest, "verified");
+  registry.install(memoryManifest, "verified");
   registry.install(metaManifest, "verified");
 
   const sandbox = deps.sandboxKind ?? detectSandbox();
@@ -258,13 +263,14 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     return wrapped.isolation;
   };
 
+  const memory = new MemoryStore(join(config.dataDir, "memory.db"), { containsSecret: (text) => secretValues().some((value) => value.length >= 6 && text.includes(value)) });
   const meta = new MetaExecutor({
     registry,
     registryClient,
     skillsDir: config.skillsDir,
     fetch: deps.fetch,
     takenIds: () => new Set([...configured.map((s) => s.id), ...registry.list().map((c) => c.manifest.id)]),
-    fallback: new BuiltinExecutor(config.root),
+    fallback: new MemoryExecutor(memory, new BuiltinExecutor(config.root)),
     artifacts,
     containment: () => (sandbox === "none" ? { ok: false, reason: "no working sandbox was found (on Linux install bubblewrap)" } : { ok: true }),
     addServer: async (entry: McpServerConfig, plan: InstallPlan) => {
@@ -335,6 +341,17 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
   const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
+  /** With the owner's opt-in, keeps a short record of the run: the request, the tools used, how it ended. Never the tools' output. */
+  const rememberRun = (run: DurableRun, reply: AgentReply): void => {
+    if (!config.memory?.episodic) return;
+    const tools = [...new Set(reply.trace?.executions.map((e) => e.tool) ?? [])];
+    const outcome = reply.stopReason ? `stopped (${reply.stopReason})` : reply.error ? "failed" : "done";
+    memory.remember({
+      scope: run.session, class: "episodic", text: `Asked: ${run.request.slice(0, 400)} | tools: ${tools.join(", ") || "none"} | ${outcome}`,
+      origin: { kind: "builtin", source: "run", locator: run.id }, sourceRun: run.id, trust: reply.tainted ? "untrusted" : "trusted", sensitivity: "personal",
+      ttlMs: (config.memory.episodicDays ?? 90) * 86_400_000,
+    });
+  };
   /** Records what a run decided and did, then lets the host check what it can. A failure here never changes what the person gets. */
   const learnFrom = async (run: DurableRun, reply: AgentReply, seg: { startedAt: number; llmCalls: number; usageBefore: DurableRun["usage"]; route: Route }): Promise<void> => {
     if (!reply.trace || reply.trace.decisions.length === 0) return;
@@ -347,6 +364,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       // The ladder learns from the same independent evidence: a run counts as verified only when every call was
       // confirmed by a host check and none was contradicted. The model's own "done" is never evidence.
       distill.observe({ runId: id, request: run.request, reply, route: seg.route });
+      rememberRun(run, reply);
       const confirmed = new Set(checks.filter((c) => c.evidence.verdict === "success").map((c) => c.decisionIndex));
       if (checks.some((c) => c.evidence.verdict === "failure")) distill.settle(id, "failed");
       else if (reply.trace.executions.length > 0 && reply.trace.executions.every((e) => confirmed.has(e.decisionIndex))) distill.settle(id, "verified");
@@ -367,9 +385,13 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       if (checkpoint && (!checkpoint.taint || !checkpoint.loop || checkpoint.steps === undefined || checkpoint.externalEffects === undefined)) throw new Error("run checkpoint is missing safety state");
       // Only a fresh run may start from a learned pattern; a resumed one continues exactly where its checkpoint says.
       const route: Route = checkpoint ? { stage: "llm" } : distill.route(run.request, registry.enabledTools());
+      // Notes the owner's own words put in memory go in front of the model. Anything written under untrusted influence does not: it is reachable only through memory.recall, where it taints the run.
+      const notes = checkpoint || config.memory?.recall === false ? [] : memory.recall({ scope: run.session, query: run.request, classes: ["semantic", "procedural", "working"], trustedOnly: true, limit: 4 });
+      const noted = notes.map(({ entry }) => `Memory (${entry.class}, kept by the owner): ${entry.text}`);
+      const sensitivity = notes.reduce<"public" | "personal" | "secret">((max, { entry }) => maxSensitivity(max, entry.sensitivity), priorProvenance.sensitivity);
       let reply = await agent.handle(run.session, run.request, {
         plan: route.plan, planReply: route.verbatim ? "verbatim" : "summarize", guidance: route.guidance,
-        priorMessages, priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(priorProvenance.sensitivity === "public" ? {} : { sensitivity: priorProvenance.sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
+        priorMessages: [...noted, ...(priorMessages ?? [])], priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(sensitivity === "public" ? {} : { sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onUsage: async (usage) => { llmCalls += 1; usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
         remainingTokens: () => { const current = runs.getRun(run.id)!; return Math.max(1, current.budget.maxTokens - current.usage.totalTokens); },
@@ -441,6 +463,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       distill.settle(segment, verdict === "success" ? "verified" : "failed");
     },
     distill,
+    memory,
     recalibrate() {
       const samples = calibrationSamples(learning.examples().examples, engineId);
       const table = fitCalibrationTable(samples, { engine: engineId });
@@ -465,6 +488,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       for (const proxy of proxies) void proxy.close();
       learning.close();
       patternStore.close();
+      memory.close();
       runs.close();
       saveStats();
     },

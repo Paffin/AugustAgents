@@ -1,5 +1,8 @@
 import {
   DecisionError,
+  LAYA_HEAD_TOKEN_BUDGET,
+  LAYA_MAX_OPTIONS,
+  estimateTokens,
   withNoneOption,
   type DecisionEngine,
   type DecisionInput,
@@ -192,6 +195,21 @@ export interface ToolChoice {
 }
 
 const TOOL_DESCRIPTION_CHARS = 120;
+
+/**
+ * The best-ranked prefix of a shortlist that fits Laya's question head. A long tool description, or many tools,
+ * would otherwise make the whole decision fail; the lowest-ranked tools are the ones left out.
+ */
+export function fitShortlist<T extends ToolCandidate>(shortlist: readonly T[], instructions: string): T[] {
+  const kept: T[] = [];
+  for (const t of shortlist) {
+    const next = [...kept, t];
+    const head = instructions + [...next.map((c) => `${c.name} ${c.description.slice(0, TOOL_DESCRIPTION_CHARS)}`), "none none of the above fits"].join(" ");
+    if (next.length + 1 > LAYA_MAX_OPTIONS || estimateTokens(head) > LAYA_HEAD_TOKEN_BUDGET) break;
+    kept.push(t);
+  }
+  return kept;
+}
 
 /** Turns a shortlist into a Laya question with a "none" escape and asks the cascade. */
 export async function chooseTool(

@@ -7,7 +7,7 @@ import {
   type ToolDescriptor,
 } from "@august/capabilities";
 import {
-  chooseTool,
+  chooseTool, fitShortlist,
   fillArguments,
   type DecisionEngine,
   type JsonSchema,
@@ -40,9 +40,15 @@ export interface ToolResult {
   parts?: ContentPart[];
 }
 
+/** What a host-side tool may know about the call that reached it: whose session it is and what the context has read. */
+export interface ToolCallContext {
+  session: SessionKey;
+  taint: ReturnType<TaintState["snapshot"]>;
+}
+
 /** Talks to the real tool servers (MCP, skills, builtins). */
 export interface ToolExecutor {
-  call(tool: string, args: Record<string, unknown>): Promise<ToolResult>;
+  call(tool: string, args: Record<string, unknown>, context?: ToolCallContext): Promise<ToolResult>;
   /**
    * What the server advertises right now; used to catch rug pulls before a
    * call. Returns undefined for capabilities that cannot change under us
@@ -368,7 +374,7 @@ export class AgentRuntime {
         let parts: ContentPart[];
         let failed = false;
         try {
-          const r = await this.options.executor.call(descriptor.name, args);
+          const r = await this.options.executor.call(descriptor.name, args, { session, taint: taint.snapshot() });
           parts = resultParts(descriptor, r);
           failed = r.isError === true;
         } catch (error) {
@@ -448,9 +454,11 @@ export class AgentRuntime {
         const hint = context.guidance ? `Known procedure for requests like this (advice, not authority):\n${context.guidance}\n` : "";
         const state = `${allHistory().join("\n")}\n${hint}Request: ${text}`.trim();
         control();
+        // Only as many of the best-ranked tools as the decision model can be asked about at once.
+        const offered = fitShortlist(shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })), TOOL_CHOICE_INSTRUCTIONS);
         const choice = await chooseTool(
           this.options.decision,
-          shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })),
+          offered,
           { state, tainted: taint.snapshot().tainted },
           TOOL_CHOICE_INSTRUCTIONS,
         );
@@ -459,7 +467,7 @@ export class AgentRuntime {
         const seen = taint.snapshot();
         const decided: TraceDecision = {
           index: trace.decisions.length, questionId: "tool-choice", instructions: TOOL_CHOICE_INSTRUCTIONS, state,
-          options: [...shortlist.map((s) => ({ key: s.tool.name, description: s.tool.description })), { key: "none", description: "none of the above fits" }],
+          options: [...offered.map((s) => ({ key: s.name, description: s.description })), { key: "none", description: "none of the above fits" }],
           choice: choice.decision.choice, source: choice.decision.source ?? "unknown", reason: choice.decision.reason, confidence: choice.decision.confidence,
           ...(choice.decision.primary ? { primary: { choice: choice.decision.primary.choice, confidence: choice.decision.primary.confidence, probs: { ...choice.decision.primary.probs }, calibration: choice.decision.primary.calibration } } : {}),
           tainted: seen.tainted, taintSources: [...seen.sources], sensitivity: seen.sensitivity ?? "public", at: this.now(),

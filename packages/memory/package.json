@@ -1,0 +1,13 @@
+{
+  "name": "@august/memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@august/agent": "workspace:*",
+    "@august/capabilities": "workspace:*",
+    "@august/core": "workspace:*",
+    "@august/policy": "workspace:*"
+  },
+  "exports": { ".": "./src/index.ts" }
+}

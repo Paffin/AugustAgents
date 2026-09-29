@@ -5,6 +5,7 @@ import { DecisionCascade, HeuristicEngine } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
 import { LaneQueue, makeSessionKey } from "@august/core";
 import { startGateway, type RunningGateway } from "@august/gateway";
+import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/memory";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
 import { ConfigError, EGRESS_ENTRY, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
@@ -45,6 +46,7 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august laya status | activate [--force]
   august calibrate             fit Laya's confidence on verified outcomes (per question, language, option count)
   august learn status | report | export FILE | feedback RUN good|bad [note]   verified outcomes and training data
+  august memory list [KIND] | search WORDS | show ID | add semantic|procedural TEXT | trust ID | forget ID | erase --yes | eval FILE   what August remembers, and where each item came from
   august patterns [list] | show ID | approve ID | disable ID | enable ID | forget ID   repeated work August has learned to do without asking the model
 `;
 
@@ -101,6 +103,8 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
         return calibrate(configPath, io);
       case "learn":
         return learn(configPath, rest, io);
+      case "memory":
+        return memoryCommand(configPath, rest, io);
       case "patterns":
         return patterns(configPath, rest, io);
       default:
@@ -542,6 +546,51 @@ function patterns(configPath: string, args: readonly string[], io: CliIo): CliRe
     if ((action === "disable" || action === "enable") && found) { app.distill.disable(found.id, action === "disable"); io.print(`${action === "disable" ? "Disabled" : "Enabled"} ${found.id}.`); return { code: 0 }; }
     if (action === "forget" && found) { app.distill.forget(found.id); io.print(`Forgot ${found.id} and its recorded runs.`); return { code: 0 }; }
     io.print("Usage: august patterns [list] | show ID | approve ID | disable ID | enable ID | forget ID");
+    return { code: 1 };
+  } finally {
+    app.close();
+  }
+}
+
+function memoryCommand(configPath: string, args: readonly string[], io: CliIo): CliResult {
+  const { config, app } = openLearningApp(configPath, io);
+  try {
+    const rest = [...args];
+    const at = rest.indexOf("--session");
+    let scope = makeSessionKey({ workspace: config.workspace, channel: "cli", user: "local" }) as string;
+    if (at >= 0) { scope = rest[at + 1] ?? ""; rest.splice(at, 2); }
+    const [action, a, ...more] = rest;
+    const m = app.memory;
+    const line = (e: ReturnType<typeof m.list>[number]) => `${e.id}  ${e.class}${e.trust === "untrusted" ? " (untrusted)" : ""}${e.status === "superseded" ? " (superseded)" : ""}  ${new Date(e.updatedAt).toISOString().slice(0, 10)}  ${e.text.length > 100 ? `${e.text.slice(0, 100)}...` : e.text}`;
+    if (action === undefined || action === "list") {
+      const cls = a === undefined ? undefined : isMemoryClass(a) ? a : null;
+      if (cls === null) { io.print("Kinds: working, episodic, semantic, procedural."); return { code: 1 }; }
+      const entries = m.list(scope, { class: cls });
+      if (!entries.length) io.print("Nothing remembered yet.");
+      for (const e of entries) io.print(line(e));
+      const st = m.stats(scope);
+      io.print(`${st.semantic} semantic, ${st.procedural} procedural, ${st.episodic} episodic, ${st.working} working; ${st.untrusted} written under untrusted influence (review them, then: august memory trust ID)`);
+      return { code: 0 };
+    }
+    if (action === "search" && a) { const hits = m.recall({ scope, query: [a, ...more].join(" "), touch: false }); if (!hits.length) io.print("No matches."); for (const h of hits) io.print(line(h.entry)); return { code: 0 }; }
+    if (action === "show" && a) { const e = m.get(scope, a); if (!e) { io.print("No such memory."); return { code: 1 }; } io.print(`${line(e)}\nOrigin: ${e.origin.kind} ${e.origin.source}${e.origin.locator ? ` (${e.origin.locator})` : ""}; sensitivity ${e.sensitivity}; used ${e.useCount} times${e.expiresAt ? `; expires ${new Date(e.expiresAt).toISOString().slice(0, 10)}` : ""}\n${e.text}`); return { code: 0 }; }
+    if (action === "add" && (a === "semantic" || a === "procedural") && more.length) { const r = m.remember({ scope, class: a, text: more.join(" "), origin: { kind: "user", source: "owner" }, trust: "trusted", sensitivity: "personal" }); io.print(`${r.created ? "Remembered" : "Already remembered"}: ${r.entry.id}`); return { code: 0 }; }
+    if (action === "trust" && a) { io.print(m.trust(scope, a) ? "Marked as trusted." : "Nothing to change."); return { code: 0 }; }
+    if (action === "forget" && a) { const n = m.forget(scope, a); io.print(n ? `Forgot ${n} item(s).` : "No such memory."); return { code: n ? 0 : 1 }; }
+    if (action === "forget-source" && a) { io.print(`Forgot ${m.forgetBySource(scope, a)} item(s) from ${a}.`); return { code: 0 }; }
+    if (action === "erase") { if (a !== "--yes") { io.print("This deletes everything August remembers for this session and cannot be undone. Run: august memory erase --yes"); return { code: 1 }; } io.print(`Erased ${m.forgetScope(scope)} item(s).`); return { code: 0 }; }
+    if (action === "sweep") { io.print(`Removed ${m.sweep()} expired item(s).`); return { code: 0 }; }
+    if (action === "eval" && a) {
+      const cases = JSON.parse(readFileSync(a, "utf8")) as RetrievalCase[];
+      const r = evaluateRetrieval(m, scope, cases);
+      io.print(`Retrieval on ${r.cases} questions: recall@${r.k} ${(r.recallAtK * 100).toFixed(0)}%, MRR ${r.mrr.toFixed(2)}`);
+      for (const q of r.misses) io.print(`  missed: ${q}`);
+      return { code: 0 };
+    }
+    io.print("Usage: august memory [--session KEY] list [KIND] | search WORDS | show ID | add semantic|procedural TEXT | trust ID | forget ID | forget-source SOURCE | erase --yes | sweep | eval FILE");
+    return { code: 1 };
+  } catch (error) {
+    io.print((error as Error).message);
     return { code: 1 };
   } finally {
     app.close();

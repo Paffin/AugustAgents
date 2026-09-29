@@ -30,6 +30,17 @@ export interface AugustConfig {
   /** Package registry the packages of those servers are resolved and installed from. Default https://registry.npmjs.org. */
   npmRegistryUrl?: string;
   channels: ChannelsConfig;
+  /** What August keeps between runs. Nothing about your requests is retained unless you turn it on. */
+  memory?: MemoryConfig;
+}
+
+export interface MemoryConfig {
+  /** Keep a short record of each finished run (your request, the tools used, the outcome) as episodic memory. Default off. */
+  episodic?: boolean;
+  /** How long episodic records live. Default 90. */
+  episodicDays?: number;
+  /** Put the memories that match a request in front of the model as trusted notes. Default on. */
+  recall?: boolean;
 }
 
 export interface LlmPricing { inputMicrosPerMillion: number; outputMicrosPerMillion: number; source: string; asOf: string }
@@ -190,10 +201,20 @@ export function parseConfig(value: unknown): AugustConfig {
     registryUrl,
     ...(c.npmRegistryUrl === undefined ? {} : { npmRegistryUrl: httpsUrl(c.npmRegistryUrl, "npmRegistryUrl").replace(/\/+$/, "") }),
     laya: parseLaya(c.laya),
+    ...(c.memory === undefined ? {} : { memory: parseMemory(c.memory) }),
     channels: parseChannels(c.channels),
     llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, pricing: parsePricing(c.llm?.pricing) },
     gateway: { port: port as number, token },
   };
+}
+
+function parseMemory(value: unknown): MemoryConfig {
+  const m = value as Partial<MemoryConfig> | null;
+  if (!m || typeof m !== "object" || Array.isArray(m)) throw new ConfigError("memory must be an object");
+  for (const key of Object.keys(m)) if (!["episodic", "episodicDays", "recall"].includes(key)) throw new ConfigError(`memory.${key} is not a known setting`);
+  for (const key of ["episodic", "recall"] as const) if (m[key] !== undefined && typeof m[key] !== "boolean") throw new ConfigError(`memory.${key} must be true or false`);
+  if (m.episodicDays !== undefined && (!Number.isInteger(m.episodicDays) || m.episodicDays < 1 || m.episodicDays > 3650)) throw new ConfigError("memory.episodicDays must be a whole number of days, 1-3650");
+  return { ...m };
 }
 
 function parsePricing(value: unknown): LlmPricing | undefined {

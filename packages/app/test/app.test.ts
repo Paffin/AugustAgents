@@ -255,7 +255,7 @@ describe("createApp", () => {
     const home = tmp();
     const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" } });
     expect(app.cascade.shadowMode).toBe(true);
-    expect(app.registry.enabledTools().map((t) => t.name).sort()).toEqual(["august.find_tools", "august.install_skill", "august.install_tool", "clock.now", "fs.list", "fs.read"]);
+    expect(app.registry.enabledTools().map((t) => t.name).sort()).toEqual(["august.find_tools", "august.install_skill", "august.install_tool", "clock.now", "fs.list", "fs.read", "memory.forget", "memory.recall", "memory.remember"]);
     app.close();
   });
 

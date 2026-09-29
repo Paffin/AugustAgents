@@ -48,6 +48,8 @@ export function classifyTarget(roots: TargetRoots, value: unknown, label: string
 const MANAGED_TARGETS: Readonly<Record<string, string>> = {
   "august.install_skill": "the agent's skills folder",
   "august.install_tool": "the agent's tool configuration",
+  "memory.remember": "the agent's memory",
+  "memory.forget": "the agent's memory",
 };
 
 /**

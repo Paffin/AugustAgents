@@ -1,4 +1,4 @@
-import type { ToolExecutor, ToolResult } from "@august/agent";
+import type { ToolCallContext, ToolExecutor, ToolResult } from "@august/agent";
 import {
   CapabilityRegistry,
   type InstalledCapability,
@@ -110,11 +110,11 @@ export class McpHost implements ToolExecutor {
     this.servers.clear();
   }
 
-  async call(tool: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async call(tool: string, args: Record<string, unknown>, context?: ToolCallContext): Promise<ToolResult> {
     const id = tool.split(".")[0]!;
     const server = this.servers.get(id);
     if (!server) {
-      if (this.options.fallback) return this.options.fallback.call(tool, args);
+      if (this.options.fallback) return this.options.fallback.call(tool, args, context);
       return { content: `unknown tool ${tool}`, isError: true };
     }
     const original = server.originals.get(tool);

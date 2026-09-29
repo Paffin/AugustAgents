@@ -17,7 +17,8 @@
     "@august/mcp": "workspace:*",
     "@august/policy": "workspace:*",
     "@august/ladder": "workspace:*",
-    "@august/learning": "workspace:*"
+    "@august/learning": "workspace:*",
+    "@august/memory": "workspace:*"
   },
   "exports": {
     ".": "./src/index.ts"
