@@ -63,3 +63,25 @@ export function expectedCalibrationError(samples: readonly CalibrationSample[], 
   for (const b of sums) if (b.n) ece += (b.n / samples.length) * Math.abs(b.acc / b.n - b.conf / b.n);
   return ece;
 }
+
+export interface LoggedDecision {
+  options: ReadonlyArray<{ key: string }>;
+  primaryProbs?: readonly number[];
+  fallbackChoice: string;
+}
+
+/**
+ * Calibration samples from the decision log, using the LLM's choice as the
+ * label. That is a proxy: it calibrates Laya toward agreeing with the LLM,
+ * which is exactly the bar for letting it decide alone.
+ */
+export function samplesFromLog(entries: readonly LoggedDecision[]): CalibrationSample[] {
+  const out: CalibrationSample[] = [];
+  for (const e of entries) {
+    if (!e.primaryProbs || e.primaryProbs.length !== e.options.length) continue;
+    const correct = e.options.findIndex((o) => o.key === e.fallbackChoice);
+    if (correct < 0) continue;
+    out.push({ probs: e.primaryProbs, correct });
+  }
+  return out;
+}

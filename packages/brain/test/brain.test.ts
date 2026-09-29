@@ -9,6 +9,7 @@ import {
   LayaEngine,
   LlmChoiceEngine,
   LlmError,
+  LlmQueryExpander,
   OpenAiCompatibleProvider,
   chooseTool,
   clipState,
@@ -364,6 +365,7 @@ describe("DecisionCascade", () => {
         options: question.options,
         primaryChoice: "a",
         primaryConfidence: 0.55,
+        primaryProbs: [0.55, 1 - 0.55],
         fallbackChoice: "b",
         at: 42,
       },
@@ -431,5 +433,15 @@ describe("chooseTool", () => {
     const engine: DecisionEngine = { decide: async () => Promise.reject(new Error("must not be called")) };
     const r = await chooseTool(engine, [], { state: "x", tainted: false });
     expect(r.tool).toBeNull();
+  });
+});
+
+describe("LlmQueryExpander", () => {
+  test("returns clean English keywords and caches them", async () => {
+    const provider = scripted("Keywords: read, file! открыть");
+    const x = new LlmQueryExpander(provider);
+    expect(await x.expand("прочитай файл")).toBe("keywords read file");
+    await x.expand("прочитай файл");
+    expect(provider.calls).toHaveLength(1);
   });
 });

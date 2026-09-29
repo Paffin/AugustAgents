@@ -23,6 +23,8 @@ export interface DecisionRecord {
   options: readonly DecisionOption[];
   primaryChoice?: string;
   primaryConfidence?: number;
+  /** Primary probabilities in option order, for calibration. */
+  primaryProbs?: number[];
   fallbackChoice: string;
   at: number;
 }
@@ -82,6 +84,14 @@ export class DecisionCascade implements DecisionEngine {
     this.threshold = options.threshold ?? 0.7;
     this.shadow = options.shadow ?? false;
     this.now = options.now ?? Date.now;
+  }
+
+  /** Continue counting from saved stats (they survive restarts). */
+  restore(stats: Partial<CascadeStats>): void {
+    for (const key of Object.keys(this.counters) as Array<keyof typeof this.counters>) {
+      const v = stats[key];
+      if (typeof v === "number" && Number.isFinite(v) && v >= 0) this.counters[key] = v;
+    }
   }
 
   get shadowMode(): boolean {
@@ -147,6 +157,7 @@ export class DecisionCascade implements DecisionEngine {
       options: question.options,
       primaryChoice: primary?.choice,
       primaryConfidence: primary?.confidence,
+      primaryProbs: primary ? question.options.map((o) => primary.probs[o.key] ?? 0) : undefined,
       fallbackChoice: fallback.choice,
       at: this.now(),
     });

@@ -146,6 +146,7 @@ function makeIo(home: string, answers: Array<string | null> = [], llm?: LlmProvi
     env: { OPENAI_API_KEY: "sk-test" },
     home,
     llm,
+    sandboxKind: "none",
   };
   return { io, out, prompts };
 }
@@ -164,7 +165,7 @@ describe("cli", () => {
     expect((await main(["init"], io)).code).toBe(0);
     const cfg = loadConfig(defaultConfigPath(home));
     expect(readFileSync(join(cfg.root, "welcome.md"), "utf8")).toContain("Welcome");
-    expect(out.join("\n")).toContain("OPENAI_API_KEY");
+    expect(out.join("\n")).toContain("august secret set OPENAI_API_KEY");
     const token = cfg.gateway.token;
     expect((await main(["init"], io)).code).toBe(1);
     expect(loadConfig(defaultConfigPath(home)).gateway.token).toBe(token);
@@ -223,7 +224,7 @@ describe("createApp", () => {
   test("asks for the API key by name when it is missing, without echoing anything else", () => {
     const home = tmp();
     const cfg = defaultConfig(home);
-    expect(() => createApp(cfg, { env: {} })).toThrow(/OPENAI_API_KEY/);
+    expect(() => createApp(cfg, { env: {} })).toThrow(/august secret set OPENAI_API_KEY/);
   });
 
   test("a local model needs no key", () => {
@@ -236,7 +237,7 @@ describe("createApp", () => {
     const home = tmp();
     const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" } });
     expect(app.cascade.shadowMode).toBe(true);
-    expect(app.registry.enabledTools().map((t) => t.name).sort()).toEqual(["clock.now", "fs.list", "fs.read"]);
+    expect(app.registry.enabledTools().map((t) => t.name).sort()).toEqual(["august.find_tools", "august.install_skill", "august.install_tool", "clock.now", "fs.list", "fs.read"]);
   });
 });
 
@@ -265,10 +266,10 @@ describe("mcp servers from the config", () => {
   test("starts servers, reports failures, and one failure does not stop the rest", async () => {
     const home = tmp();
     const cfg = parseConfig(withMcp(home, [server(), server({ id: "broken", command: "/no/such/binary" }), server({ id: "needs", envFrom: ["MISSING_KEY"] })]));
-    const app = createApp(cfg, { env: { OPENAI_API_KEY: "k", PATH: process.env.PATH }, llm: scriptedLlm({ tool: "none", args: {}, reply: "" }) });
+    const app = createApp(cfg, { sandboxKind: "none", env: { OPENAI_API_KEY: "k", PATH: process.env.PATH }, llm: scriptedLlm({ tool: "none", args: {}, reply: "" }) });
     try {
       const r = await app.startServers();
-      expect(r.started).toEqual(["fake"]);
+      expect(r.started).toEqual([{ id: "fake", isolation: "none" }]);
       expect(r.failed.map((f) => f.id).sort()).toEqual(["broken", "needs"]);
       expect(r.failed.find((f) => f.id === "needs")!.error).toContain("MISSING_KEY is not set");
       expect(app.registry.enabledTools().map((t) => t.name)).toContain("fake.echo");
@@ -287,7 +288,7 @@ describe("mcp servers from the config", () => {
     writeConfig(path, parseConfig({ ...cfg, mcp: [server()] }));
     io.env = { ...io.env, PATH: process.env.PATH };
     await main(["chat"], io);
-    expect(out).toContain("Tools from: fake");
+    expect(out).toContain("Tools from: fake (not sandboxed)");
     expect(prompts.filter((p) => p.includes("Allow once?"))).toHaveLength(2);
     expect(out.some((l) => l.includes("was not approved"))).toBe(true);
     expect(out).toContain("The server said pong.");

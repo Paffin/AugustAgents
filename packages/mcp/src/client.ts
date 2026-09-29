@@ -51,6 +51,52 @@ const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 /** Enough to find and run programs, and nothing that could carry a secret. */
 const SAFE_ENV = ["PATH", "SYSTEMROOT", "TEMP", "TMP", "LANG"];
 
+/** What the host needs from any MCP connection, whatever the transport. */
+export interface McpSession {
+  readonly id: string;
+  readonly alive: boolean;
+  listTools(): Promise<McpTool[]>;
+  callTool(name: string, args: Record<string, unknown>): Promise<McpCallResult>;
+  close(): void;
+}
+
+export function resolveConnectOptions(options: McpConnectOptions = {}): Required<McpConnectOptions> {
+  return {
+    requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
+    maxMessageBytes: options.maxMessageBytes ?? 1024 * 1024,
+    maxResultChars: options.maxResultChars ?? 20_000,
+    maxToolPages: options.maxToolPages ?? 10,
+  };
+}
+
+export const CLIENT_INFO = { name: "august", version: "0.1.0" };
+
+export async function listToolsPaged(
+  id: string,
+  request: (method: string, params: unknown) => Promise<unknown>,
+  maxPages: number,
+): Promise<McpTool[]> {
+  const tools: McpTool[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const result = (await request("tools/list", cursor ? { cursor } : {})) as { tools?: McpTool[]; nextCursor?: string };
+    for (const t of result.tools ?? []) {
+      if (t && typeof t.name === "string" && t.name.length > 0) tools.push(t);
+    }
+    if (!result.nextCursor) return tools;
+    cursor = result.nextCursor;
+  }
+  throw new McpError(`${id}: tools/list has too many pages`);
+}
+
+export function formatCallResult(result: unknown, maxChars: number): McpCallResult {
+  const r = result as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+  const parts = (r.content ?? []).map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : `[${c.type ?? "unknown"} content omitted]`));
+  let content = parts.join("\n");
+  if (content.length > maxChars) content = `${content.slice(0, maxChars)}\n[truncated]`;
+  return { content, isError: r.isError === true };
+}
+
 interface Pending {
   resolve(value: unknown): void;
   reject(error: Error): void;
@@ -58,7 +104,7 @@ interface Pending {
 }
 
 /** Minimal MCP client over stdio: newline-delimited JSON-RPC 2.0. */
-export class McpConnection {
+export class McpConnection implements McpSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
@@ -97,21 +143,12 @@ export class McpConnection {
     baseEnv: Record<string, string | undefined> = process.env,
   ): Promise<McpConnection> {
     if (!ID_PATTERN.test(spec.id)) throw new McpError(`invalid server id "${spec.id}"`);
-    const conn = new McpConnection(
-      spec,
-      {
-        requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
-        maxMessageBytes: options.maxMessageBytes ?? 1024 * 1024,
-        maxResultChars: options.maxResultChars ?? 20_000,
-        maxToolPages: options.maxToolPages ?? 10,
-      },
-      baseEnv,
-    );
+    const conn = new McpConnection(spec, resolveConnectOptions(options), baseEnv);
     try {
       await conn.request("initialize", {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: "august", version: "0.1.0" },
+        clientInfo: CLIENT_INFO,
       });
       conn.notify("notifications/initialized");
     } catch (error) {
@@ -119,6 +156,10 @@ export class McpConnection {
       throw error;
     }
     return conn;
+  }
+
+  get id(): string {
+    return this.spec.id;
   }
 
   get alive(): boolean {
@@ -130,29 +171,12 @@ export class McpConnection {
     return this.stderrTail;
   }
 
-  async listTools(): Promise<McpTool[]> {
-    const tools: McpTool[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < this.options.maxToolPages; page++) {
-      const result = (await this.request("tools/list", cursor ? { cursor } : {})) as { tools?: McpTool[]; nextCursor?: string };
-      for (const t of result.tools ?? []) {
-        if (t && typeof t.name === "string" && t.name.length > 0) tools.push(t);
-      }
-      if (!result.nextCursor) return tools;
-      cursor = result.nextCursor;
-    }
-    throw new McpError(`${this.spec.id}: tools/list has too many pages`);
+  listTools(): Promise<McpTool[]> {
+    return listToolsPaged(this.spec.id, (m, p) => this.request(m, p), this.options.maxToolPages);
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<McpCallResult> {
-    const result = (await this.request("tools/call", { name, arguments: args })) as {
-      content?: Array<{ type?: string; text?: string }>;
-      isError?: boolean;
-    };
-    const parts = (result.content ?? []).map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : `[${c.type ?? "unknown"} content omitted]`));
-    let content = parts.join("\n");
-    if (content.length > this.options.maxResultChars) content = `${content.slice(0, this.options.maxResultChars)}\n[truncated]`;
-    return { content, isError: result.isError === true };
+    return formatCallResult(await this.request("tools/call", { name, arguments: args }), this.options.maxResultChars);
   }
 
   close(): void {

@@ -8,7 +8,9 @@
     "@august/agent": "workspace:*",
     "@august/brain": "workspace:*",
     "@august/capabilities": "workspace:*",
+    "@august/channels": "workspace:*",
     "@august/core": "workspace:*",
+    "@august/discovery": "workspace:*",
     "@august/gateway": "workspace:*",
     "@august/mcp": "workspace:*",
     "@august/policy": "workspace:*"

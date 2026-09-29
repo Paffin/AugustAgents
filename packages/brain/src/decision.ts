@@ -103,29 +103,41 @@ export class HeuristicEngine implements DecisionEngine {
     return { choice: top.key, probs, confidence: top.p };
   }
 }
-
 export interface LayaPredictRequest {
   state: string;
   question: DecisionQuestion;
 }
 
 /** Transport to a real Laya model (ONNX in-process, MLX, or an HTTP sidecar). Returns raw probabilities per option key. */
-export type LayaPredictFn = (request: LayaPredictRequest) => Promise<{ probs: Record<string, number> }>;
+export interface LayaPrediction {
+  probs: Record<string, number>;
+  /**
+   * False when the backend only reported the winning option, not real
+   * probabilities. Confidence is then unknown and set to `inexactConfidence`.
+   */
+  exact?: boolean;
+}
+
+export type LayaPredictFn = (request: LayaPredictRequest) => Promise<LayaPrediction>;
 
 export interface LayaEngineOptions {
   /** Fitted with fitTemperature() on held-out data; 1 means uncalibrated. */
   temperature?: number;
   maxStateChars?: number;
+  /** Confidence reported for inexact (one-hot) answers. Default 0.5: below the usual threshold, so the LLM decides. */
+  inexactConfidence?: number;
 }
 
 /** Wraps a Laya transport: clips the state, checks the answer, applies calibration. */
 export class LayaEngine implements DecisionEngine {
   private readonly temperature: number;
   private readonly maxStateChars: number;
+  private readonly inexactConfidence: number;
 
   constructor(private readonly predict: LayaPredictFn, options: LayaEngineOptions = {}) {
     this.temperature = options.temperature ?? 1;
     this.maxStateChars = options.maxStateChars ?? DEFAULT_STATE_CHARS;
+    this.inexactConfidence = options.inexactConfidence ?? 0.5;
   }
 
   async decide(input: DecisionInput, question: DecisionQuestion): Promise<DecisionResult> {
@@ -145,6 +157,51 @@ export class LayaEngine implements DecisionEngine {
     const probs: Record<string, number> = {};
     keys.forEach((k, i) => (probs[k] = scaled[i] ?? 0));
     const top = argmax(probs, keys);
-    return { choice: top.key, probs, confidence: top.p };
+    return { choice: top.key, probs, confidence: raw.exact === false ? this.inexactConfidence : top.p };
   }
+}
+
+export class LayaTransportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LayaTransportError";
+  }
+}
+
+export interface LayaHttpOptions {
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+}
+
+/**
+ * Transport to the Laya sidecar (sidecar/laya_server.py). The state holds the
+ * person's private text, so only a sidecar on this machine is accepted.
+ */
+export function layaHttpTransport(url: string, options: LayaHttpOptions = {}): LayaPredictFn {
+  const parsed = new URL(url);
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) {
+    throw new LayaTransportError("the Laya sidecar must run on this machine (127.0.0.1)");
+  }
+  const endpoint = `${url.replace(/\/+$/, "")}/predict`;
+  const fetchFn = options.fetch ?? fetch;
+  return async ({ state, question }) => {
+    let response: Response;
+    try {
+      response = await fetchFn(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          state,
+          question: { id: question.id, instructions: question.instructions, options: question.options },
+        }),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 5000),
+      });
+    } catch (error) {
+      throw new LayaTransportError(`Laya sidecar unreachable (${(error as Error).name})`);
+    }
+    if (!response.ok) throw new LayaTransportError(`Laya sidecar HTTP ${response.status}`);
+    const body = (await response.json()) as { probs?: unknown; exact?: unknown };
+    if (!body.probs || typeof body.probs !== "object") throw new LayaTransportError("Laya sidecar reply has no probs");
+    return { probs: body.probs as Record<string, number>, exact: body.exact !== false };
+  };
 }

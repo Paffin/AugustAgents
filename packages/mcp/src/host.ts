@@ -5,11 +5,12 @@ import {
   type ToolDescriptor,
   type TrustLevel,
 } from "@august/capabilities";
-import { McpConnection, McpError, type McpConnectOptions, type McpServerSpec } from "./client.ts";
+import { McpConnection, McpError, type McpConnectOptions, type McpServerSpec, type McpSession } from "./client.ts";
+import { McpHttpConnection, type McpHttpSpec } from "./http.ts";
 import { mapTools } from "./map.ts";
 
 interface Server {
-  connection: McpConnection;
+  connection: McpSession;
   trust: TrustLevel;
   originals: Map<string, string>;
 }
@@ -17,7 +18,8 @@ interface Server {
 export interface McpHostOptions {
   /** Handles tools that are not MCP tools (the built-ins). */
   fallback?: ToolExecutor;
-  connect?: (spec: McpServerSpec) => Promise<McpConnection>;
+  connect?: (spec: McpServerSpec) => Promise<McpSession>;
+  connectHttp?: (spec: McpHttpSpec) => Promise<McpSession>;
   connectOptions?: McpConnectOptions;
 }
 
@@ -35,10 +37,22 @@ export class McpHost implements ToolExecutor {
   }
 
   /** Start a server, list its tools and install them. Nothing stays running if the install fails. */
-  async add(spec: McpServerSpec, trust: TrustLevel): Promise<InstalledCapability> {
+  async add(spec: McpServerSpec | McpHttpSpec, trust: TrustLevel): Promise<InstalledCapability> {
     if (this.servers.has(spec.id)) throw new McpError(`server "${spec.id}" is already running`);
-    const connect = this.options.connect ?? ((s) => McpConnection.connect(s, this.options.connectOptions));
-    const connection = await connect(spec);
+    let connection: McpSession;
+    if ("url" in spec) {
+      const connect = this.options.connectHttp ?? ((s) => McpHttpConnection.connect(s, this.options.connectOptions));
+      connection = await connect(spec);
+    } else {
+      const connect = this.options.connect ?? ((s) => McpConnection.connect(s, this.options.connectOptions));
+      connection = await connect(spec);
+    }
+    return this.install(spec.id, connection, trust);
+  }
+
+  /** Install tools from an already-open connection. Closes it if the install fails. */
+  async install(id: string, connection: McpSession, trust: TrustLevel): Promise<InstalledCapability> {
+    const spec = { id };
     try {
       const { descriptors, originals } = mapTools(spec.id, await connection.listTools(), trust);
       const installed = this.registry.install(
@@ -81,6 +95,12 @@ export class McpHost implements ToolExecutor {
       // The message names the server and the failure, never the arguments.
       return { content: (error as Error).message, isError: true };
     }
+  }
+
+  describeCall(tool: string, args: Record<string, unknown>): Promise<string | undefined> {
+    const id = tool.split(".")[0]!;
+    if (this.servers.has(id)) return Promise.resolve(`call ${tool} on MCP server "${id}"`);
+    return this.options.fallback?.describeCall?.(tool, args) ?? Promise.resolve(undefined);
   }
 
   /** What the server advertises now, mapped the same way as at install time. */

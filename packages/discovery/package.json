@@ -1,0 +1,8 @@
+{
+  "name": "@august/discovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@august/capabilities": "workspace:*" },
+  "exports": { ".": "./src/index.ts" }
+}

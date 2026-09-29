@@ -34,6 +34,8 @@ export interface ToolExecutor {
    * (built-ins), which skips the check.
    */
   liveDescriptors?(capabilityId: string): Promise<readonly ToolDescriptor[] | undefined>;
+  /** Plain-language description of what a call would do, shown in the approval prompt. */
+  describeCall?(tool: string, args: Record<string, unknown>): Promise<string | undefined>;
 }
 
 export interface ApprovalRequest {
@@ -41,6 +43,8 @@ export interface ApprovalRequest {
   tool: string;
   args: Record<string, unknown>;
   verdict: Verdict;
+  /** What exactly will happen, when the executor can say. */
+  details?: string;
 }
 
 /** Asks the person. The default approver says no. */
@@ -62,6 +66,10 @@ export interface AgentOptions {
   destinationOf?: (tool: string, args: Record<string, unknown>) => string | undefined;
   maxSteps?: number;
   maxResultChars?: number;
+  /** Rewrites the request into search words (e.g. English) when lexical search finds too little. */
+  expandQuery?: (request: string) => Promise<string>;
+  /** Fewer shortlisted tools than this triggers expandQuery. Default 3. */
+  minShortlist?: number;
   now?: () => number;
 }
 
@@ -100,13 +108,27 @@ export class AgentRuntime {
     const guard = new LoopGuard({ maxSteps: this.options.maxSteps ?? 12 });
     const history: string[] = [];
     let steps = 0;
+    let expansion: string | undefined;
 
     log("task.start", { chars: text.length });
 
     try {
       for (;;) {
         const tools = this.options.registry.enabledTools();
-        const shortlist = new ToolIndex(tools).search(`${text}\n${history.join("\n")}`);
+        const index = new ToolIndex(tools);
+        let shortlist = index.search(`${text}\n${history.join("\n")}`);
+        if (this.options.expandQuery && shortlist.length < (this.options.minShortlist ?? 3) && tools.length > shortlist.length) {
+          try {
+            const before = shortlist.length;
+            // Once per task: the request does not change between steps.
+            expansion ??= await this.options.expandQuery(text);
+            const words = expansion;
+            shortlist = index.search(`${text}\n${words}\n${history.join("\n")}`);
+            log("shortlist.expanded", { before, after: shortlist.length });
+          } catch {
+            log("shortlist.expand-failed", {});
+          }
+        }
         // The request goes last: the decision model keeps the end of a long state.
         const state = `${history.join("\n")}\nRequest: ${text}`.trim();
         const choice = await chooseTool(
@@ -172,7 +194,8 @@ export class AgentRuntime {
           return await this.finish(text, history, `Blocked: ${verdict.reason}.`, steps, taint, log);
         }
         if (verdict.decision === "ask") {
-          const ok = await this.approver.approve({ session, tool: descriptor.name, args, verdict });
+          const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
+          const ok = await this.approver.approve({ session, tool: descriptor.name, args, verdict, details });
           log("approval", { tool: descriptor.name, granted: ok, rule: verdict.rule });
           if (!ok) {
             return await this.finish(text, history, `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log);
