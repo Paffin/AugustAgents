@@ -54,7 +54,7 @@ describe("LaneQueue", () => {
 describe("session keys", () => {
   test("round trip", () => {
     const key = makeSessionKey({ workspace: "home", channel: "telegram", user: "42" });
-    expect(key).toBe("home:telegram:42");
+    expect(String(key)).toBe("home:telegram:42");
     expect(parseSessionKey(key)).toEqual({ workspace: "home", channel: "telegram", user: "42" });
   });
 

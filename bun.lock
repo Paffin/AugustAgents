@@ -1,0 +1,131 @@
+{
+  "lockfileVersion": 0,
+  "workspaces": {
+    "": {
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "typescript": "5.9.3",
+      },
+    },
+    "packages/agent": {
+      "name": "@august/agent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/brain": "packages/brain",
+        "@august/capabilities": "packages/capabilities",
+        "@august/core": "packages/core",
+        "@august/policy": "packages/policy",
+      },
+    },
+    "packages/app": {
+      "name": "@august/app",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/agent": "packages/agent",
+        "@august/brain": "packages/brain",
+        "@august/capabilities": "packages/capabilities",
+        "@august/channels": "packages/channels",
+        "@august/core": "packages/core",
+        "@august/discovery": "packages/discovery",
+        "@august/gateway": "packages/gateway",
+        "@august/mcp": "packages/mcp",
+        "@august/policy": "packages/policy",
+      },
+    },
+    "packages/brain": {
+      "name": "@august/brain",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/capabilities": "packages/capabilities",
+        "@august/policy": "packages/policy",
+      },
+    },
+    "packages/capabilities": {
+      "name": "@august/capabilities",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/policy": "packages/policy",
+      },
+    },
+    "packages/channels": {
+      "name": "@august/channels",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/agent": "packages/agent",
+        "@august/core": "packages/core",
+        "@august/gateway": "packages/gateway",
+      },
+    },
+    "packages/core": {
+      "name": "@august/core",
+      "version": "0.1.0",
+    },
+    "packages/discovery": {
+      "name": "@august/discovery",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/capabilities": "packages/capabilities",
+      },
+    },
+    "packages/gateway": {
+      "name": "@august/gateway",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/core": "packages/core",
+      },
+    },
+    "packages/ladder": {
+      "name": "@august/ladder",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/policy": "packages/policy",
+      },
+    },
+    "packages/mcp": {
+      "name": "@august/mcp",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/agent": "packages/agent",
+        "@august/capabilities": "packages/capabilities",
+        "@august/policy": "packages/policy",
+      },
+    },
+    "packages/policy": {
+      "name": "@august/policy",
+      "version": "0.1.0",
+    },
+  },
+  "packages": {
+    "@august/agent": ["@august/agent@workspace:packages/agent", { "dependencies": { "@august/brain": "packages/brain", "@august/capabilities": "packages/capabilities", "@august/core": "packages/core", "@august/policy": "packages/policy" } }],
+
+    "@august/app": ["@august/app@workspace:packages/app", { "dependencies": { "@august/agent": "packages/agent", "@august/brain": "packages/brain", "@august/capabilities": "packages/capabilities", "@august/channels": "packages/channels", "@august/core": "packages/core", "@august/discovery": "packages/discovery", "@august/gateway": "packages/gateway", "@august/mcp": "packages/mcp", "@august/policy": "packages/policy" }, "bin": { "august": "./src/bin.ts" } }],
+
+    "@august/brain": ["@august/brain@workspace:packages/brain", { "dependencies": { "@august/capabilities": "packages/capabilities", "@august/policy": "packages/policy" } }],
+
+    "@august/capabilities": ["@august/capabilities@workspace:packages/capabilities", { "dependencies": { "@august/policy": "packages/policy" } }],
+
+    "@august/channels": ["@august/channels@workspace:packages/channels", { "dependencies": { "@august/agent": "packages/agent", "@august/core": "packages/core", "@august/gateway": "packages/gateway" } }],
+
+    "@august/core": ["@august/core@workspace:packages/core", {}],
+
+    "@august/discovery": ["@august/discovery@workspace:packages/discovery", { "dependencies": { "@august/capabilities": "packages/capabilities" } }],
+
+    "@august/gateway": ["@august/gateway@workspace:packages/gateway", { "dependencies": { "@august/core": "packages/core" } }],
+
+    "@august/ladder": ["@august/ladder@workspace:packages/ladder", { "dependencies": { "@august/policy": "packages/policy" } }],
+
+    "@august/mcp": ["@august/mcp@workspace:packages/mcp", { "dependencies": { "@august/agent": "packages/agent", "@august/capabilities": "packages/capabilities", "@august/policy": "packages/policy" } }],
+
+    "@august/policy": ["@august/policy@workspace:packages/policy", {}],
+
+    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
+
+    "@types/node": ["@types/node@26.6.3", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-dsqMQQoeTLqu9wynDD00q573mNzso3IdQOAfHRJqLCcmCFPoGo9A1bDpUcv/9tnKpErQWv9uKeGfl37EIS02Yg=="],
+
+    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+  }
+}
