@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { ToolExecutor, ToolResult } from "@august/agent";
 import type { CapabilityManifest, CapabilityRegistry } from "@august/capabilities";
 import {
@@ -5,6 +7,7 @@ import {
   RegistryClient,
   describeEvidence,
   fetchGithubSkill,
+  skillUpgradeWidening,
   loadSkills,
   planInstall,
   skillsManifest,
@@ -13,6 +16,7 @@ import {
   type InstallPlan,
   type InstalledArtifact,
   type PackageRef,
+  type FetchedSkill,
   type Skill,
 } from "@august/discovery";
 import type { McpServerConfig } from "./config.ts";
@@ -79,7 +83,7 @@ export class MetaExecutor implements ToolExecutor {
   private readonly plans = new Map<string, InstallPlan>();
   /** Registry evidence per plan, resolved once for the approval preview and reused by the install, so what is approved is what is installed. */
   private readonly evidence = new Map<string, Promise<ArtifactEvidence>>();
-  private readonly skillPreviews = new Map<string, Skill>();
+  private readonly skillPreviews = new Map<string, FetchedSkill>();
 
   constructor(private readonly o: MetaExecutorOptions) {}
 
@@ -108,7 +112,9 @@ export class MetaExecutor implements ToolExecutor {
       }
       if (tool === "august.install_skill") {
         const skill = await this.previewSkill(String(args.url));
-        return `install skill "${skill.name}": ${clip(skill.description, 200)} (only SKILL.md, no scripts)`;
+        const widened = skillUpgradeWidening(this.o.skillsDir, skill);
+        const upgrade = this.isInstalled(skill.name) ? `; REPLACES the installed "${skill.name}"${widened.length ? ` and ADDS effects it did not declare before: ${widened.join(", ")}` : ", with no wider effects"}` : "";
+        return `install skill "${skill.name}": ${clip(skill.description, 200)} (declares effects: ${skill.effects.join(", ")}; from ${skill.source.replace(/^https:\/\/github\.com\//, "")} at commit ${skill.commit.slice(0, 7)}; only SKILL.md, no scripts; its instructions are untrusted text that can guide but never authorize an action)${upgrade}`;
       }
     } catch (error) {
       return `cannot install: ${(error as Error).message}`;
@@ -134,7 +140,7 @@ export class MetaExecutor implements ToolExecutor {
           const url = String(args.url);
           const skill = await this.previewSkill(url);
           this.skillPreviews.delete(url);
-          writeSkill(this.o.skillsDir, skill, url);
+          writeSkill(this.o.skillsDir, skill, url, { commit: skill.commit, replace: this.isInstalled(skill.name) });
           this.reloadSkills();
           return { content: `Installed skill "${skill.name}". Its tool is skill.${skill.name}.` };
         }
@@ -197,7 +203,12 @@ export class MetaExecutor implements ToolExecutor {
     return { content: `Found (install with august.install_tool and the exact name):\n${lines.join("\n")}` };
   }
 
-  private async previewSkill(url: string): Promise<Skill> {
+  /** On disk, not just loaded: a skill that was modified and stopped loading is still installed and can be replaced. */
+  private isInstalled(name: string): boolean {
+    return existsSync(join(this.o.skillsDir, name, "SKILL.md"));
+  }
+
+  private async previewSkill(url: string): Promise<FetchedSkill> {
     const cached = this.skillPreviews.get(url);
     if (cached) return cached;
     const skill = await fetchGithubSkill(url, this.o.fetch);
