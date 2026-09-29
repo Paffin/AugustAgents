@@ -90,6 +90,33 @@ describe("AgentRuntime", () => {
     expect((await agent.handle(session, "как дела?", { priorMessages: ["User: привет", "Assistant: хорошо"] })).reply).toBe("привет");
   });
 
+  test("Product behavior (REQ-FUNC-001): usable expansion with no lexical match considers a real small catalog", async () => {
+    const ex = executor({ "notes.search": "actual note" });
+    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "artifact" } }), executor: ex, expandQuery: async () => "artifact totals" });
+    const r = await agent.handle(session, "артефакт");
+    expect(ex.calls).toEqual([{ tool: "notes.search", args: { q: "artifact" } }]);
+    expect(r.trace?.decisions[0]?.options.map((o) => o.key)).toContain("notes.search");
+    expect(r.steps).toBe(1);
+  });
+
+  test("Safety/reliability (REQ-REL-002): decision usage exhausts the run before tools or final generation", async () => {
+    let exhausted = false;
+    const seen: number[] = [];
+    const decision: DecisionEngine = { async decide(input, q) {
+      expect(input.maxCompletionTokens).toBe(200);
+      input.beforeCall?.();
+      await input.onUsage?.({ inputTokens: 20, outputTokens: 180, totalTokens: 200 });
+      return { choice: "notes.search", confidence: 1, probs: Object.fromEntries(q.options.map((o) => [o.key, o.key === "notes.search" ? 1 : 0])) };
+    } };
+    const ex = executor(), llm = fakeLlm({});
+    const { agent } = build({ decision, llm, executor: ex });
+    const r = await agent.handle(session, "search notes", { remainingTokens: () => 200, onUsage: (u) => { seen.push(u.totalTokens); exhausted = true; }, usageExhaustion: () => exhausted ? "token-budget" : undefined });
+    expect(r.stopReason).toBe("token-budget");
+    expect(seen).toEqual([200]);
+    expect(ex.calls).toHaveLength(0);
+    expect(llm.prompts).toHaveLength(0);
+  });
+
   test("Safety/reliability invariant: observer checkpoints are bounded and name unsafe tool start", async () => {
     const events: AgentRunEvent[] = [];
     const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "checkpoint-secret-7429" } }), executor: executor({ "notes.search": "tool-secret-9631" }) });

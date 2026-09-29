@@ -7,7 +7,7 @@ import {
   type ToolDescriptor,
 } from "@august/capabilities";
 import {
-  chooseTool, fitShortlist,
+  chooseTool, fitShortlist, LAYA_MAX_OPTIONS,
   fillArguments,
   type DecisionEngine,
   type JsonSchema,
@@ -310,7 +310,7 @@ export class AgentRuntime {
       if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) throw new RunControlError("deadline");
       const exhausted = context.usageExhaustion?.(); if (exhausted) throw new RunControlError(exhausted);
     };
-    const llmControls = (): LlmCallControls => ({ onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.() });
+    const llmControls = (): LlmCallControls => ({ onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: control });
     const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
       try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history, context.redactCheckpoint), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
       catch (error) { throw new AgentCheckpointError(error); }
@@ -455,11 +455,16 @@ export class AgentRuntime {
         const state = `${allHistory().join("\n")}\n${hint}Request: ${text}`.trim();
         control();
         // Only as many of the best-ranked tools as the decision model can be asked about at once.
-        const offered = fitShortlist(shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })), TOOL_CHOICE_INSTRUCTIONS);
+        let offered = fitShortlist(shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })), TOOL_CHOICE_INSTRUCTIONS);
+        // The app expander emits English keywords; a missing/invalid expansion does not request a catalog fallback.
+        if (!offered.length && expansion && /[a-z]/i.test(expansion) && tools.length < LAYA_MAX_OPTIONS) {
+          offered = fitShortlist(tools.map((t) => ({ name: t.name, description: t.description })), TOOL_CHOICE_INSTRUCTIONS);
+        }
+        const controls = llmControls();
         const choice = await chooseTool(
           this.options.decision,
           offered,
-          { state, tainted: taint.snapshot().tainted },
+          { state, tainted: taint.snapshot().tainted, onUsage: controls.onUsage, requireUsage: controls.requireUsage, maxCompletionTokens: controls.maxTokens, remainingTokens: controls.remainingTokens, beforeCall: controls.beforeCall },
           TOOL_CHOICE_INSTRUCTIONS,
         );
         control();

@@ -27,6 +27,8 @@ export interface DecisionInput {
   onUsage?: LlmUsageObserver;
   requireUsage?: boolean;
   maxCompletionTokens?: number;
+  beforeCall?: () => void;
+  remainingTokens?: () => number;
 }
 
 export interface DecisionResult {

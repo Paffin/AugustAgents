@@ -16,9 +16,10 @@ const tmp = () => { const d = mkdtempSync(join(tmpdir(), "august-learnapp-")); d
 const session = makeSessionKey({ workspace: "home", channel: "cli", user: "local" });
 
 /** A model that picks the scripted tools in order, then answers. */
-function scripted(steps: Array<{ tool: string; args?: Record<string, unknown> }>, reply = "done"): LlmProvider {
-  let i = 0;
-  return { name: "s", async complete(messages, options) {
+function scripted(steps: Array<{ tool: string; args?: Record<string, unknown> }>, reply = "done"): LlmProvider & { readonly calls: number } {
+  let i = 0, calls = 0;
+  return { name: "s", get calls() { return calls; }, async complete(messages, options) {
+    calls++;
     await options?.onUsage?.({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
     const all = messages.map((m) => m.content).join("\n");
     if (options?.jsonSchema?.name === "decision") return JSON.stringify({ choice: all.includes("Result of") && i >= steps.length ? "none" : steps[Math.min(i, steps.length - 1)]!.tool });
@@ -30,7 +31,7 @@ const open = (home: string, llm: LlmProvider): App => { const cfg = defaultConfi
 
 describe("the agent learns from what actually happened", () => {
   test("a call the host can check is verified without anyone's say-so, and becomes a training example bound to its decision and execution", async () => {
-    const home = tmp(); const app = open(home, scripted([{ tool: "clock.now" }]));
+    const home = tmp(); const model = scripted([{ tool: "clock.now" }]); const app = open(home, model);
     const reply = await app.handle(session, "what time is it");
     const { examples, excluded } = app.learning.examples();
     // The call itself was checked. The answer given after it (decision 1, "none") waits for the owner: nothing has judged it.
@@ -38,7 +39,9 @@ describe("the agent learns from what actually happened", () => {
     expect(examples).toHaveLength(1);
     expect(examples[0]).toMatchObject({ runId: reply.runId, decisionIndex: 0, questionId: "tool-choice", choice: "clock.now", label: { kind: "chosen-worked", key: "clock.now" }, reward: 1, execution: { tool: "clock.now", isError: false }, provenance: { tainted: false }, evidence: [{ verifier: "host-clock", method: "postcondition", verdict: "success" }] });
     expect(examples[0]!.state).toContain("Request: what time is it");
-    expect(app.learning.report()[0]).toMatchObject({ stage: "llm", runs: 1, verifiedRuns: 1, verifiedSuccessRate: 1, avgLlmCalls: 3, avgTokens: 36 });
+    // Include actual choice calls as well as expansion, argument fill and final answer.
+    expect(model.calls).toBeGreaterThan(0);
+    expect(app.learning.report()[0]).toMatchObject({ stage: "llm", runs: 1, verifiedRuns: 1, verifiedSuccessRate: 1, avgLlmCalls: model.calls, avgTokens: model.calls * 12 });
     app.close();
   });
 

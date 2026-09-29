@@ -282,6 +282,41 @@ describe("OpenAiCompatibleProvider", () => {
     await expect(provider.complete([])).rejects.toThrow("no text");
   });
 
+  test("Safety/reliability (REQ-REL-002): unusable replies still report real usage once", async () => {
+    const seen: LlmUsage[] = [];
+    const provider = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example", model: "m", fetch: (async () => used("")) as unknown as typeof fetch });
+    await expect(provider.complete([], { requireUsage: true, onUsage: (u) => { seen.push(u); } })).rejects.toThrow("no text");
+    expect(seen).toEqual([usage]);
+  });
+
+  test("Safety/reliability (REQ-REL-002): HTTP retries refresh the remaining completion budget", async () => {
+    let remaining = 120;
+    const limits: number[] = [];
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl: "https://llm.example", model: "m",
+      sleep: async () => { remaining = 70; },
+      fetch: (async (_url, init) => {
+        limits.push(JSON.parse(String(init?.body)).max_tokens);
+        return limits.length === 1 ? new Response("", { status: 429 }) : used("done");
+      }) as typeof fetch,
+    });
+    expect(await provider.complete([], { maxTokens: 300, remainingTokens: () => remaining })).toBe("done");
+    expect(limits).toEqual([120, 70]);
+  });
+
+  test("Safety/reliability (REQ-REL-002): cancellation during backoff starts no retry or fallback", async () => {
+    let stopped = false, calls = 0;
+    const cancellation = new Error("owner cancelled");
+    const first = new OpenAiCompatibleProvider({
+      baseUrl: "https://llm.example", model: "m", sleep: async () => { stopped = true; },
+      fetch: (async () => { calls++; return new Response("", { status: 429 }); }) as unknown as typeof fetch,
+    });
+    const second = scripted("unwanted");
+    await expect(new FallbackProvider([first, second]).complete([], { beforeCall: () => { if (stopped) throw cancellation; } })).rejects.toBe(cancellation);
+    expect(calls).toBe(1);
+    expect(second.calls).toHaveLength(0);
+  });
+
   test("validates and reports provider usage exactly once", async () => {
     const seen: LlmUsage[] = []; const provider = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example", model: "m", fetch: (async () => used("ok")) as unknown as typeof fetch });
     expect(await provider.complete([], { requireUsage: true, onUsage: (u) => void seen.push(u) })).toBe("ok"); expect(seen).toEqual([usage]);
@@ -290,7 +325,7 @@ describe("OpenAiCompatibleProvider", () => {
   test("required missing or malformed usage fails closed", async () => {
     const missing = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example", model: "m", fetch: (async () => ok("x")) as unknown as typeof fetch });
     await expect(missing.complete([], { requireUsage: true })).rejects.toBeInstanceOf(LlmUsageError);
-    for (const value of [{ prompt_tokens: 1, completion_tokens: 2, total_tokens: 9 }, { prompt_tokens: -1, completion_tokens: 1, total_tokens: 0 }]) {
+    for (const value of [null, [], "invalid", { prompt_tokens: Number.MAX_SAFE_INTEGER + 1, completion_tokens: 0, total_tokens: Number.MAX_SAFE_INTEGER + 1 }, { prompt_tokens: 1, completion_tokens: 2, total_tokens: 9 }, { prompt_tokens: -1, completion_tokens: 1, total_tokens: 0 }]) {
       const bad = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example", model: "m", fetch: (async () => used("x", value)) as unknown as typeof fetch }); await expect(bad.complete([], { requireUsage: true })).rejects.toThrow(/invalid usage/);
     }
   });
@@ -362,6 +397,19 @@ describe("LlmChoiceEngine", () => {
 
   test("forwards usage controls and the remaining completion cap", async () => {
     const seen: LlmUsage[] = []; const engine = new LlmChoiceEngine(metered('{"choice":"a"}')); await engine.decide({ state: "s", tainted: false, requireUsage: true, maxCompletionTokens: 9, onUsage: (u) => void seen.push(u) }, question); expect(seen).toEqual([usage]);
+  });
+
+  test("Safety/reliability (REQ-REL-002): choice retries use current budget without a tiny fixed cap", async () => {
+    let remaining = 200;
+    const limits: Array<number | undefined> = [];
+    const provider: LlmProvider = { name: "metered-choice", async complete(_messages, options) {
+      limits.push(options?.maxTokens);
+      await options?.onUsage?.(usage);
+      return JSON.stringify({ choice: limits.length === 1 ? "invalid" : "a" });
+    } };
+    const result = await new LlmChoiceEngine(provider).decide({ state: "s", tainted: false, maxCompletionTokens: 500, remainingTokens: () => remaining, onUsage: (u) => { remaining -= u.totalTokens; } }, question);
+    expect(result.choice).toBe("a");
+    expect(limits).toEqual([200, 190]);
   });
 });
 
@@ -511,6 +559,12 @@ describe("chooseTool", () => {
 });
 
 describe("LlmQueryExpander", () => {
+  test("Product behavior (REQ-REL-002): expansion preserves the caller's available generation budget", async () => {
+    let limit: number | undefined;
+    const provider: LlmProvider = { name: "expansion", async complete(_messages, options) { limit = options?.maxTokens; return "read file"; } };
+    expect(await new LlmQueryExpander(provider).expand("прочитай файл", { maxTokens: 500, remainingTokens: () => 200 })).toBe("read file");
+    expect(limit).toBe(200);
+  });
   test("returns clean English keywords and caches them", async () => {
     const provider = scripted("Keywords: read, file! открыть");
     const x = new LlmQueryExpander(provider);
