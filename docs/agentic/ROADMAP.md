@@ -6,11 +6,12 @@
 
 **Intent:** A clean checkout has pinned dependencies, runnable typecheck, a non-hanging green test baseline, and public status documents that match observed behavior.
 **Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
-**Decision Prerequisites:** DEC-0008
+**Decision Prerequisites:** DEC-0008, DEC-0009
 **Dependencies:** none
 **Readiness:** Ready for Brainstorming
 **State:** Ready
 **Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-001 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Execution Binding:** `docs/superpowers/progress/OUT-001.md` is the ignored current-selection owner. Before Planning it must bind the exact accepted Foundation, Design Spec, and Application Receipt; before implementation it must also bind the compatible exact accepted Implementation Plan. Missing, stale, or ambiguous bindings block progression.
 
 ### OUT-002: Durable session and run engine
 

@@ -12,6 +12,7 @@
 | Runtime center | DEC-0006 | `ARCHITECTURE.md` / Interfaces | none |
 | MCP protocol boundary | DEC-0007 | `ARCHITECTURE.md` / Adapters | none |
 | Release claims | DEC-0008 | `PROJECT-BLUEPRINT.md` / Release Boundaries | none |
+| OUT-001 execution selection | DEC-0009 | `ROADMAP.md` / OUT-001 Execution Binding | none |
 
 ## Immutable Decision Ledger
 
@@ -109,4 +110,16 @@
 **Current Truth:** `docs/agentic/PROJECT-BLUEPRINT.md` / Release Boundaries
 **Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
 **Roadmap Outcomes:** OUT-001, OUT-010
+**Supersedes:** none
+
+### DEC-0009: OUT-001 routes an exact ignored execution binding
+
+**Area:** OUT-001 execution selection
+**Decision:** OUT-001 names ignored `docs/superpowers/progress/OUT-001.md` as its current execution-selection owner; that record binds exact accepted Foundation, Design Spec, Application Receipt, and Implementation Plan identities before each downstream phase.
+**Rationale:** Artifact status, filenames, dates, and conversational memory cannot select current work, while mutable execution progress should not rewrite the Foundation for each phase transition.
+**Alternatives:** Embed mutable spec/plan revisions in ROADMAP.md; infer the newest artifact; create a global selection registry.
+**Evidence:** Superpowers Architecture product-evolution and Foundation lifecycle selection contract, verified 2026-09-29.
+**Current Truth:** `docs/agentic/ROADMAP.md` / OUT-001 Execution Binding
+**Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
+**Roadmap Outcomes:** OUT-001
 **Supersedes:** none
