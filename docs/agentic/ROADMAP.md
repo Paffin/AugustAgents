@@ -16,6 +16,7 @@ are product/verification prerequisites, not documentation ceremonies.
 **Readiness:** Ready for implementation
 **State:** Proposed
 **Completion Note:** Credential regression repaired at 6c4a2d5: 579 pass, 12 skip, 0 fail; real encrypted CLI recovery/rotation passes with zero native-store calls. Full OUT-001 remains open for useful real-model task/restart acceptance. Preserve original baseline/prepared-plan contracts.
+**CI Increment:** Issue #1 infrastructure now runs frozen restore and named skip/failure artifacts on real hosted Ubuntu/macOS/Windows, plus sidecar lint/protocol and corrupt-lock rejection. Native Linux's 12 previously skipped containment checks ran and passed; native macOS sidecar reverse-DNS startup was repaired. Actual source/run-bound results are in VERIFICATION. Windows remains NOT_QUALIFIED with named permission/path/socket/process failures; completing this CI increment does not complete OUT-001 or authorize releases.
 
 ### OUT-002: Durable session and run engine
 
@@ -105,6 +106,7 @@ are product/verification prerequisites, not documentation ceremonies.
 **Dependencies:** OUT-002, OUT-003, OUT-004, OUT-005, OUT-006, OUT-007, OUT-008, OUT-009
 **Readiness:** Blocked
 **State:** Proposed
+**Platform Risk:** Hosted matrix execution is implemented, but Windows runtime/ACL/portability failures and native frontend/recovery/packaging/signing gates remain unresolved. The optional Docker ARM64 runner executes real jobs but cannot establish Windows/macOS support; its unavailable bubblewrap namespaces remain failed isolation evidence, not passes.
 
 ## Remaining Full-Goal Outcomes
 

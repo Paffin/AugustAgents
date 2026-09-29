@@ -128,3 +128,23 @@ accounts, payments and publication still require scoped authority.
   action drift, expiry, and concurrency.
 - Sandbox/egress/secret claims require live platform evidence in addition to
   argument-construction tests.
+
+## CI Runner Boundary
+
+- Public fork pull requests run only on GitHub-hosted machines. The optional
+  local Docker runner has no default labels and a manual-main-only workflow;
+  its immutable pre-job hook rejects other events/repositories/refs/revisions.
+  Do not approve untrusted workflow changes for that runner. Public-repository
+  self-hosted-runner risks are not eliminated merely by labels or containers.
+- The user-designated repository PAT requests only a short-lived registration
+  token; it is never passed into the runner, command arguments or logs. The
+  ephemeral runner removes registration credentials after its one job. No host
+  home, credential store or Docker socket is mounted; root is read-only with
+  non-root UID, no capabilities, no-new-privileges and bounded CPU/memory/PIDs.
+- An unavailable Docker user namespace remains an explicit failed isolation
+  evidence gate. No privileged mode, host security switch or skipped-test pass
+  is permitted to produce a green result. The narrow bwrap AppArmor allowance
+  applies only to disposable hosted Ubuntu CI machines, not owner hosts.
+- Windows remains NOT_QUALIFIED while POSIX permissions/path/socket/process
+  assumptions fail. CI infrastructure delivery does not claim owner-only Windows
+  ACLs, cross-platform containment or full release readiness.

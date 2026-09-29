@@ -10,7 +10,9 @@ def build_report(root, platform):
     failures = []
     passed = 0
     for case in root.iter("testcase"):
-        row = {"file": case.get("file"), "suite": case.get("classname"), "name": case.get("name")}
+        filename = case.get("file")
+        row = {"file": filename.replace("\\", "/") if filename else None,
+               "suite": case.get("classname"), "name": case.get("name")}
         skip = case.find("skipped")
         if skip is not None:
             reason = skip.get("message") or skip.text

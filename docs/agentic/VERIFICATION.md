@@ -219,6 +219,33 @@ only configuration intent.
   process/probe diagnostics remain. A fresh native macOS matrix is required to
   accept the fix. Windows permission/path/socket/process failures remain open.
 
+### Hosted CI infrastructure acceptance boundary, 2026-09-30
+
+- Published code `4aa9b20bc7b7a6e08f6f0c31d5a69bb029e9bcd7`, actual
+  [run 36635097355](https://github.com/Paffin/AugustAgents/actions/runs/36635097355):
+  Ubuntu Linux x64 (kernel 6.17.0-1022-azure, bwrap) 634 pass / 0 skip / 0 fail,
+  2465 assertions, 36 files, 16.70 s; macOS arm64 (Darwin 25.6.0, sandbox-exec)
+  622 pass / 12 Linux-only skips / 0 fail, 2406 assertions, 36 files, 14.22 s.
+  Sidecar lint, four Python protocol/binding regressions and CI negative frozen
+  corrupt-lock rejection succeeded. Neither fake protocol tests nor CI delivery
+  qualify real-model learning/activation or the full product/release goal.
+- Windows x64, 10.0.26100, sandbox none: 597 pass / 12 skip / 35 fail / 1 error,
+  2336 assertions, 644 test records / 36 files, 188.67 s. **Windows NOT_QUALIFIED**.
+  Exact named test/hook failures are tracked in GitHub issue #1; permissions,
+  shell/path/socket assumptions, process timing and cleanup remain runtime work.
+  No failing assertions were suppressed or turned into platform passes.
+- Downloaded platform artifact ZIPs matched their published SHA-256:
+  Windows 11063554565 (`e13202ec644f87fdf27713dd261cac0369b97fa46edbca286afd59fced983bde`),
+  Linux 11063354635 (`21b65ef37325b77a3d09bb83464f78d64e417becebcecb762c1def092a6916c2`),
+  macOS 11062809947 (`19573321eff597a72fdc59fae6bf52833a3fc572b898c3a94be21a560cf5b3b5`).
+  Each contained actual JUnit, observed OS/revision/sandbox metadata and separate
+  pass/failure/skip counts. Windows backslash paths exposed a reason-classification
+  defect; report paths are now normalized and a regression checks the observed
+  bwrap-unavailable reason. Fresh artifact readback is required for that repair.
+- Issue #1 explicitly accepts either three green platforms or a named platform
+  failure list. A narrowly scoped CI-infrastructure closure can use that clause;
+  OUT-001/OUT-010 and full Windows product support do not become complete.
+
 ### Exclusive runtime owner, 2026-09-30
 
 - Fixed the concurrent-start defect observed in the UX increment below. Ordinary

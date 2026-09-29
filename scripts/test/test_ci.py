@@ -15,6 +15,15 @@ spec.loader.exec_module(report_module)
 
 
 class ReportTests(unittest.TestCase):
+    def test_windows_junit_paths_keep_the_observed_skip_reason(self):
+        root = ET.fromstring(r'<testsuites><testcase name="isolation" '
+                             r'file="packages\mcp\test\sandbox-live.test.ts"><skipped/>'
+                             r'</testcase></testsuites>')
+        report = report_module.build_report(root, {"os": "win32", "sandbox": "none"})
+        self.assertEqual(report["passed"], 0)
+        self.assertEqual(report["skipped"][0]["file"], "packages/mcp/test/sandbox-live.test.ts")
+        self.assertIn("none on win32", report["skipped"][0]["reason"])
+
     def test_skips_are_not_passes_and_have_observed_reason(self):
         root = ET.fromstring('<testsuites><testsuite><testcase name="ok"/>'
                              '<testcase name="isolated" file="packages/mcp/test/sandbox-live.test.ts">'

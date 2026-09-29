@@ -197,6 +197,23 @@ The build runtime floor is Bun 1.1.39 because it is the first release supporting
 the committed text lockfile contract. No consumer evidence justifies a dual
 binary/text lock compatibility path for earlier 1.1.x releases.
 
+## CI And Optional Repository Runner
+
+`.github/workflows/ci.yml` restores the frozen lock, checks unchanged `bun.lock`
+and runs the full engineering gate independently on hosted Ubuntu/macOS/Windows.
+Each platform publishes JUnit, observed OS/sandbox metadata and a named skip
+report. Linux missing bubblewrap evidence fails rather than silently accepting
+skips. Python sidecar lint/protocol and corrupt-lock rejection have a separate
+job; fake-adapter protocol coverage does not qualify actual model outcomes.
+
+`docker/github-runner` is an optional Linux ARM64, one-job ephemeral GitHub
+Actions runner, not an application deployment. The separate manual-main workflow
+checks the exact approved SHA before any job step through an immutable hook.
+Credentials and checkout live only in the owned container's private temporary
+filesystems; no host source/home/socket is mounted. Native hosted macOS/Windows
+remain required; Docker cannot replace those platform checks. Actual matrix/job
+evidence and outstanding Windows portability gaps belong in `VERIFICATION.md`.
+
 ## Data Durability
 
 - Repository source and tests are Git-managed.

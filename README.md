@@ -238,15 +238,22 @@ sidecar/          Python-адаптер Laya
 
 ```bash
 bun install --frozen-lockfile
-bun run typecheck
+bun --no-env-file run typecheck
+bun --no-env-file test
 ```
 
-Команды полного набора — `bun test` и `bun run check`. CI настроен на
+В CI полный набор запускается через `bun run check`; локальные инженерные тесты
+запускайте с `--no-env-file`, чтобы не наследовать ваши ключи из `.env`.
+CI настроен на
 Ubuntu/macOS/Windows с `bun install --frozen-lockfile`; артефакты `checks-*`
 содержат JUnit, сведения об ОС и отдельный список пропусков с причинами.
 Пропуски Linux sandbox-проверок блокируют его CI-гейт, а не считаются успехом.
-Новая матрица и Docker GitHub Actions runner ещё требуют проверки реального
-запуска; локальный зелёный набор не устанавливает поддержку трёх ОС.
+Реальные GitHub Actions подтвердили полный набор на Linux и macOS; Windows
+пока NOT_QUALIFIED: платформенные падения видны в матрице и не скрыты пропусками.
+Опциональный Docker runner зарегистрировался, выполнил реальную задачу CI и
+удалился после неё. В его контейнере bubblewrap namespaces недоступны: такой
+запуск не доказывает sandbox-защиту. Точные SHA, результаты и ограничения —
+в [Verification](docs/agentic/VERIFICATION.md).
 Перед запуском прочитайте
 [Verification](docs/agentic/VERIFICATION.md): в baseline от 29 сентября выявлены
 credential-тесты, использовавшие системное хранилище хоста. Они изолированы
