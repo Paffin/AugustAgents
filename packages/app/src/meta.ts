@@ -78,7 +78,9 @@ export class MetaExecutor implements ToolExecutor {
   async describeCall(tool: string, args: Record<string, unknown>): Promise<string | undefined> {
     try {
       if (tool === "august.install_tool") {
-        const plan = await this.plan(String(args.name));
+        const name = String(args.name);
+        const plan = this.plans.get(name);
+        if (!plan) return `cannot install: "${name}" has no prepared plan; search with august.find_tools first`;
         const secrets = plan.secrets.length ? `; needs secrets: ${plan.secrets.map((s) => s.name).join(", ")}` : "";
         return `install ${plan.registryName}@${plan.version}: ${plan.summary} (trust: community, sandboxed when possible)${secrets}`;
       }
@@ -98,8 +100,12 @@ export class MetaExecutor implements ToolExecutor {
         case "august.find_tools":
           return await this.find(String(args.query));
         case "august.install_tool": {
-          const plan = await this.plan(String(args.name));
-          this.plans.delete(String(args.name));
+          const name = String(args.name);
+          const plan = this.plans.get(name);
+          if (!plan) throw new Error(`"${name}" has no prepared plan; search with august.find_tools first`);
+          // Take before the first await: only one concurrent caller can consume
+          // the exact plan that was rendered in the approval preview.
+          this.plans.delete(name);
           return { content: await this.o.addServer(plan.server as McpServerConfig, plan) };
         }
         case "august.install_skill": {
@@ -128,26 +134,20 @@ export class MetaExecutor implements ToolExecutor {
     const taken = this.o.takenIds();
     const lines = hits.map((s) => {
       let how: string;
+      let version = s.version;
       try {
-        const p = planInstall(s, taken);
+        // Keep the first unconsumed plan immutable while an approval may be
+        // pending, even when a later Registry response changes.
+        const p = this.plans.get(s.name) ?? planInstall(s, taken);
+        if (!this.plans.has(s.name)) this.plans.set(s.name, p);
+        version = p.version;
         how = p.summary + (p.secrets.length ? `; needs ${p.secrets.map((x) => x.name).join(", ")}` : "");
       } catch (error) {
         how = `cannot install: ${(error as Error).message}`;
       }
-      return `- ${s.name}@${s.version}: ${clip(s.description, 200)} [${how}]`;
+      return `- ${s.name}@${version}: ${clip(s.description, 200)} [${how}]`;
     });
     return { content: `Found (install with august.install_tool and the exact name):\n${lines.join("\n")}` };
-  }
-
-  /** The plan shown at approval is the plan that runs: it is fetched once and reused. */
-  private async plan(name: string): Promise<InstallPlan> {
-    const cached = this.plans.get(name);
-    if (cached) return cached;
-    const server = await this.o.registryClient.find(name);
-    if (!server) throw new Error(`"${name}" is not in the registry; search with august.find_tools first`);
-    const plan = planInstall(server, this.o.takenIds());
-    this.plans.set(name, plan);
-    return plan;
   }
 
   private async previewSkill(url: string): Promise<Skill> {

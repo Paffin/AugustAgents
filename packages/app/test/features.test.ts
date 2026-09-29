@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
+import { makeSessionKey } from "@august/core";
 import { RegistryClient } from "@august/discovery";
 import {
   FileStore,
   KeychainStore,
   MetaExecutor,
   SecretServiceStore,
+  createApp,
+  defaultConfig,
   defaultConfigPath,
   loadConfig,
   main,
@@ -242,11 +245,18 @@ function registryFetch(extra: Record<string, string> = {}): typeof fetch {
 }
 
 describe("finding and installing capabilities", () => {
+  // Product behavior: a Prepared Install Plan is the exact single-use contract
+  // shared by search, approval preview, and installation.
   test("MetaExecutor: search shows how each server would run; install persists through addServer", async () => {
     const added: unknown[] = [];
+    let registryCalls = 0;
+    const fetch = registryFetch();
     const meta = new MetaExecutor({
       registry: new CapabilityRegistry(),
-      registryClient: new RegistryClient("https://reg.example", registryFetch()),
+      registryClient: new RegistryClient("https://reg.example", (async (...args) => {
+        registryCalls += 1;
+        return fetch(...args);
+      }) as typeof fetch),
       skillsDir: tmp(),
       takenIds: () => new Set(),
       fallback: { call: async () => ({ content: "fallback" }) },
@@ -260,7 +270,65 @@ describe("finding and installing capabilities", () => {
     expect((await meta.call("august.install_tool", { name: "io.github.acme/weather" })).content).toBe("installed");
     expect(added).toEqual([{ id: "weather", command: "npx", args: ["-y", "@acme/weather-mcp@2.0.0"], envFrom: ["WEATHER_KEY"], trust: "community" }]);
     expect((await meta.call("august.install_tool", { name: "io.github.x/unknown" })).isError).toBe(true);
+    expect(added).toHaveLength(1);
+    expect(registryCalls).toBe(1);
     expect((await meta.call("clock.now", {})).content).toBe("fallback");
+  });
+
+  test("two app sessions cannot replace or both consume one prepared install plan", async () => {
+    const home = tmp();
+    let registryCalls = 0;
+    const versions = ["2.0.0", "3.0.0"];
+    const fetch = (async () => {
+      const version = versions[Math.min(registryCalls++, versions.length - 1)]!;
+      return new Response(JSON.stringify({
+        servers: [{ server: { ...registryReply.servers[0]!.server, version, packages: [{ registryType: "npm", identifier: "@acme/weather-mcp", version, environmentVariables: [{ name: "WEATHER_KEY", isSecret: true }] }] } }],
+      }));
+    }) as unknown as typeof globalThis.fetch;
+    const llm: LlmProvider = {
+      name: "sessions",
+      async complete(messages, options) {
+        const all = messages.map((m) => m.content).join("\n");
+        if (options?.jsonSchema?.name === "decision") {
+          const tool = all.includes("SEARCH") ? "august.find_tools" : "august.install_tool";
+          return JSON.stringify({ choice: all.includes("Result of ") ? "none" : tool });
+        }
+        if (options?.jsonSchema?.name === "arguments") {
+          const tool = /"([a-z_]+\.[a-z_-]+)"/.exec(messages[0]!.content)![1];
+          return JSON.stringify(tool === "august.find_tools" ? { query: "weather" } : { name: "io.github.acme/weather" });
+        }
+        if (options?.maxTokens === 40) return "weather";
+        return "done";
+      },
+    };
+    const config = { ...defaultConfig(home), registryUrl: "https://reg.example" };
+    const configPath = defaultConfigPath(home);
+    writeConfig(configPath, config);
+    const app = createApp(config, { env: {}, home, llm, fetch, sandboxKind: "none", secrets: new FileStore(join(home, ".august")), configPath });
+    const a = makeSessionKey({ workspace: "home", channel: "test", user: "a" });
+    const b = makeSessionKey({ workspace: "home", channel: "test", user: "b" });
+    await app.handle(a, "SEARCH A");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const previews: string[] = [];
+    let firstReached!: () => void;
+    let secondReached!: () => void;
+    const reached = [new Promise<void>((resolve) => (firstReached = resolve)), new Promise<void>((resolve) => (secondReached = resolve))];
+    const waitFor = (p: Promise<void>) => Promise.race([p, Bun.sleep(1000).then(() => { throw new Error("approval was not reached"); })]);
+    const approver = { approve: async (r: { details?: string }) => { previews.push(r.details ?? ""); (previews.length === 1 ? firstReached : secondReached)(); await gate; return true; } };
+    const first = app.handle(a, "INSTALL A", approver);
+    await waitFor(reached[0]!);
+    await app.handle(b, "SEARCH B");
+    const second = app.handle(b, "INSTALL B", approver);
+    await waitFor(reached[1]!);
+    release();
+    await Promise.all([first, second]);
+    const installResults = app.journal.list().filter((e) => e.kind === "tool.result" && (e.data as { tool?: string }).tool === "august.install_tool");
+    expect(previews.every((p) => p.includes("@2.0.0") && !p.includes("@3.0.0"))).toBe(true);
+    expect(installResults.map((e) => (e.data as { failed: boolean }).failed).sort()).toEqual([false, true]);
+    expect(loadConfig(configPath).mcp).toEqual([{ id: "weather", command: "npx", args: ["-y", "@acme/weather-mcp@2.0.0"], envFrom: ["WEATHER_KEY"], trust: "community" }]);
+    expect(registryCalls).toBe(2);
+    app.close();
   });
 
   test("end to end: the agent searches without asking, then asks before installing, and saves the server", async () => {

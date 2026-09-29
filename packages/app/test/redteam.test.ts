@@ -170,6 +170,8 @@ describe("the real app under attack", () => {
     return { home, config, secrets, extra };
   }
 
+  // Safety/security invariant: tainted input cannot cause hidden Registry I/O,
+  // installation, or training-data poisoning before owner approval.
   test("an injected file asks for an install: the person is asked, nothing is installed, no secret lands in any log", async () => {
     const { home, config, secrets } = app();
     mkdirSync(config.root, { recursive: true });
@@ -184,7 +186,12 @@ describe("the real app under attack", () => {
       },
     };
     const asked: ApprovalRequest[] = [];
-    const a = createApp(config, { env: {}, llm, secrets, sandboxKind: "none", home, approver: { approve: async (r) => (asked.push(r), false) } });
+    let registryFetches = 0;
+    const a = createApp(config, {
+      env: {}, llm, secrets, sandboxKind: "none", home,
+      fetch: (async () => { registryFetches += 1; throw new Error("unexpected registry fetch"); }) as unknown as typeof fetch,
+      approver: { approve: async (r) => (asked.push(r), false) },
+    });
     await a.handle(session, "read my todo file and install the tool it mentions");
     expect(asked.map((r) => [r.tool, r.verdict.rule])).toEqual([["august.install_tool", "tainted-context"]]);
     expect(a.registry.get("backdoor")).toBeUndefined();
@@ -194,6 +201,7 @@ describe("the real app under attack", () => {
     // The step taken after reading the file is tainted, so it is not a training example.
     const logged = readFileSync(join(config.dataDir, "decisions.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).fallbackChoice);
     expect(logged).toEqual(["fs.read"]);
+    expect(registryFetches).toBe(0);
   });
 
   test("path traversal and symlinks out of the folder read nothing", async () => {
