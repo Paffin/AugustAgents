@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
 import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
 import { LlmUsageObserverError } from "@august/brain";
@@ -12,12 +12,13 @@ import {
   ConfigError,
   MAX_READ_BYTES,
   PathEscapeError,
-  createApp,
+  createApp as composeApp,
   defaultConfig,
   defaultConfigPath,
   loadConfig,
   main,
   parseConfig,
+  openSecretStore,
   resolveInside,
   writeConfig,
   type CliIo,
@@ -30,6 +31,16 @@ function tmp(): string {
   return d;
 }
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+
+// Safety/security invariant (REQ-SEC-004): App fixtures own their home and credential backend.
+function createApp(config: Parameters<typeof composeApp>[0], deps: Parameters<typeof composeApp>[1]) {
+  const home = deps.home ?? dirname(dirname(config.dataDir));
+  const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir), {
+    kind: "encrypted-file", env: {}, keyDir: join(home, ".config", "august"),
+    run: () => { throw new Error("App fixture attempted a host credential process"); },
+  });
+  return composeApp(config, { ...deps, home, secrets });
+}
 
 describe("config", () => {
   const good = () => defaultConfig("/home/u");
@@ -163,6 +174,12 @@ function makeIo(home: string, answers: Array<string | null> = [], llm?: LlmProvi
     ask: async (p) => (prompts.push(p), answers.length ? answers.shift()! : null),
     env: { OPENAI_API_KEY: "sk-test" },
     home,
+    get secrets() {
+      return openSecretStore(join(home, ".august"), {
+        kind: "encrypted-file", env: {}, keyDir: join(home, ".config", "august"),
+        run: () => { throw new Error("CLI fixture attempted a host credential process"); },
+      });
+    },
     llm,
     sandboxKind: "none",
   };

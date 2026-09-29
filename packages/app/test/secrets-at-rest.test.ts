@@ -10,6 +10,11 @@ const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), "august-sec-")); dirs.push(d); return d; };
 const allBytes = (dir: string): Buffer[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? allBytes(join(dir, e.name)) : [readFileSync(join(dir, e.name))]));
+// Safety/security invariant (REQ-SEC-004): fixture credentials never reach a host OS store.
+const encryptedFixture = (home: string) => openSecretStore(join(home, ".august"), {
+  kind: "encrypted-file", env: {}, keyDir: join(home, ".config", "august"),
+  run: () => { throw new Error("credential fixture attempted a host process"); },
+});
 
 describe("master key", () => {
   test("is created once with owner-only permissions, and found again", () => {
@@ -69,7 +74,7 @@ describe("EncryptedFileStore", () => {
 
   test("THEFT: a copy of the data folder without the key opens nothing, and the wrong key says so plainly", () => {
     const home = tmp(); const dataDir = join(home, ".august"); const keyDir = join(home, ".config", "august");
-    const store = openSecretStore(dataDir, { env: {}, keyDir });
+    const store = encryptedFixture(home);
     expect(store.kind).toBe("encrypted-file");
     store.set("OPENAI_API_KEY", "sk-stolen-if-plain-0001");
     const stolen = join(tmp(), "copy"); cpSync(dataDir, stolen, { recursive: true });
@@ -123,7 +128,12 @@ describe("EncryptedFileStore", () => {
 describe("through the CLI and the app", () => {
   const cli = (home: string, env: Record<string, string | undefined> = {}) => {
     const out: string[] = []; const answers: string[] = [];
-    const io: CliIo = { print: (l) => void out.push(l), ask: async () => answers.shift() ?? null, env, home, sandboxKind: "none", llm: { name: "none", complete: async () => "" } };
+    const io: CliIo = {
+      print: (l) => void out.push(l), ask: async () => answers.shift() ?? null, env, home,
+      // Commands recovering/rotating a key must reopen under its current identity.
+      get secrets() { return encryptedFixture(home); },
+      sandboxKind: "none", llm: { name: "none", complete: async () => "" },
+    };
     writeConfig(defaultConfigPath(home), defaultConfig(home));
     return { io, out, answers };
   };
@@ -144,13 +154,12 @@ describe("through the CLI and the app", () => {
     expect((await main(["secret", "key", "recover", code], second.io)).code).toBe(0);
     second.out.length = 0; await main(["secret", "list"], second.io);
     expect(second.out).toContain("OPENAI_API_KEY");
-    const open = openSecretStore;
-    expect(open(join(fresh, ".august"), { env: {}, keyDir: join(fresh, ".config", "august") }).get("OPENAI_API_KEY")).toBe("sk-cli-secret-9911");
+    expect(encryptedFixture(fresh).get("OPENAI_API_KEY")).toBe("sk-cli-secret-9911");
     // Rotation changes the recovery code and keeps every secret.
     out.length = 0; expect((await main(["secret", "key", "rotate"], io)).code).toBe(0);
     out.length = 0; await main(["secret", "key", "recovery-code"], io);
     expect(out.join("\n").split("\n").at(-1)).not.toBe(code);
-    expect(open(join(home, ".august"), { env: {}, keyDir: join(home, ".config", "august") }).get("OPENAI_API_KEY")).toBe("sk-cli-secret-9911");
+    expect(encryptedFixture(home).get("OPENAI_API_KEY")).toBe("sk-cli-secret-9911");
   });
 
   test("the app anchors its journal, `august audit verify` passes, and it fails after history is rewritten and the chain recomputed", async () => {

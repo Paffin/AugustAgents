@@ -1,19 +1,29 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ApprovalRequest } from "@august/agent";
 import type { LlmProvider } from "@august/brain";
 import type { ToolDescriptor } from "@august/capabilities";
 import { makeSessionKey } from "@august/core";
 import type { McpCallResult, McpSession, McpTool } from "@august/mcp";
-import { ConfigError, classifyTarget, createApp, defaultConfig, parseConfig, targetsFor, type TargetRoots } from "../src/index.ts";
+import { ConfigError, classifyTarget, createApp as composeApp, defaultConfig, openSecretStore, parseConfig, targetsFor, type TargetRoots } from "../src/index.ts";
 
 // Suite category: Safety/security invariant (REQ-SEC-001 provenance, REQ-SEC-002 target-aware writes) at the composition root.
 const dirs: string[] = [];
 const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), "august-prov-"))); dirs.push(d); return d; };
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const session = makeSessionKey({ workspace: "home", channel: "cli", user: "dan" });
+
+// Safety/security invariant (REQ-SEC-004): provenance fixtures cannot read host credentials.
+function createApp(config: Parameters<typeof composeApp>[0], deps: Parameters<typeof composeApp>[1]) {
+  const home = deps.home ?? dirname(dirname(config.dataDir));
+  const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir), {
+    kind: "encrypted-file", env: {}, keyDir: join(home, ".config", "august"),
+    run: () => { throw new Error("provenance fixture attempted a host credential process"); },
+  });
+  return composeApp(config, { ...deps, home, secrets });
+}
 
 function layout() {
   const home = tmp(); const cfg = defaultConfig(home);
