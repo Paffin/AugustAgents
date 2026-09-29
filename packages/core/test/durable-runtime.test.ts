@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -31,8 +31,8 @@ describe("DurableRuntimeStore", () => {
   });
 
   test("Safety/reliability invariant: backup copies open read-only without recovery writes", () => {
-    const path = tempDb(); const writer = new DurableRuntimeStore(path); writer.appendMessage(session, "user", "kept"); writer.close();
-    const reader = new DurableRuntimeStore(path, { readOnly: true }); expect(reader.schemaVersion()).toBe(1); expect(reader.messages(session)).toHaveLength(1);
+    const path = tempDb(); const backup = tempDb(); const writer = new DurableRuntimeStore(path); writer.appendMessage(session, "user", "kept"); writer.close(); copyFileSync(path, backup);
+    const reader = new DurableRuntimeStore(backup, { readOnly: true }); expect(reader.schemaVersion()).toBe(1); expect(reader.messages(session)).toHaveLength(1); expect(existsSync(`${backup}-shm`)).toBe(false);
     expect(() => reader.appendMessage(session, "assistant", "blocked")).toThrow(); reader.close();
   });
 

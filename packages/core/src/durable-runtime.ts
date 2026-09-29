@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import type { SessionKey } from "./session.ts";
 
 export type MessageRole = "user" | "assistant";
@@ -48,7 +49,8 @@ function fingerprint(request: string, budget: RunBudget): string { return create
 export class DurableRuntimeStore {
   readonly db: Database;
   constructor(path = ":memory:", options: DurableRuntimeStoreOptions = {}) {
-    this.db = new Database(path, options.readOnly ? { readonly: true } : undefined);
+    const source = options.readOnly && path !== ":memory:" ? (() => { const url = pathToFileURL(path); url.searchParams.set("immutable", "1"); return url.href; })() : path;
+    this.db = new Database(source, options.readOnly ? { readonly: true } : undefined);
     this.db.run("PRAGMA foreign_keys = ON");
     if (!options.readOnly && path !== ":memory:") { this.db.run("PRAGMA journal_mode = WAL"); chmodSync(path, 0o600); }
     if (!options.readOnly) { this.db.run("CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); this.db.run("INSERT OR IGNORE INTO runtime_meta VALUES ('schema_version','1')"); }
