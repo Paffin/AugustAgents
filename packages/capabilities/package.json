@@ -1,0 +1,8 @@
+{
+  "name": "@august/capabilities",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@august/policy": "workspace:*" },
+  "exports": { ".": "./src/index.ts" }
+}
