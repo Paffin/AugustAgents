@@ -23,6 +23,7 @@
 **Readiness:** Ready for Brainstorming
 **State:** Ready
 **Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-002 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
+**Execution Binding:** `docs/superpowers/progress/OUT-002.md` is the ignored current-selection owner. It must bind exact policy-accepted Foundation, Design Spec, receipt, and compatible Implementation Plan identities before implementation; missing or stale bindings block progression.
 
 ### OUT-003: Content provenance and replay-safe approvals
 

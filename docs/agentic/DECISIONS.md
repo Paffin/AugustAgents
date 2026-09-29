@@ -14,6 +14,7 @@
 | Release claims | DEC-0008 | `PROJECT-BLUEPRINT.md` / Release Boundaries | none |
 | OUT-001 execution selection | DEC-0009 | `ROADMAP.md` / OUT-001 Execution Binding | none |
 | Bun runtime floor | DEC-0010 | `ARCHITECTURE.md` / Technology Stack | none |
+| OUT-002 execution selection | DEC-0012 | `ROADMAP.md` / OUT-002 Execution Binding | none |
 
 ## Immutable Decision Ledger
 
@@ -148,3 +149,15 @@
 **Blueprint Requirements:** all
 **Roadmap Outcomes:** OUT-001 through OUT-010
 **Supersedes:** DEC-0001
+
+### DEC-0012: OUT-002 routes an exact ignored execution binding
+
+**Area:** OUT-002 execution selection
+**Decision:** OUT-002 names ignored `docs/superpowers/progress/OUT-002.md` as its current execution-selection owner; that record binds exact policy-accepted Foundation, Design Spec, Application Receipt, and compatible Implementation Plan identities before implementation.
+**Rationale:** Durable runtime work changes persistence and recovery boundaries; exact current selection must remain resumable without rewriting Foundation state for every phase.
+**Alternatives:** Infer newest artifacts; reuse OUT-001 progress; embed mutable revisions directly in ROADMAP.md.
+**Evidence:** Superpowers Architecture selection contract and successful OUT-001 binding workflow, verified 2026-09-29.
+**Current Truth:** `docs/agentic/ROADMAP.md` / OUT-002 Execution Binding
+**Blueprint Requirements:** REQ-FUNC-001, REQ-FUNC-002, REQ-REL-001, REQ-REL-002
+**Roadmap Outcomes:** OUT-002
+**Supersedes:** none
