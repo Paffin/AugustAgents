@@ -14,10 +14,12 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-Continue model discovery, billing correctness and runtime acceptance after the
-tariff/budget-control repair. Frozen prices were removed; owner quotes and web
-task thresholds are validated. Real file reading, restart and zero-cost admission
-journeys pass locally. Superpowers is disabled; preserve the full 28-outcome goal.
+Continue native Laya integration, billing correctness and runtime acceptance.
+Provider model discovery is implemented. A real pinned ONNX Laya export ran
+typed decisions under Bun without Python; App/frontend integration and its
+activation exam remain pending (see Verification). Frozen prices were removed;
+owner quotes and web task thresholds are validated. Real file reading, restart
+and zero-cost admission journeys pass locally. Preserve the full 28-outcome goal.
 
 ## Active Risks
 

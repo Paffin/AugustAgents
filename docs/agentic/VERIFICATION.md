@@ -120,6 +120,25 @@ only configuration intent.
   by this repair. Laya remains in shadow until independently verified outcomes
   qualify activation; heuristic results must not be described as native Laya.
 
+### Native Laya feasibility on the installed host, 2026-09-29
+
+- Downloaded the [CPU ONNX export](https://huggingface.co/soyelmismo/laya-multilingual-onnx)
+  at immutable revision `0966c4fa58da6878b39e7e14cb5e93313b82d828` into owned
+  `/private/tmp/august-native-laya.qHKxXd`, outside the repository. Actual SHA-256
+  matches repository LFS metadata: model
+  `d389d2304822a59569387e257067360a84e016aed43b407f1cfde87dadb7e485`;
+  tokenizer `609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f`.
+- Scratch dependencies `onnxruntime-node@1.30.0` and `tokenizers@0.23.2` loaded
+  the real graph under Bun on macOS arm64, without Python or a sidecar. Prompt
+  construction followed the upstream choice format and checkpoint token IDs and
+  limits. `bun verify.ts` exits 0: Russian and English read-and-sum requests
+  chose `fs.read`, with probabilities 0.87793 / 0.98483; observed first/second
+  decision time 30.46 / 28.30 ms, excluding model load.
+- Two questions establish feasibility only, not calibration, multilingual
+  accuracy, latency distribution or an activation exam. This diagnostic is not
+  wired into August's App or frontend yet. Retained scratch assets enable the
+  integration step; no foreign model process or owner credentials were touched.
+
 ### Provider model discovery, 2026-09-29
 
 - Production templates no longer select a compiled model identifier. Setup reads
