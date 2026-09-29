@@ -442,11 +442,18 @@ describe("august serve", () => {
       }
       expect(pending.tool).toBe("august.install_skill");
       expect(pending.details).toContain('install skill "notes"');
-      const ok = await fetch(`${base}/v1/approve`, { method: "POST", headers: auth, body: JSON.stringify({ channel: "web", user: "local", allow: true }) });
+      const answer = (body: Record<string, unknown>) => fetch(`${base}/v1/approve`, { method: "POST", headers: auth, body: JSON.stringify({ channel: "web", user: "local", allow: true, ...body }) });
+      // Bare "allow" (the old contract), a forged nonce, a made-up id and another session's coordinates resolve nothing.
+      expect((await answer({ approvalId: undefined, nonce: undefined })).status).toBe(400);
+      expect((await answer({ approvalId: pending.id, nonce: "forged" })).status).toBe(409);
+      expect((await answer({ approvalId: "made-up", nonce: pending.nonce })).status).toBe(409);
+      expect((await answer({ approvalId: pending.id, nonce: pending.nonce, user: "someone-else" })).status).toBe(409);
+      expect((await (await fetch(`${base}/v1/pending?channel=web&user=local`, { headers: auth })).json() as any).approval.id).toBe(pending.id);
+      const ok = await answer({ approvalId: pending.id, nonce: pending.nonce });
       expect(ok.status).toBe(200);
       expect(await (await reply).json()).toEqual({ reply: "installed" });
-      const none = await fetch(`${base}/v1/approve`, { method: "POST", headers: auth, body: JSON.stringify({ channel: "web", user: "local", allow: true }) });
-      expect(none.status).toBe(409);
+      // Replaying the same answer after it was used is refused as gone.
+      expect((await answer({ approvalId: pending.id, nonce: pending.nonce })).status).toBe(410);
     } finally {
       r.stop?.();
     }

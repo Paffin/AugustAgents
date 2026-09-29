@@ -120,7 +120,8 @@ export class MetaExecutor implements ToolExecutor {
       if (tool.startsWith("skill.")) {
         const skill = this.skills.get(tool.slice(6));
         if (!skill) return { content: `unknown skill ${tool}`, isError: true };
-        return { content: `Instructions of skill "${skill.name}":\n${skill.body}` };
+        const text = `Instructions of skill "${skill.name}":\n${skill.body}`;
+        return { content: text, parts: [{ text, origin: { kind: "skill", source: tool, locator: skill.name }, trust: "untrusted", sensitivity: "public" }] };
       }
     } catch (error) {
       return { content: (error as Error).message, isError: true };

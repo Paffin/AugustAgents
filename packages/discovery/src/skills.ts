@@ -82,6 +82,8 @@ export function skillsManifest(skills: readonly Skill[]): CapabilityManifest {
       name: `skill.${s.name}`,
       description: s.description.slice(0, 500),
       effects: ["read"],
+      // Instructions written by whoever authored the skill; they guide the model but never authorize an action.
+      producesUntrusted: true,
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     })),
   };

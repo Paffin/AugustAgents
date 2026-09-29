@@ -25,8 +25,22 @@ export interface McpTool {
   annotations?: McpToolAnnotations;
 }
 
+/**
+ * One item of a tool result as the wire delivered it. The host, not the server,
+ * decides what trust each kind gets; nothing in here (annotations, audience,
+ * priority) is carried forward as a claim.
+ */
+export interface McpResultPart {
+  kind: "text" | "structured" | "resource" | "link" | "binary";
+  text: string;
+  /** Resource or link URI, when the item names one. */
+  uri?: string;
+}
+
 export interface McpCallResult {
+  /** All parts joined, for callers that only need text. */
   content: string;
+  parts: McpResultPart[];
   isError: boolean;
 }
 
@@ -89,12 +103,43 @@ export async function listToolsPaged(
   throw new McpError(`${id}: tools/list has too many pages`);
 }
 
+const MAX_URI_CHARS = 500;
+
+function resultParts(result: { content?: unknown; structuredContent?: unknown }): McpResultPart[] {
+  const parts: McpResultPart[] = [];
+  const items = Array.isArray(result.content) ? (result.content as Array<Record<string, unknown>>) : [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const type = typeof item.type === "string" ? item.type : "unknown";
+    if (type === "text" && typeof item.text === "string") { parts.push({ kind: "text", text: item.text }); continue; }
+    if (type === "resource" && item.resource && typeof item.resource === "object") {
+      const res = item.resource as { uri?: unknown; text?: unknown };
+      const uri = typeof res.uri === "string" ? res.uri.slice(0, MAX_URI_CHARS) : undefined;
+      parts.push(typeof res.text === "string" ? { kind: "resource", text: res.text, uri } : { kind: "binary", text: "[binary resource omitted]", uri });
+      continue;
+    }
+    if (type === "resource_link") {
+      const uri = typeof item.uri === "string" ? item.uri.slice(0, MAX_URI_CHARS) : undefined;
+      const name = typeof item.name === "string" ? item.name : "";
+      parts.push({ kind: "link", text: `[link] ${name} ${uri ?? ""}`.trim(), uri });
+      continue;
+    }
+    parts.push({ kind: "binary", text: `[${type} content omitted]` });
+  }
+  if (result.structuredContent !== undefined && result.structuredContent !== null) parts.push({ kind: "structured", text: JSON.stringify(result.structuredContent) });
+  return parts;
+}
+
 export function formatCallResult(result: unknown, maxChars: number): McpCallResult {
-  const r = result as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
-  const parts = (r.content ?? []).map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : `[${c.type ?? "unknown"} content omitted]`));
-  let content = parts.join("\n");
-  if (content.length > maxChars) content = `${content.slice(0, maxChars)}\n[truncated]`;
-  return { content, isError: r.isError === true };
+  const r = (result ?? {}) as { content?: unknown; structuredContent?: unknown; isError?: unknown };
+  let left = maxChars;
+  const parts: McpResultPart[] = [];
+  for (const part of resultParts(r)) {
+    if (left <= 0) break;
+    if (part.text.length > left) { parts.push({ ...part, text: `${part.text.slice(0, left)}\n[truncated]` }); left = 0; break; }
+    parts.push(part); left -= part.text.length;
+  }
+  return { content: parts.map((p) => p.text).join("\n"), parts, isError: r.isError === true };
 }
 
 interface Pending {

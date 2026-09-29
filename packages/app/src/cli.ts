@@ -52,8 +52,9 @@ function clip(value: unknown): string {
 
 export function terminalApprover(io: Pick<CliIo, "print" | "ask">): Approver {
   return {
+    channel: "terminal",
     async approve(request: ApprovalRequest): Promise<boolean> {
-      io.print(`\n? ${request.tool} wants to run: ${request.verdict.reason}`);
+      io.print(`\n? ${request.tool} wants to run: ${request.verdict.reason} (request ${request.ticket.id})`);
       if (request.details) io.print(`  ${request.details}`);
       for (const [k, v] of Object.entries(request.args)) io.print(`    ${k}: ${clip(v)}`);
       const answer = await io.ask("  Allow once? [y/N] ");
@@ -245,7 +246,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
   const config = loadConfig(configPath);
   const app = createApp(config, appDeps(io, configPath));
   await reportServers(app, io);
-  const approvals = new PendingApprovals();
+  const approvals = new PendingApprovals(app.approvals);
   const queue = new LaneQueue();
 
   let inner: RunningGateway;
@@ -256,7 +257,8 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     token: config.gateway.token,
     workspace: config.workspace,
     queue,
-    approvals,
+    // Telegram answers only through Telegram: a browser token must not be able to answer its approvals.
+    approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
     // The browser polls /v1/pending, so the prompt itself needs no push.
     onMessage: async ({ session, text }) => ({ reply: (await app.handle(session, text, approvals.approverFor(() => {}))).reply }),

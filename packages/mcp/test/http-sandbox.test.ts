@@ -59,7 +59,7 @@ describe("McpHttpConnection", () => {
     handler = () => undefined;
     const c = await McpHttpConnection.connect({ id: "web", url: url(), headers: { authorization: "Bearer T" } });
     expect((await c.listTools()).map((t) => t.name)).toEqual(["search"]);
-    expect(await c.callTool("search", { q: "bun" })).toEqual({ content: "found bun", isError: false });
+    expect(await c.callTool("search", { q: "bun" })).toEqual({ content: "found bun", isError: false, parts: [{ kind: "text", text: "found bun" }] });
     const later = seen.filter((s) => s.body?.method === "tools/list")[0]!;
     expect(later.headers.get("mcp-session-id")).toBe("sess-1");
     expect(later.headers.get("authorization")).toBe("Bearer T");

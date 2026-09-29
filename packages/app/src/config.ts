@@ -77,6 +77,10 @@ export interface McpServerConfig {
   envFrom?: string[];
   /** "verified" cannot be claimed by hand; it is earned by a signature. Default community. */
   trust?: "community" | "known" | "self-made";
+  /** How private this server's results are. Default "personal": it may hand back your files or mail. Only the owner can lower it. */
+  sensitivity?: "public" | "personal" | "secret";
+  /** Per tool (the server's own tool name): the arguments that hold the path a write or delete lands on. Without it, a writing tool asks every time. */
+  targetArgs?: Record<string, string[]>;
 }
 
 export class ConfigError extends Error {
@@ -264,8 +268,15 @@ function parseMcp(value: unknown): McpServerConfig[] {
     if (s.trust !== undefined && !["community", "known", "self-made"].includes(s.trust)) {
       throw new ConfigError(`${where}.trust must be community, known or self-made`);
     }
+    if (s.sensitivity !== undefined && !["public", "personal", "secret"].includes(s.sensitivity)) throw new ConfigError(`${where}.sensitivity must be public, personal or secret`);
+    if (s.targetArgs !== undefined) {
+      const ta = s.targetArgs as unknown;
+      if (!ta || typeof ta !== "object" || Array.isArray(ta) || !Object.values(ta).every((names) => Array.isArray(names) && names.length > 0 && names.every((n) => typeof n === "string" && n.length > 0))) {
+        throw new ConfigError(`${where}.targetArgs must map tool names to non-empty lists of argument names`);
+      }
+    }
     const out: McpServerConfig = { id: s.id };
-    for (const k of ["command", "url", "headersFrom", "sandbox", "network", "args", "env", "envFrom", "trust"] as const) {
+    for (const k of ["command", "url", "headersFrom", "sandbox", "network", "args", "env", "envFrom", "trust", "sensitivity", "targetArgs"] as const) {
       if (s[k] !== undefined) (out as unknown as Record<string, unknown>)[k] = s[k];
     }
     return out;

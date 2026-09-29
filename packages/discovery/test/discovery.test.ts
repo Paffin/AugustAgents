@@ -173,9 +173,9 @@ describe("skills", () => {
     expect(loadSkills(join(dir, "missing"))).toEqual({ skills: [], skipped: [] });
   });
 
-  test("skills become read-only tools", () => {
+  test("skills become read-only tools whose instructions are untrusted text", () => {
     const m = skillsManifest([{ name: "good", description: "A good skill", body: "b" }]);
-    expect(m.tools).toEqual([{ name: "skill.good", description: "A good skill", effects: ["read"], inputSchema: { type: "object", properties: {}, additionalProperties: false } }]);
+    expect(m.tools).toEqual([{ name: "skill.good", description: "A good skill", effects: ["read"], producesUntrusted: true, inputSchema: { type: "object", properties: {}, additionalProperties: false } }]);
   });
 
   test("GitHub folder links map to raw SKILL.md; other links are refused", async () => {

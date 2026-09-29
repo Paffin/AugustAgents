@@ -22,6 +22,8 @@ export interface Mandate {
   currency?: string;
   /** Default false: a mandate does not cover calls made from a tainted context. */
   allowTainted?: boolean;
+  /** Default false: a mandate that sends data out does not cover a context holding personal or secret content. */
+  allowSensitive?: boolean;
 }
 
 interface MandateState {

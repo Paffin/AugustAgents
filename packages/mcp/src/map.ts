@@ -38,7 +38,7 @@ export interface MappedTools {
   originals: Map<string, string>;
 }
 
-export function mapTools(serverId: string, tools: readonly McpTool[], trust: TrustLevel): MappedTools {
+export function mapTools(serverId: string, tools: readonly McpTool[], trust: TrustLevel, targetArgs: Readonly<Record<string, readonly string[]>> = {}): MappedTools {
   const descriptors: ToolDescriptor[] = [];
   const originals = new Map<string, string>();
   for (const tool of tools) {
@@ -50,6 +50,7 @@ export function mapTools(serverId: string, tools: readonly McpTool[], trust: Tru
       description: (tool.description ?? tool.name).slice(0, MAX_DESCRIPTION_CHARS),
       effects: inferEffects(tool, trust),
       producesUntrusted: producesUntrusted(tool, trust),
+      ...(Object.hasOwn(targetArgs, tool.name) ? { targetArgs: targetArgs[tool.name] } : {}),
       inputSchema: tool.inputSchema ?? { type: "object", additionalProperties: true },
     });
   }

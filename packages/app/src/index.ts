@@ -5,3 +5,4 @@ export * from "./secrets.ts";
 export * from "./meta.ts";
 export * from "./bootstrap.ts";
 export * from "./cli.ts";
+export * from "./targets.ts";
