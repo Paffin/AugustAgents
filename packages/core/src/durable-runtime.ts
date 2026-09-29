@@ -39,7 +39,7 @@ const TRANSITIONS: Record<RunState, ReadonlySet<RunState>> = {
   completed: new Set(), failed: new Set(), cancelled: new Set(),
 };
 
-function normalizeBudget(partial: RunBudgetRequest = {}): RunBudget {
+export function normalizeRunBudget(partial: RunBudgetRequest = {}): RunBudget {
   const b: RunBudget = { ...DEFAULT_BUDGET, ...partial };
   for (const name of ["maxSteps", "maxWallMs", "maxExternalEffects", "maxTokens"] as const) if (!Number.isSafeInteger(b[name]) || b[name] <= 0) throw new Error(`${name} must be a positive integer`);
   if (!Number.isSafeInteger(b.maxCostMicros) || b.maxCostMicros < 0) throw new Error("maxCostMicros must be a non-negative integer");
@@ -139,7 +139,7 @@ export class DurableRuntimeStore {
     return selected.reverse();
   }
   startRun(input: StartRunInput): { run: DurableRun; replayed: boolean } {
-    const budget = normalizeBudget(input.budget); const fp = fingerprint(input.request, budget); const now = input.now ?? Date.now();
+    const budget = normalizeRunBudget(input.budget); const fp = fingerprint(input.request, budget); const now = input.now ?? Date.now();
     return this.db.transaction(() => {
       if (input.idempotencyKey) {
         const found = this.db.query("SELECT * FROM runs WHERE session=? AND idempotency_key=?").get(input.session, input.idempotencyKey) as RunRow | null;
@@ -174,7 +174,7 @@ export class DurableRuntimeStore {
 interface MessageRow { session: string; seq: number; role: MessageRole; content: string; created_at: number }
 interface RunRow { id: string; session: string; state: RunState; request: string; request_fingerprint: string; idempotency_key: string | null; reply: string | null; error: string | null; budget_json: string; steps: number; external_effects: number; input_tokens: number; output_tokens: number; cost_micros: number; checkpoint_json: string | null; retry_of: string | null; created_at: number; updated_at: number }
 function parseBudget(json: string): RunBudget { try { const b = JSON.parse(json) as Partial<RunBudget>; if (![b.maxSteps, b.maxWallMs, b.maxExternalEffects, b.maxTokens].every((v) => Number.isSafeInteger(v) && (v as number) > 0) || !Number.isSafeInteger(b.maxCostMicros) || (b.maxCostMicros as number) < 0) throw new Error(); return b as RunBudget; } catch { throw new Error("invalid persisted run budget"); } }
-function parseLegacyBudget(json: string): RunBudget { const b = JSON.parse(json) as Record<string, unknown>; if (![b.maxSteps, b.maxWallMs, b.maxExternalEffects].every((value) => Number.isSafeInteger(value) && (value as number) > 0) || b.maxTokens !== "unavailable" || b.maxCostMicros !== "unavailable") throw new Error("invalid persisted run budget"); return normalizeBudget({ maxSteps: b.maxSteps as number, maxWallMs: b.maxWallMs as number, maxExternalEffects: b.maxExternalEffects as number }); }
+function parseLegacyBudget(json: string): RunBudget { const b = JSON.parse(json) as Record<string, unknown>; if (![b.maxSteps, b.maxWallMs, b.maxExternalEffects].every((value) => Number.isSafeInteger(value) && (value as number) > 0) || b.maxTokens !== "unavailable" || b.maxCostMicros !== "unavailable") throw new Error("invalid persisted run budget"); return normalizeRunBudget({ maxSteps: b.maxSteps as number, maxWallMs: b.maxWallMs as number, maxExternalEffects: b.maxExternalEffects as number }); }
 function validateUsage(usage: UsageDelta): void { if (![usage.inputTokens, usage.outputTokens, usage.totalTokens].every((v) => Number.isSafeInteger(v) && v >= 0) || usage.inputTokens + usage.outputTokens !== usage.totalTokens) throw new Error("invalid provider usage"); }
 function validatePricing(pricing: UsagePricing): void { if (![pricing.inputMicrosPerMillion, pricing.outputMicrosPerMillion].every((v) => Number.isSafeInteger(v) && v >= 0)) throw new Error("invalid usage pricing"); }
 function toRun(r: RunRow): DurableRun { const usage = { inputTokens:r.input_tokens, outputTokens:r.output_tokens, totalTokens:r.input_tokens+r.output_tokens, costMicros:r.cost_micros }; return { id:r.id, session:r.session as SessionKey, state:r.state, request:r.request, requestFingerprint:r.request_fingerprint, idempotencyKey:r.idempotency_key ?? undefined, reply:r.reply ?? undefined, error:r.error ?? undefined, budget:parseBudget(r.budget_json), usage, steps:r.steps, externalEffects:r.external_effects, checkpoint:r.checkpoint_json ? JSON.parse(r.checkpoint_json) as RunCheckpoint : undefined, retryOf:r.retry_of ?? undefined, createdAt:r.created_at, updatedAt:r.updated_at }; }

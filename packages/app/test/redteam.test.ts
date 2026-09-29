@@ -14,7 +14,8 @@ import { CapabilityRegistry, type ToolDescriptor } from "@august/capabilities";
 import { EventJournal, makeSessionKey } from "@august/core";
 import { loadSkills, planInstall } from "@august/discovery";
 import { PolicyEngine, fenceUntrusted } from "@august/policy";
-import { FileStore, createApp, defaultConfig } from "../src/index.ts";
+import { FileStore, createApp } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 const session = makeSessionKey({ workspace: "home", channel: "cli", user: "dan" });
 const dirs: string[] = [];

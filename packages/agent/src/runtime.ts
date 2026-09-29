@@ -197,6 +197,8 @@ export interface AgentExecutionContext {
   onUsage?: LlmUsageObserver;
   remainingTokens?: () => number;
   usageExhaustion?: () => "token-budget" | "cost-budget" | undefined;
+  /** Admission check for a billable model call; zero-cost compiled work can still run. */
+  modelBudgetExhaustion?: () => "token-budget" | "cost-budget" | undefined;
   redactCheckpoint?: (text: string) => string;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
   /**
@@ -310,7 +312,12 @@ export class AgentRuntime {
       if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) throw new RunControlError("deadline");
       const exhausted = context.usageExhaustion?.(); if (exhausted) throw new RunControlError(exhausted);
     };
-    const llmControls = (): LlmCallControls => ({ onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: control });
+    const modelControl = (): void => {
+      control();
+      const exhausted = context.modelBudgetExhaustion?.();
+      if (exhausted) throw new RunControlError(exhausted);
+    };
+    const llmControls = (): LlmCallControls => ({ onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: modelControl });
     const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
       try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history, context.redactCheckpoint), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
       catch (error) { throw new AgentCheckpointError(error); }
@@ -510,7 +517,8 @@ export class AgentRuntime {
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });
-        return { reply: `Stopped: ${error.reason}.`, steps, tainted: taint.snapshot().tainted, stopReason: error.reason };
+        const reason = error.reason === "cost-budget" ? "the configured cost threshold was reached" : error.reason === "token-budget" ? "the configured token threshold was reached" : error.reason;
+        return { reply: `Stopped: ${reason}.`, steps, tainted: taint.snapshot().tainted, stopReason: error.reason };
       }
       const name = (error as Error).name;
       log("task.error", { name });

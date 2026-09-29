@@ -7,7 +7,8 @@ import type { RunTrace, TraceDecision, TraceExecution } from "@august/agent";
 import type { LlmProvider } from "@august/brain";
 import { makeSessionKey } from "@august/core";
 import { OWNER_VERIFIER, recordOwnerFeedback } from "@august/learning";
-import { FileStore, createApp, defaultConfig, defaultConfigPath, loadConfig, main, writeConfig, type App, type CliIo } from "../src/index.ts";
+import { FileStore, createApp, defaultConfigPath, loadConfig, main, writeConfig, type App, type CliIo } from "../src/index.ts";
+import { defaultConfig, configureTestPricing } from "./config-fixture.ts";
 
 // Suite category: Product behavior and Safety/security invariant, through the composition root (REQ-FUNC-003, REQ-PERF-001; DEC-0004).
 const dirs: string[] = [];
@@ -124,7 +125,7 @@ describe("Laya activation and calibration use verified outcomes", () => {
   const withLaya = (home: string) => { const path = defaultConfigPath(home); const cfg = defaultConfig(home); writeConfig(path, { ...cfg, laya: { url: "http://127.0.0.1:7788" } }); return { path, cfg }; };
 
   test("agreement with the LLM, however high, does not activate; verified outcomes do, and the override is recorded", async () => {
-    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io);
+    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io); configureTestPricing(io.home);
     const { path, cfg } = withLaya(home);
     writeFileSync(join(cfg.dataDir, "cascade.json"), JSON.stringify({ shadowSamples: 900, shadowAgreements: 890 }));
     expect((await main(["laya", "status"], io)).code).toBe(0);
@@ -142,7 +143,7 @@ describe("Laya activation and calibration use verified outcomes", () => {
   });
 
   test("--force is the owner overriding missing evidence, and is journaled as such", async () => {
-    const home = tmp(); const { io } = cliIo(home); await main(["init"], io); const { path } = withLaya(home);
+    const home = tmp(); const { io } = cliIo(home); await main(["init"], io); configureTestPricing(io.home); const { path } = withLaya(home);
     expect((await main(["laya", "activate", "--force"], io)).code).toBe(0);
     expect(loadConfig(path).laya?.shadow).toBe(false);
     const app = open(home, scripted([{ tool: "none" }])); const ev = app.journal.list().find((e) => e.kind === "laya.activated")!; app.close();
@@ -150,7 +151,7 @@ describe("Laya activation and calibration use verified outcomes", () => {
   });
 
   test("calibrate needs verified data, fits one temperature per language and question, and writes an owner-only table", async () => {
-    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io); const { cfg } = withLaya(home);
+    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io); configureTestPricing(io.home); const { cfg } = withLaya(home);
     expect((await main(["calibrate"], io)).code).toBe(1); expect(out.join("\n")).toContain("needs at least 50");
     const app = open(home, scripted([{ tool: "none" }]));
     seed(app, 80, 76, 0.99, "latin");       // nearly always right
@@ -166,7 +167,7 @@ describe("Laya activation and calibration use verified outcomes", () => {
   });
 
   test("labels come from verified outcomes only: failed, unresolved and tainted decisions add no calibration data", async () => {
-    const home = tmp(); const { io } = cliIo(home); await main(["init"], io); withLaya(home);
+    const home = tmp(); const { io } = cliIo(home); await main(["init"], io); configureTestPricing(io.home); withLaya(home);
     const app = open(home, scripted([{ tool: "none" }]));
     seed(app, 60, 60, 0.9);                                                        // verified correct: the only labels
     seed(app, 20, 20, 0.99, "latin", { feedback: "failure", prefix: "failed" });   // verified wrong: no label
@@ -180,7 +181,7 @@ describe("Laya activation and calibration use verified outcomes", () => {
   });
 
   test("a damaged calibration table is ignored, not half-applied, and the app still starts", async () => {
-    const home = tmp(); const { io } = cliIo(home); await main(["init"], io); const { cfg } = withLaya(home);
+    const home = tmp(); const { io } = cliIo(home); await main(["init"], io); configureTestPricing(io.home); const { cfg } = withLaya(home);
     writeFileSync(join(cfg.dataDir, "calibration.json"), JSON.stringify({ version: 1, engine: "laya", fittedAt: "x", minSamples: 30, fits: { a: { level: "exact", temperature: -3, samples: 5, eceBefore: 0, eceAfter: 0 } } }));
     const app = createApp(loadConfig(defaultConfigPath(home)), { env: {}, home, llm: scripted([{ tool: "none" }]), secrets: new FileStore(join(home, ".august")), sandboxKind: "none" });
     expect((await app.handle(session, "hi")).reply).toBe("done"); app.close();
@@ -192,14 +193,14 @@ describe("chat feedback and the learn commands", () => {
   test("/good and /bad judge the last answer; an answer can be judged once; there is nothing to judge before the first", async () => {
     const home = tmp(); const answers = ["/good", "hi", "/good", "/bad", "exit"]; const out: string[] = [];
     const io: CliIo = { print: (l) => void out.push(l), ask: async () => answers.shift() ?? null, env: {}, home, sandboxKind: "none", secrets: new FileStore(join(home, ".august")), llm: scripted([{ tool: "none" }], "hello there") };
-    await main(["init"], io); await main(["chat"], io);
+    await main(["init"], io); configureTestPricing(io.home); await main(["chat"], io);
     expect(out.filter((l) => l === "There is no answer to judge yet.")).toHaveLength(1);
     expect(out).toContain("Noted. Thank you."); expect(out).toContain("You already told me about that answer.");
     const app = open(home, scripted([{ tool: "none" }])); expect(app.learning.examples().examples[0]).toMatchObject({ reward: 1 }); app.close();
   });
 
   test("learn status, report, export and feedback", async () => {
-    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io);
+    const home = tmp(); const { io, out } = cliIo(home); await main(["init"], io); configureTestPricing(io.home);
     const app = open(home, scripted([{ tool: "clock.now" }])); const r = await app.handle(session, "time please"); app.close();
     await main(["learn", "status"], io); expect(out.join("\n")).toContain("Training examples (verified, untainted): 1");
     await main(["learn", "report"], io); expect(out.join("\n")).toMatch(/llm: 1 runs, 1 verified, success 100%/);

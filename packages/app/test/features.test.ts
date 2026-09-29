@@ -13,7 +13,6 @@ import {
   MetaExecutor,
   SecretServiceStore,
   createApp,
-  defaultConfig,
   defaultConfigPath,
   loadConfig,
   main,
@@ -23,6 +22,7 @@ import {
   type CliIo,
   type Runner,
 } from "../src/index.ts";
+import { defaultConfig, configureTestPricing } from "./config-fixture.ts";
 
 const dirs: string[] = [];
 const tmp = () => {
@@ -102,7 +102,7 @@ describe("secret stores", () => {
 describe("august setup (three questions)", () => {
   test("OpenAI: key goes to the store, never into the config file", async () => {
     const home = tmp();
-    const { io, out } = makeIo(home, ["1", "", "sk-live-abc", "1"]);
+    const { io, out } = makeIo(home, ["1", "150000/600000", "", "sk-live-abc", "1"]);
     expect((await main(["setup"], io)).code).toBe(0);
     const raw = readFileSync(defaultConfigPath(home), "utf8");
     expect(raw).not.toContain("sk-live-abc");
@@ -148,7 +148,7 @@ describe("secret, mcp, laya, calibrate, doctor commands", () => {
   test("mcp list and rm edit the config", async () => {
     const home = tmp();
     const { io, out } = makeIo(home);
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const path = defaultConfigPath(home);
     writeConfig(path, { ...loadConfig(path), mcp: [{ id: "gh", command: "npx", args: ["-y", "x@1"] }] });
     await main(["mcp", "list"], io);
@@ -169,7 +169,7 @@ describe("secret, mcp, laya, calibrate, doctor commands", () => {
 
   test("mcp allow/deny edit a server's egress hosts, list shows what it can reach, and rm deletes the installed package", async () => {
     const home = tmp(); const { io, out } = makeIo(home);
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const path = defaultConfigPath(home); const cfg = loadConfig(path);
     const pin = { registry: "npm" as const, name: "p", version: "1.0.0", integrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`, treeSha256: "a".repeat(64), signature: "npm-registry-ecdsa" as const, entry: { runtime: "node" as const, file: "node_modules/p/bin.js" }, verifiedAt: "2026-01-01T00:00:00.000Z" };
     writeConfig(path, { ...cfg, mcp: [{ id: "probe", artifact: pin, trust: "community" }] });
@@ -192,7 +192,7 @@ describe("secret, mcp, laya, calibrate, doctor commands", () => {
     const home = tmp();
     const { io, out } = makeIo(home);
     expect((await main(["doctor"], io)).code).toBe(1);
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const path = defaultConfigPath(home);
     writeConfig(path, { ...loadConfig(path), mcp: [{ id: "gh", command: "npx", envFrom: ["GITHUB_TOKEN"] }] });
     out.length = 0;
@@ -396,7 +396,7 @@ describe("finding and installing capabilities", () => {
     const { io, out } = makeIo(home, ["I need weather forecasts, find and install a tool", "y", "exit"], { llm, fetch: registryFetch(), env: { OPENAI_API_KEY: "k" }, sandboxKind: "bwrap" });
     const ask = io.ask;
     io.ask = async (p) => (prompts.push(p), ask(p));
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const cfgPath = defaultConfigPath(home);
     const npm = fakeNpm([{ name: "@acme/weather-mcp", version: "2.0.0" }]);
     writeConfig(cfgPath, { ...loadConfig(cfgPath), registryUrl: "https://reg.example", npmRegistryUrl: npm.url });
@@ -443,7 +443,7 @@ describe("finding and installing capabilities", () => {
       env: { OPENAI_API_KEY: "k" },
       fetch: registryFetch({ [`https://raw.githubusercontent.com/acme/skills/${GITHUB_SHA}/trip-planner/SKILL.md`]: skill }),
     });
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     await main(["chat"], io);
     const cfg = loadConfig(defaultConfigPath(home));
     expect(existsSync(join(cfg.skillsDir, "trip-planner", "SKILL.md"))).toBe(true);
@@ -461,7 +461,7 @@ describe("august serve", () => {
     try {
       const home = tmp();
       const { io, out } = makeIo(home, [], { env: { OPENAI_API_KEY: "k" } });
-      await main(["init"], io);
+      await main(["init"], io); configureTestPricing(io.home);
       const path = defaultConfigPath(home);
       const cfg = loadConfig(path);
       writeConfig(path, { ...cfg, gateway: { ...cfg.gateway, port: blocker.port! } });
@@ -486,7 +486,7 @@ describe("august serve", () => {
     };
     const skill = "---\nname: notes\ndescription: Take notes\n---\nWrite it down.";
     const { io } = makeIo(home, [], { llm, env: { OPENAI_API_KEY: "k" }, fetch: registryFetch({ "https://raw.githubusercontent.com/": skill }) });
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const path = defaultConfigPath(home);
     const port = 24000 + Math.floor(Math.random() * 20000);
     const cfg = loadConfig(path);

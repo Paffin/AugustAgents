@@ -13,7 +13,6 @@ import {
   MAX_READ_BYTES,
   PathEscapeError,
   createApp as composeApp,
-  defaultConfig,
   defaultConfigPath,
   loadConfig,
   main,
@@ -23,6 +22,8 @@ import {
   writeConfig,
   type CliIo,
 } from "../src/index.ts";
+import { defaultConfig, configureTestPricing } from "./config-fixture.ts";
+import { defaultConfig as productionTemplate, resolveLlmPricing } from "../src/config.ts";
 
 const dirs: string[] = [];
 function tmp(): string {
@@ -66,10 +67,23 @@ describe("config", () => {
   });
 
   test("Product behavior: pricing is explicit and unknown remote models fail before a run", () => {
+    expect(productionTemplate("/home/u").llm.pricing).toBeUndefined();
     expect(good().llm.pricing).toMatchObject({ inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000, asOf: "2026-09-29" });
     expect(() => parseConfig({ ...good(), llm: { ...good().llm, pricing: { inputMicrosPerMillion: -1, outputMicrosPerMillion: 1, source: "x", asOf: "2026-09-29" } } })).toThrow(/pricing/);
     const home = tmp(); const unknown = { ...defaultConfig(home), llm: { baseUrl: "https://llm.example/v1", model: "custom" } };
     expect(() => createApp(unknown, { env: {}, llm: { name: "unused", complete: async () => "unused" } })).toThrow(/pricing is missing/);
+  });
+
+  test("Product behavior (REQ-REL-002): known names do not invent prices; explicit free and proxy tariffs survive", () => {
+    for (const llm of [{ baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }, { baseUrl: "https://openrouter.ai/api/v1", model: "qwen/qwen3-32b" }]) {
+      expect(() => resolveLlmPricing({ ...good(), llm })).toThrow(/pricing is missing/);
+    }
+    const free = { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "owner quote", asOf: "2026-01-01" };
+    expect(resolveLlmPricing({ ...good(), llm: { ...good().llm, pricing: free } })).toEqual(free);
+    const paid = { ...free, inputMicrosPerMillion: 17 };
+    expect(resolveLlmPricing({ ...good(), llm: { baseUrl: "http://localhost:8888/v1", model: "proxy-model", pricing: paid } })).toEqual(paid);
+    expect(() => resolveLlmPricing({ ...good(), llm: { baseUrl: "http://localhost:8888/v1", model: "local" } })).toThrow(/pricing is missing/);
+    expect(() => parseConfig({ ...good(), llm: { ...good().llm, pricing: { ...free, asOf: "2026-02-31" } } })).toThrow(/calendar date/);
   });
 
   test("the file is private and round-trips", () => {
@@ -200,7 +214,8 @@ describe("cli", () => {
     expect((await main(["init"], io)).code).toBe(0);
     const cfg = loadConfig(defaultConfigPath(home));
     expect(readFileSync(join(cfg.root, "welcome.md"), "utf8")).toContain("Welcome");
-    expect(out.join("\n")).toContain("august secret set OPENAI_API_KEY");
+    expect(out.join("\n")).toContain("august setup");
+    expect(cfg.llm.pricing).toBeUndefined();
     const token = cfg.gateway.token;
     expect((await main(["init"], io)).code).toBe(1);
     expect(loadConfig(defaultConfigPath(home)).gateway.token).toBe(token);
@@ -218,7 +233,7 @@ describe("cli", () => {
     const home = tmp();
     const llm = scriptedLlm({ tool: "fs.read", args: { path: "welcome.md" }, reply: "It says Welcome." });
     const { io, out } = makeIo(home, ["what is in welcome.md? read the file", "exit"], llm);
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     expect((await main(["chat"], io)).code).toBe(0);
     expect(out).toContain("It says Welcome.");
     const cfg = loadConfig(defaultConfigPath(home));
@@ -229,14 +244,14 @@ describe("cli", () => {
   test("chat ends cleanly when input ends", async () => {
     const home = tmp();
     const { io } = makeIo(home, [null]);
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     expect((await main(["chat"], io)).code).toBe(0);
   });
 
   test("serve starts a loopback gateway that needs the token", async () => {
     const home = tmp();
     const { io } = makeIo(home, [], scriptedLlm({ tool: "none", args: {}, reply: "hi from gateway" }));
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const cfg = loadConfig(defaultConfigPath(home));
     const port = 21000 + Math.floor(Math.random() * 20000);
     writeConfig(defaultConfigPath(home), { ...cfg, gateway: { ...cfg.gateway, port } });
@@ -264,7 +279,7 @@ describe("createApp", () => {
 
   test("a local model needs no key", () => {
     const home = tmp();
-    const cfg = { ...defaultConfig(home), llm: { baseUrl: "http://localhost:11434/v1", model: "qwen", apiKeyEnv: "OPENAI_API_KEY" } };
+    const cfg = { ...defaultConfig(home), llm: { baseUrl: "http://localhost:11434/v1", model: "qwen", apiKeyEnv: "OPENAI_API_KEY", pricing: { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "owner local quote", asOf: new Date().toISOString().slice(0, 10) } } };
     expect(() => createApp(cfg, { env: {} })).not.toThrow();
   });
 
@@ -318,6 +333,22 @@ describe("createApp", () => {
       expect(result).toMatchObject({ stopReason: reason, steps: 0 }); expect(calls).toBe(1); expect(run).toMatchObject({ state: "failed", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costMicros: 1 } }); app.close();
       const reopened = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "unused") }); expect(reopened.getRun(result.runId)?.usage).toEqual(run.usage); reopened.close();
     }
+  });
+
+  test("Safety/reliability (REQ-REL-002): zero money starts no paid generation while explicit free generation works", async () => {
+    let calls = 0;
+    const paid = createApp(defaultConfig(tmp()), { env: {}, llm: contextualLlm(() => { calls++; return "unwanted"; }) });
+    const stopped = await paid.handle(runtimeSession, "hi", undefined, { budget: { maxCostMicros: 0 } });
+    expect(stopped.stopReason).toBe("cost-budget");
+    expect(calls).toBe(0);
+    expect(paid.getRun(stopped.runId)?.usage.totalTokens).toBe(0);
+    paid.close();
+    const cfg = defaultConfig(tmp()); cfg.llm.pricing = { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "owner free quote", asOf: "2026-01-01" };
+    const free = createApp(cfg, { env: {}, llm: contextualLlm(() => "free reply") });
+    const result = await free.handle(runtimeSession, "hi", undefined, { budget: { maxCostMicros: 0 } });
+    expect(result.reply).toBe("free reply");
+    expect(free.getRun(result.runId)?.usage.costMicros).toBe(0);
+    free.close();
   });
 
   test("Safety/reliability invariant: missing usage fails and accounting persistence errors propagate", async () => {
@@ -416,7 +447,7 @@ describe("mcp servers from the config", () => {
     const home = tmp();
     const llm = scriptedLlm({ tool: "fake.echo", args: { text: "pong" }, reply: "The server said pong." });
     const { io, out, prompts } = makeIo(home, ["echo pong with the fake server", "n", "echo pong with the fake server", "y", "exit"], llm);
-    await main(["init"], io);
+    await main(["init"], io); configureTestPricing(io.home);
     const path = defaultConfigPath(home);
     const cfg = loadConfig(path);
     // The owner explicitly runs this community server without a sandbox: the only way to do so.

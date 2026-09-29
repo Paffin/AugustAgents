@@ -3,7 +3,8 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, sta
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { EncryptedFileStore, FileStore, MasterKeyError, SecretError, createApp, defaultConfig, defaultConfigPath, deriveKey, keyFromRecoveryCode, loadMasterKey, main, openSecretStore, recoveryCode, writeConfig, type CliIo } from "../src/index.ts";
+import { EncryptedFileStore, FileStore, MasterKeyError, SecretError, createApp, defaultConfigPath, deriveKey, keyFromRecoveryCode, loadMasterKey, main, openSecretStore, recoveryCode, writeConfig, type CliIo } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 // Suite category: Safety/security invariant (REQ-SEC-004): secrets encrypted at rest under a key outside the data folder, recoverable; theft and tamper tests.
 const dirs: string[] = [];

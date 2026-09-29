@@ -431,6 +431,10 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
         onUsage: async (usage) => { llmCalls += 1; usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
         remainingTokens: () => { const current = runs.getRun(run.id)!; return Math.max(1, current.budget.maxTokens - current.usage.totalTokens); },
         usageExhaustion: () => usageStop,
+        modelBudgetExhaustion: () => {
+          const current = runs.getRun(run.id)!;
+          return (pricing.inputMicrosPerMillion > 0 || pricing.outputMicrosPerMillion > 0) && current.usage.costMicros >= current.budget.maxCostMicros ? "cost-budget" : undefined;
+        },
         onEvent: (event) => {
           if (event.type !== "checkpoint") return;
           runs.checkpoint(run.id, event);

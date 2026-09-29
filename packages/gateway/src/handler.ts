@@ -1,4 +1,4 @@
-import { LaneQueue, QueueOverflowError, makeSessionKey, type SessionKey } from "@august/core";
+import { LaneQueue, QueueOverflowError, makeSessionKey, normalizeRunBudget, type RunBudgetRequest, type SessionKey } from "@august/core";
 import {
   allowedHostHeaders,
   allowedOriginList,
@@ -16,6 +16,7 @@ export type FeedbackSink = (input: { session: SessionKey; runId: string; verdict
 export interface IncomingMessage {
   session: SessionKey;
   text: string;
+  budget?: RunBudgetRequest;
 }
 
 export interface ApprovalView {
@@ -200,9 +201,13 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       } catch {
         return json(400, { error: "invalid JSON" });
       }
-      const { channel, user, text } = (payload ?? {}) as Record<string, unknown>;
+      const { channel, user, text, budget } = (payload ?? {}) as Record<string, unknown>;
       if (typeof channel !== "string" || typeof user !== "string" || typeof text !== "string" || text.length === 0) {
         return json(400, { error: "channel, user and text are required strings" });
+      }
+      if (budget !== undefined) {
+        if (!budget || typeof budget !== "object" || Array.isArray(budget) || Object.keys(budget).some((key) => !["maxSteps", "maxWallMs", "maxExternalEffects", "maxTokens", "maxCostMicros"].includes(key))) return json(400, { error: "invalid budget" });
+        try { normalizeRunBudget(budget as RunBudgetRequest); } catch { return json(400, { error: "invalid budget" }); }
       }
       let session: SessionKey;
       try {
@@ -211,7 +216,7 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
         return json(400, { error: "invalid channel or user" });
       }
       try {
-        const result = await queue.enqueue(session, () => options.onMessage({ session, text }));
+        const result = await queue.enqueue(session, () => options.onMessage({ session, text, ...(budget === undefined ? {} : { budget: budget as RunBudgetRequest }) }));
         return json(200, { reply: result.reply, ...(result.runId ? { runId: result.runId } : {}) });
       } catch (error) {
         if (error instanceof QueueOverflowError) return json(429, { error: "too many pending messages" });

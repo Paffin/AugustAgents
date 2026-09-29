@@ -23,6 +23,9 @@ export const WEB_HTML = `<!doctype html>
   .judge { margin-top:8px; font-size:13px; color:var(--muted); }
   .judge button { margin-right:8px; padding:4px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; font:inherit; font-size:13px; }
   form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); max-width:760px; width:100%; margin:0 auto; }
+  .budgets { display:flex; flex-wrap:wrap; gap:12px; padding:8px 16px; max-width:760px; width:100%; margin:0 auto; font-size:13px; color:var(--muted); }
+  .budgets label { flex:1; min-width:150px; }
+  .budgets input { display:block; width:100%; margin-top:4px; font-size:13px; }
   input { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--fg); background:var(--card); color:var(--fg); font:inherit; }
   button[type=submit] { padding:10px 16px; border-radius:10px; border:none; background:var(--accent); color:var(--on-accent); font:inherit; cursor:pointer; }
   :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
@@ -33,6 +36,10 @@ export const WEB_HTML = `<!doctype html>
 <header><h1>August</h1></header>
 <main>
 <div id="log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" tabindex="0"><p class="muted" id="hint"></p></div>
+<section class="budgets" aria-label="Optional task limits">
+<label for="token-budget">Token limit<input id="token-budget" inputmode="numeric" placeholder="Default"></label>
+<label for="money-budget">Cost stop threshold (USD estimate)<input id="money-budget" inputmode="decimal" placeholder="Default"></label>
+</section>
 <form id="form"><label class="sr" for="text">Message to August</label><input id="text" autocomplete="off" placeholder="Message"><button type="submit">Send</button></form>
 </main>
 <script src="/app.js"></script>
@@ -102,11 +109,26 @@ export const WEB_JS = `(() => {
   form.onsubmit = async (e) => {
     e.preventDefault();
     const text = input.value.trim(); if (!text || !token) return;
+    const budget = {};
+    const tokens = document.getElementById("token-budget").value.trim();
+    const dollars = document.getElementById("money-budget").value.trim().replace(",", ".");
+    if (tokens) {
+      const value = Number(tokens);
+      if (!/^[0-9]+$/.test(tokens) || !Number.isSafeInteger(value) || value < 1) { add("Enter a positive whole token limit."); return; }
+      budget.maxTokens = value;
+    }
+    if (dollars) {
+      if (!/^[0-9]+([.][0-9]{1,6})?$/.test(dollars)) { add("Enter a non-negative USD limit with up to six decimal places."); return; }
+      const [whole, fraction = ""] = dollars.split(".");
+      const micros = BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, "0"));
+      if (micros > BigInt(Number.MAX_SAFE_INTEGER)) { add("The cost limit is too large."); return; }
+      budget.maxCostMicros = Number(micros);
+    }
     input.value = ""; add(text, "me");
     const wait = add("…", "muted");
     const timer = setInterval(() => checkPending().catch(() => {}), 1000);
     try {
-      const r = await fetch("/v1/message", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, text }) });
+      const r = await fetch("/v1/message", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, text, ...(Object.keys(budget).length ? { budget } : {}) }) });
       const body = await r.json().catch(() => ({}));
       wait.remove(); const shownReply = add(r.ok ? body.reply : "Error: " + (body.error || r.status));
       if (r.ok && body.runId) judge(shownReply, body.runId);

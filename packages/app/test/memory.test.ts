@@ -5,7 +5,8 @@ import { join } from "node:path";
 import type { Approver } from "@august/agent";
 import type { LlmProvider } from "@august/brain";
 import { makeSessionKey } from "@august/core";
-import { FileStore, createApp, defaultConfig, defaultConfigPath, main, writeConfig, type App, type AugustConfig, type CliIo } from "../src/index.ts";
+import { FileStore, createApp, defaultConfigPath, main, writeConfig, type App, type AugustConfig, type CliIo } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 // Suite category: Product behavior (memory persists and is recalled) and Safety/security invariant (memory poisoning, isolation, deletion, opt-in retention), through the composition root (REQ-FUNC-005, REQ-SEC-001).
 const dirs: string[] = [];

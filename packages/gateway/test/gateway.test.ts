@@ -116,6 +116,22 @@ describe("request guards", () => {
 });
 
 describe("POST /v1/message", () => {
+  test("Product behavior (REQ-REL-002): validated owner budgets reach the runtime including zero cost", async () => {
+    let received: unknown;
+    const { handler } = make({ onMessage: async (message) => { received = message.budget; return { reply: "accepted" }; } });
+    const budget = { maxTokens: 1200, maxCostMicros: 0 };
+    expect((await handler(post({ ...valid, budget }))).status).toBe(200);
+    expect(received).toEqual(budget);
+  });
+
+  test("Safety/reliability (REQ-REL-002): malformed budget never creates a runtime request", async () => {
+    const { handler, seen } = make();
+    for (const budget of [null, [], "wrong", { maxTokens: 0 }, { maxCostMicros: -1 }, { maxCostMicros: 0.1 }, { maxCostMicros: Number.MAX_SAFE_INTEGER + 1 }, { invented: 1 }]) {
+      expect((await handler(post({ ...valid, budget }))).status).toBe(400);
+    }
+    expect(seen).toHaveLength(0);
+  });
+
   test("routes to the agent under a structured session key", async () => {
     const { handler, seen } = make();
     const res = await handler(post(valid));

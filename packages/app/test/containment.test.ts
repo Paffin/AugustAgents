@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { LlmProvider } from "@august/brain";
 import { detectSandbox } from "@august/mcp";
 import { cleanupFakeNpm, fakeRegistry } from "../../discovery/test/fake-npm.ts";
-import { FileStore, createApp, defaultConfig, defaultConfigPath, parseConfig, writeConfig, type App } from "../src/index.ts";
+import { FileStore, createApp, defaultConfigPath, parseConfig, writeConfig, type App } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 // Suite category: Safety/security invariant, exfiltration and supply-chain tests (REQ-SEC-003). A hostile "registry" package is installed
 // through the real pipeline and started inside the real OS sandbox; what it can observe about the machine is asserted, not assumed.

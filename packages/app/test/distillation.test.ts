@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@august/brain";
 import { makeSessionKey } from "@august/core";
-import { FileStore, createApp, defaultConfig, defaultConfigPath, main, writeConfig, type App, type CliIo } from "../src/index.ts";
+import { FileStore, createApp, defaultConfigPath, main, writeConfig, type App, type CliIo } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 // Suite category: Product behavior (repeated verified work stops needing the model) and Safety/security invariant (the compiled path is as gated and as evidence-driven as the model path), through the composition root (DEC-0005).
 const dirs: string[] = [];
@@ -51,10 +52,12 @@ describe("repeated verified work is distilled and then runs without the model ch
     for (let i = 0; i < 9; i++) await app.handle(session, "what time is it");
     expect(app.distill.report().patterns[0]!.stage).toBe("reflex");
     const before = { ...llm.calls };
-    const r = await app.handle(session, "what time is it");
+    const r = await app.handle(session, "what time is it", undefined, { budget: { maxCostMicros: 0 } });
     expect(r.compiled).toEqual({ steps: 1, completed: true });
     expect(r.reply).toContain("Result of clock.now");
     expect(llm.calls).toEqual(before);
+    expect(r.stopReason).toBeUndefined();
+    expect(app.getRun(r.runId)?.usage.costMicros).toBe(0);
     app.close();
     const lines: string[] = [];
     const io: CliIo = { print: (l) => void lines.push(l), ask: async () => null, env: {}, home, sandboxKind: "none", secrets: new FileStore(join(home, ".august")), llm: { name: "none", complete: async () => "" } };

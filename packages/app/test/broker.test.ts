@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, FileStore, KeychainStore, SecretBroker, SecretDeliveryError, SecretError, SecretServiceStore, defaultConfig, parseConfig, scopedSecretName, type DeliveryContext, type Runner } from "../src/index.ts";
+import { ConfigError, FileStore, KeychainStore, SecretBroker, SecretDeliveryError, SecretError, SecretServiceStore, parseConfig, scopedSecretName, type DeliveryContext, type Runner } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 // Suite category: Safety/security invariant (REQ-SEC-003 scoped secret brokering; secrets never reach a capability that is not contained).
 const dirs: string[] = [];

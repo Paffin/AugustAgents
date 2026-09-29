@@ -7,7 +7,8 @@ import type { LlmProvider } from "@august/brain";
 import type { ToolDescriptor } from "@august/capabilities";
 import { makeSessionKey } from "@august/core";
 import type { McpCallResult, McpSession, McpTool } from "@august/mcp";
-import { ConfigError, classifyTarget, createApp as composeApp, defaultConfig, openSecretStore, parseConfig, targetsFor, type TargetRoots } from "../src/index.ts";
+import { ConfigError, classifyTarget, createApp as composeApp, openSecretStore, parseConfig, targetsFor, type TargetRoots } from "../src/index.ts";
+import { defaultConfig } from "./config-fixture.ts";
 
 // Suite category: Safety/security invariant (REQ-SEC-001 provenance, REQ-SEC-002 target-aware writes) at the composition root.
 const dirs: string[] = [];
