@@ -83,7 +83,8 @@ export class DurableRuntimeStore {
     let left = maxChars;
     for (const m of this.messages(session, maxMessages).reverse()) {
       const line = `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`;
-      if (line.length <= left) { selected.push(line); left -= line.length; continue; }
+      const separator = selected.length ? 1 : 0;
+      if (line.length + separator <= left) { selected.push(line); left -= line.length + separator; continue; }
       if (selected.length === 0 && left > 32) selected.push(`[earlier content truncated]${line.slice(-(left - 28))}`);
       break;
     }

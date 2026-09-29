@@ -144,6 +144,7 @@ export class AgentRuntime {
   async handle(session: SessionKey, text: string, context: AgentExecutionContext = {}): Promise<AgentReply> {
     const { journal } = this.options;
     const log = (kind: string, data: unknown) => journal.append({ kind, session, data }, this.now());
+    if (context.checkpoint && (!context.checkpoint.taint || !context.checkpoint.loop)) throw new Error("checkpoint is missing safety state");
     const taint = new TaintState(context.checkpoint?.taint);
     const guard = new LoopGuard({ maxSteps: context.maxSteps ?? this.options.maxSteps ?? 12 });
     if (context.checkpoint) guard.restore(context.checkpoint.loop);

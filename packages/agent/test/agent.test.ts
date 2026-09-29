@@ -135,6 +135,7 @@ describe("AgentRuntime", () => {
   test("Safety/reliability invariant: malformed counters and checkpoint write failures fail closed", async () => {
     const ex = executor(); const { agent } = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "secret" } }), executor: ex });
     await expect(agent.handle(session, "search", { checkpoint: { history: [], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: -1 } })).rejects.toThrow(/invalid AgentCheckpointState/);
+    await expect(agent.handle(session, "search", { checkpoint: { history: [], taint: undefined as never, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } })).rejects.toThrow(/missing safety state/);
     await expect(agent.handle(session, "search", { onEvent: (event) => { if (event.type === "checkpoint" && event.phase === "tool_finished") throw new Error("disk full"); } })).rejects.toBeInstanceOf(AgentCheckpointError);
     expect(ex.calls).toHaveLength(1);
   });

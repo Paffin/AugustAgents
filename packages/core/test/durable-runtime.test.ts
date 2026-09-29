@@ -42,7 +42,7 @@ describe("DurableRuntimeStore", () => {
     const view = store.stateView(session, 40, 500);
     expect(view.length).toBeLessThanOrEqual(40);
     expect(view.at(-1)).toContain("message-45");
-    expect(view.join("").length).toBeLessThanOrEqual(500);
+    expect(view.join("\n").length).toBeLessThanOrEqual(500);
     store.close();
   });
 
