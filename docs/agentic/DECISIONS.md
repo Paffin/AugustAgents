@@ -15,6 +15,7 @@
 | OUT-001 execution selection | DEC-0009 | `ROADMAP.md` / OUT-001 Execution Binding | none |
 | Bun runtime floor | DEC-0010 | `ARCHITECTURE.md` / Technology Stack | none |
 | OUT-002 execution selection | DEC-0012 | `ROADMAP.md` / OUT-002 Execution Binding | none |
+| OUT-002 persistence adapter | DEC-0013 | `ARCHITECTURE.md` / Technology Stack and Interfaces | none |
 
 ## Immutable Decision Ledger
 
@@ -158,6 +159,18 @@
 **Alternatives:** Infer newest artifacts; reuse OUT-001 progress; embed mutable revisions directly in ROADMAP.md.
 **Evidence:** Superpowers Architecture selection contract and successful OUT-001 binding workflow, verified 2026-09-29.
 **Current Truth:** `docs/agentic/ROADMAP.md` / OUT-002 Execution Binding
+**Blueprint Requirements:** REQ-FUNC-001, REQ-FUNC-002, REQ-REL-001, REQ-REL-002
+**Roadmap Outcomes:** OUT-002
+**Supersedes:** none
+
+### DEC-0013: SQLite adapter implements durable state and run seams
+
+**Area:** OUT-002 persistence adapter
+**Decision:** Use one Bun SQLite `runtime.db` adapter in WAL mode to implement separate logical StateStore and RunStore interfaces, with schema version 1 and atomic local transactions.
+**Rationale:** Bun SQLite is already used by the runtime, the evidenced deployment is one local process, and one cohesive adapter keeps message/run/checkpoint/idempotency transactions local without leaking persistence into channels or AgentRuntime.
+**Alternatives:** Separate message/run databases; EventJournal as content store; JSON files; external workflow engine.
+**Evidence:** Existing `bun:sqlite` EventJournal implementation, target interfaces in ARCHITECTURE.md, and OUT-002 consumer/recovery requirements reviewed 2026-09-29.
+**Current Truth:** `docs/agentic/ARCHITECTURE.md` / Technology Stack, Interfaces, Adapters, Data Durability
 **Blueprint Requirements:** REQ-FUNC-001, REQ-FUNC-002, REQ-REL-001, REQ-REL-002
 **Roadmap Outcomes:** OUT-002
 **Supersedes:** none

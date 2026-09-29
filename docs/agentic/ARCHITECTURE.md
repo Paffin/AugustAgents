@@ -8,6 +8,8 @@
   observed on Bun 1.4.2. Sources: https://bun.sh/docs/pm/lockfile and
   https://bun.sh/guides/install/yarnlock, verified 2026-09-29.
 - Python HTTP sidecar for Laya on loopback.
+- Bun SQLite `runtime.db` with WAL is the selected OUT-002 adapter for durable
+  conversation and run state behind logical StateStore and RunStore interfaces.
 - Local filesystem and journal persistence; current storage contracts are
   package-specific and incomplete.
 
@@ -43,9 +45,13 @@
 
 ### Target contract — not delivered at `aa8bf43`
 
-- `StateStore`: append/read session messages and produce bounded StateViews.
-- `RunStore`: atomically persist run states, steps, checkpoints, budgets, and
-  idempotency records.
+- `StateStore`: logical interface to append/read session messages and produce
+  bounded StateViews.
+- `RunStore`: logical interface to atomically persist run states, steps,
+  checkpoints, budgets, and idempotency records.
+- `DurableRuntimeStore`: one cohesive SQLite adapter implementing both logical
+  interfaces so conversation/run transactions stay local without collapsing
+  their public responsibilities.
 - `OutcomeVerifier`: verify an observed outcome without trusting the acting
   model.
 - `TrainingSink`: accept only verified, untainted examples.
@@ -71,6 +77,8 @@
 
 - Current MCP stdio/HTTP, Keychain/Secret Service/file store, Telegram, web, and
   Laya HTTP are adapters.
+- `DurableRuntimeStore` is the selected local SQLite/WAL persistence adapter for
+  OUT-002; channels remain unaware of storage details.
 - Test fakes are justified only at these public seams and must preserve active
   safety contracts.
 - No new compatibility adapter is justified until consumer, data, support
@@ -112,6 +120,9 @@ binary/text lock compatibility path for earlier 1.1.x releases.
 - Repository source and tests are Git-managed.
 - `~/.august` may contain retained configuration, decisions, journal, secrets,
   capability configuration, and future run/memory state.
+- `dataDir/runtime.db` schema v1 owns durable messages, runs, transitions,
+  budgets, checkpoints, and idempotency records. It is additive and does not
+  migrate or reset existing files.
 - Current installed datasets and backup procedures are unknown.
 - No authority exists to reset retained runtime/user data. Designs must define
   migration, backup, rollback, and recovery before changing persisted formats.
@@ -150,7 +161,8 @@ does not own persistence backends, protocol details, or OS isolation policy.
 
 ## Open Architecture Risks
 
-- Storage technology and transaction model are not selected for `OUT-002`.
+- SQLite/WAL and one cohesive adapter are selected for `OUT-002`; runtime
+  behavior and recovery evidence remain undelivered until implementation.
 - OS-specific network enforcement and sandbox primitives need current platform
   research and runtime evidence.
 - The current agent loop creates `history` per message and is not durable.
