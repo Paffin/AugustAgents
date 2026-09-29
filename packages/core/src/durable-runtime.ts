@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
 import type { SessionKey } from "./session.ts";
 
 export type MessageRole = "user" | "assistant";
@@ -47,13 +46,25 @@ function normalizeBudget(partial: RunBudgetRequest = {}): RunBudget {
 }
 function fingerprint(request: string, budget: RunBudget): string { return createHash("sha256").update(JSON.stringify([request, budget])).digest("hex"); }
 
+/**
+ * Read-only opens load a private in-memory image of the file: the SQLite URI
+ * `immutable=1` flag is not honored on every platform build of bun:sqlite, and a
+ * plain read-only open of a WAL database creates -wal/-shm sidecars. The header
+ * WAL flags are cleared on the copy only; the file on disk is never written.
+ */
+function openImmutableSnapshot(path: string): Database {
+  const image = new Uint8Array(readFileSync(path));
+  if (image.length >= 100 && image[18] === 2 && image[19] === 2) { image[18] = 1; image[19] = 1; }
+  return Database.deserialize(image);
+}
+
 export class DurableRuntimeStore {
   private readonly db: Database;
   constructor(path = ":memory:", options: DurableRuntimeStoreOptions = {}) {
     const fresh = path === ":memory:" || !existsSync(path);
-    const source = options.readOnly && path !== ":memory:" ? (() => { const url = pathToFileURL(path); url.searchParams.set("immutable", "1"); return url.href; })() : path;
-    this.db = new Database(source, options.readOnly ? { readonly: true } : undefined);
+    this.db = options.readOnly && path !== ":memory:" ? openImmutableSnapshot(path) : new Database(path);
     this.db.run("PRAGMA foreign_keys = ON");
+    if (options.readOnly) this.db.run("PRAGMA query_only = ON");
     if (fresh && !options.readOnly) {
       this.db.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); this.db.run("INSERT INTO runtime_meta VALUES ('schema_version','1')");
       this.db.run(`CREATE TABLE messages (session TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(session,seq))`);
