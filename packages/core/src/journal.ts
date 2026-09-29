@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 export interface JournalEvent {
   /** Free-form event kind, e.g. "tool.call", "approval.granted". */
@@ -32,7 +33,19 @@ export class EventJournal {
   private readonly db: Database;
   private readonly observers: Array<(entry: JournalEntry) => void> = [];
 
-  constructor(path = ":memory:") {
+  constructor(path = ":memory:", options: { readOnly?: boolean } = {}) {
+    if (options.readOnly) {
+      if (path === ":memory:") throw new Error("read-only journal needs an existing file");
+      // A private SQLite image avoids even -wal/-shm creation during forensic verification.
+      // Refuse an active WAL rather than verifying a stale, incomplete prefix.
+      if (existsSync(`${path}-wal`) && statSync(`${path}-wal`).size > 32) throw new Error("journal has uncheckpointed WAL; use a stopped, checkpointed snapshot for read-only verification");
+      const image = new Uint8Array(readFileSync(path));
+      if (image.length >= 100 && image[18] === 2 && image[19] === 2) { image[18] = 1; image[19] = 1; }
+      this.db = Database.deserialize(image);
+      try { this.db.run("PRAGMA query_only = ON"); this.db.query("SELECT seq, ts, kind, session, data, prev_hash, hash FROM journal LIMIT 0").all(); }
+      catch (error) { this.db.close(); throw error; }
+      return;
+    }
     this.db = new Database(path);
     this.db.run(
       `CREATE TABLE IF NOT EXISTS journal (

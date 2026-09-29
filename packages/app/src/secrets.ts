@@ -304,6 +304,8 @@ export interface OpenStoreOptions {
   keyDir?: string;
   /** Additional known workspace/data roots supplied by App/CLI composition. */
   protectedDirectories?: readonly string[];
+  /** Inspection may read an existing key, but must never provision one. Default true. */
+  createKey?: boolean;
 }
 
 function has(run: Runner, cmd: string): boolean {
@@ -328,7 +330,7 @@ export function openSecretStore(dir: string, options: OpenStoreOptions = {}): Se
   // Without an OS store, a usable master key is mandatory. Never silently write plaintext.
   try {
     const storageDir = resolve(dir); // match the normalized file paths used by the encrypted store
-    const master = loadMasterKey({ env, keyDir: options.keyDir ?? env.AUGUST_KEY_DIR ?? join(homedir(), ".config", "august"), protectedDirectories: [storageDir, ...(options.protectedDirectories ?? [])], create: true });
+    const master = loadMasterKey({ env, keyDir: options.keyDir ?? env.AUGUST_KEY_DIR ?? join(homedir(), ".config", "august"), protectedDirectories: [storageDir, ...(options.protectedDirectories ?? [])], create: options.createKey ?? true });
     if (master) return new EncryptedFileStore(storageDir, master.key);
   } catch (error) {
     if (error instanceof MasterKeyError) throw new SecretError(error.message);

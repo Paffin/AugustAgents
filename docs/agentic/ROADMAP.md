@@ -96,7 +96,7 @@ are product/verification prerequisites, not documentation ceremonies.
 **Dependencies:** OUT-002, OUT-005
 **Readiness:** Blocked
 **State:** Proposed
-**Current Evidence:** e596112 adds encrypted fallback/audit source. Two macOS secret tests fail; live key rotation/recovery and protected-anchor acceptance remain outstanding.
+**Current Evidence:** Owned encrypted secret theft/tamper/recovery/rotation and web credential journeys pass locally. App/CLI now integrate configured external signed metadata publication and read-only forensic verification; physical socket regressions cover deletion, rehash, outage and lost acknowledgement. See current Verification evidence. Public endpoint custody, multi-key continuity, host permission/platform qualification and complete acceptance remain outstanding; this outcome is not complete.
 
 ### OUT-010: Cross-platform core release gate
 

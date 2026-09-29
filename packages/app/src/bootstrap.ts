@@ -36,6 +36,7 @@ import { builtinVerifiers } from "./verifiers.ts";
 import { assertKeyDirectoryOutside, deriveKey, loadMasterKey } from "./masterkey.ts";
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
 import { SecretBroker, type DeliveryContext, type EgressMode } from "./broker.ts";
+import { AuditPublisher, type AuditExternalStatus } from "./audit-context.ts";
 
 export interface AppDeps {
   env: Record<string, string | undefined>;
@@ -63,6 +64,9 @@ export interface AuditHandle {
   anchor(): AuditAnchor | undefined;
   anchors(): AuditAnchor[];
   verify(): AuditReport;
+  externalStatus(): AuditExternalStatus;
+  publish(): Promise<AuditExternalStatus>;
+  stop(): void;
 }
 
 export interface StartReport {
@@ -198,7 +202,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const configured = [...config.mcp];
   const broker = new SecretBroker(secrets, deps.env);
   // Everything that must never appear in a checkpoint: August's own keys by name, and each capability's own secrets.
-  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret].filter((name): name is string => Boolean(name)));
+  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret, config.auditExternal?.tokenEnv].filter((name): name is string => Boolean(name)));
   const capabilitySecrets = new Map<string, { trust: DeliveryContext["trust"]; names: Set<string> }>();
   const registerCheckpointSecrets = (entry: McpServerConfig) => {
     const names = [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})];
@@ -323,15 +327,19 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     if (!master) throw new Error("no master key is available");
     const key = new AuditKey(deriveKey(master.key, "audit-ed25519"));
     const log = new AnchorLog(join(keyDir, "audit", "anchors.jsonl"));
-    const anchorer = new AuditAnchorer(journal, { log, key });
+    if (!verifyAudit(journal, log.list(), key.publicKeyBytes(), key.id).ok) throw new Error("journal or retained anchors do not verify; no new anchors were signed");
+    const anchorer = new AuditAnchorer(journal, { log, key, automatic: !config.auditExternal });
+    const publisher = new AuditPublisher(config, { env: deps.env, home, secrets }, journal, log, key, () => anchorer.anchor());
     audit = {
       enabled: true, keyId: key.id, publicKey: key.publicKeyBytes().toString("base64"), anchorLogPath: log.path,
-      anchor: () => anchorer.anchor(), anchors: () => log.list(),
+      anchor: () => { if (config.auditExternal) throw new Error("external custody requires await audit.publish() before signing"); return anchorer.anchor(); }, anchors: () => log.list(),
       verify: () => verifyAudit(journal, log.list(), key.publicKeyBytes(), key.id),
+      externalStatus: () => publisher.status(), publish: () => publisher.publish(), stop: () => publisher.stop(),
     };
   } catch (error) {
     const reason = (error as Error).message;
-    audit = { enabled: false, reason, anchor: () => undefined, anchors: () => [], verify: () => ({ ok: false, chainBrokenAt: journal.verify(), anchors: 0, anchoredThrough: 0, unanchored: journal.head()?.seq ?? 0, problems: [`audit anchoring is off: ${reason}`] }) };
+    const status = (): AuditExternalStatus => ({ state: config.auditExternal ? "unavailable" : "not-configured", anchoredThrough: 0, localThrough: journal.head()?.seq ?? 0 });
+    audit = { enabled: false, reason, anchor: () => undefined, anchors: () => [], verify: () => ({ ok: false, chainBrokenAt: journal.verify(), anchors: 0, anchoredThrough: 0, unanchored: journal.head()?.seq ?? 0, problems: [`audit anchoring is off: ${reason}`] }), externalStatus: status, publish: async () => status(), stop: () => {} };
   }
   const verifierSet = new VerifierSet(builtinVerifiers({ root: config.root, skillsDir: config.skillsDir, registry }));
   const learning = new LearningStore(join(config.dataDir, "learning.db"), { verifiers: verifierSet.ids() });
@@ -554,7 +562,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     },
     close() {
       // Vouch for everything up to the last event before the journal is closed.
-      try { audit.anchor(); } catch { /* the journal is still intact; the next run anchors it */ }
+      if (!config.auditExternal) { try { audit.anchor(); } catch { /* the journal is still intact; the next run anchors it */ } }
+      audit.stop();
       mcp.closeAll();
       if (nativeLaya) void nativeLaya.close();
       for (const proxy of proxies) void proxy.close();

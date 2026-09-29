@@ -99,7 +99,10 @@ export function loadMasterKey(options: MasterKeyOptions): MasterKey | undefined 
     const saltPath = join(keyDir, "master.salt");
     let salt: Buffer;
     if (existsSync(saltPath)) salt = Buffer.from(readFileSync(saltPath, "utf8").trim(), "hex");
-    else { salt = randomBytes(16); privateDir(keyDir); writeFileSync(saltPath, salt.toString("hex"), { mode: 0o600, flag: "wx" }); }
+    else {
+      if (!options.create) return undefined;
+      salt = randomBytes(16); privateDir(keyDir); writeFileSync(saltPath, salt.toString("hex"), { mode: 0o600, flag: "wx" });
+    }
     const key = scryptSync(passphrase, salt, MASTER_KEY_BYTES, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
     return { key, source: "passphrase", id: keyIdOf(key), path: saltPath };
   }

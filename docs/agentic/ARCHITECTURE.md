@@ -250,6 +250,17 @@ evidence and outstanding Windows portability gaps belong in `VERIFICATION.md`.
 
 ## Integration Shape
 
+### External audit adapter, 2026-09-30
+
+`core` owns signed anchor verification, bounded HTTP transport and idempotent
+prefix publication. `app/audit-context` resolves the configured secret/CA,
+composes read-only inspection and one periodic publisher; the existing signed
+AnchorLog is the restart backlog, without another database or queue. Publication
+does not block run-control aborts or await the model. `gateway` exposes owner-only
+metadata status and `channels` renders coverage/outage warnings. Inspection never
+constructs App; mutable signing/publication commands remain separate. Unknown
+post-anchor removal is reported as unknown, not silently reconstructed history.
+
 ### Current Phase A and target contract
 
 `app` source composes channels, durable state, policy, controls, outcome verifiers,
@@ -277,11 +288,15 @@ isolation policy.
   production recovery and schema migration remain unverified.
 - OS-specific network enforcement and sandbox primitives need current platform
   research and runtime evidence.
-- Provider usage/budget source exists; hardcoded pricing, provider empty-content
-  behavior and live tool selection are current unresolved OUT-002 gaps.
+- Provider attempts now retain reported usage and immutable owner quotes;
+  unreported calls hold allowance pending explicit reconciliation. Vendor invoice
+  accuracy and configured cooldown/degradation remain unresolved OUT-002 gaps.
 - Learning/ladder/memory/audit are integrated in source; fresh matched-task,
   real-weight, recovery and platform acceptance remains outstanding.
 - System Keychain uses one fixed service/account namespace across installations;
-  secret tests currently escape temporary storage. Isolate before rerunning them.
-- Plaintext fallback, local mutable anchor storage, missing native inference,
-  actor supervisor and other complete-goal contracts require bounded designs.
+  credential fixtures are now explicitly isolated, but live OS namespace work
+  remains unqualified.
+- Automatic plaintext fallback is removed, native CPU inference exists in shadow
+  mode, and external anchor transport is integrated. Protected remote custody,
+  key rotation continuity, activation/training, actor supervision and the rest
+  of the complete goal still require implementation and acceptance.

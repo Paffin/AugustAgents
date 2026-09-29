@@ -86,6 +86,8 @@ export interface AnchorerOptions {
   /** Anchor after this many new entries. Default 50. */
   every?: number;
   now?: () => number;
+  /** External-custody composition signs only after its asynchronous prefix preflight. Default true. */
+  automatic?: boolean;
 }
 
 /** Signs the journal's head into the anchor log as it grows. Attach with `journal.onAppend(anchorer.observe)`. */
@@ -98,7 +100,7 @@ export class AuditAnchorer {
     this.every = o.every ?? 50;
     this.now = o.now ?? Date.now;
     this.last = o.log.latest();
-    journal.onAppend((entry) => this.observe(entry));
+    if (o.automatic !== false) journal.onAppend((entry) => this.observe(entry));
   }
 
   private observe(entry: JournalEntry): void {

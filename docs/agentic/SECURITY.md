@@ -80,6 +80,37 @@ are required. Retained user data is never reset to make a migration pass.
 
 ## Audit
 
+### Current external-custody boundary, 2026-09-30
+
+App has an optional owner-configured HTTP anchor adapter with periodic,
+single-flight publication. Only signed metadata leaves the machine; tokenEnv is
+a secret reference, not a value. HTTPS uses normal certificate validation or an
+explicit owner CA; remote DNS/IP ranges are checked and the socket is pinned.
+Numeric loopback HTTP is permitted for local independent services. Redirects,
+proxy inheritance, unsafe addresses, unbounded response bodies and conflicting
+prefixes are refused. Independent append-only retention is the endpoint owner's
+trust boundary, not something an HTTP adapter can manufacture.
+
+`audit verify [--anchors configured-URL]` and export inspect an existing journal
+in a private query-only SQLite image. They do not open App, acquire runtime
+ownership, migrate stores, create signing/master keys, append events or sign at
+shutdown. Missing key/salt/journal and active uncheckpointed WAL fail closed.
+The configured credential is never forwarded to a different CLI source. Export
+refuses to overwrite existing files. Publication checks retained independent
+custody before extending the local chain; lost acknowledgements are recovered
+by readback, not by a new ordinal. With an external sink, automatic local
+append/shutdown/CLI signing cannot bypass that preflight; an unavailable sink
+leaves the durable journal tail unsigned until custody is reconciled. Doctor and owner-only web status expose
+missing/unavailable/conflicting custody without exposing credentials.
+
+Coverage is the signed prefix. A retained unanchored tail is a gap, not proven
+truncation; removing an unpublished tail after the newest external anchor is
+inherently unknown even when the retained gap is zero. Rewriting/re-hashing an
+anchored journal and deleting all local anchors cannot match independently held
+signatures. Public endpoint retention, multi-key rotation, host compromise,
+host-power-loss durability and Windows remain unqualified. Local process
+acceptance does not certify an immutable remote service or the complete OUT-009.
+
 ### Observed at `aa8bf43`
 
 - A plain recomputable SHA chain detects accidents but not an attacker who can
@@ -114,8 +145,9 @@ Current acceptance remains incomplete: live sandbox tests skip on this host;
 the global `august` OS service/account can collide across installations;
 key folders/key-file symlinks are checked against known data and tool roots
 before use; host ACL/permission validation and concurrent path replacement remain open;
-anchors are local mutable files. A signature alone does not establish protected external
-anchoring or truncation resistance against replacement of all local evidence.
+local anchors remain mutable files; an optional external metadata sink is now
+implemented, with independent retention owned by that service. A signature alone
+does not establish custody or certify removal of an unpublished tail.
 
 Tests may touch only process-owned fixture state. Credential-test selection must
 be explicit at the backend seam and must never access a user's OS store. Preserve

@@ -12,6 +12,7 @@ import { createApp, type App, type AppDeps } from "./bootstrap.ts";
 import { ConfigError, EGRESS_ENTRY, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
 import { MasterKeyError, keyFromRecoveryCode, keyIdOf, loadMasterKey, recoveryCode, writeMasterKeyFile } from "./masterkey.ts";
 import { EncryptedFileStore, SecretError, SECRET_NAME, openSecretStore, resolveSecret, scopedSecretName, type SecretStore } from "./secrets.ts";
+import { openAuditInspection } from "./audit-context.ts";
 
 export interface CliIo {
   print(line: string): void;
@@ -45,7 +46,7 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august secret list | rm NAME
   august secret key status | recovery-code | recover CODE | rotate   the master key that seals your secrets
   august secret migrate      seal a plaintext secrets file from an older version
-  august audit verify | anchor | export FILE   check the journal against its signed anchors
+  august audit verify [--anchors URL] | anchor | publish | export FILE   verify without changing evidence
   august mcp list | rm ID | allow ID HOST... | deny ID      configured MCP servers
   august skills                installed skills
   august laya status | activate [--force]
@@ -83,8 +84,8 @@ function keyBoundaries(io: CliIo): string[] {
   return roots;
 }
 
-function storeFor(io: CliIo): SecretStore {
-  return io.secrets ?? openSecretStore(join(io.home, ".august"), { env: io.env, keyDir: keyDirFor(io), protectedDirectories: keyBoundaries(io) });
+function storeFor(io: CliIo, createKey = true): SecretStore {
+  return io.secrets ?? openSecretStore(join(io.home, ".august"), { env: io.env, keyDir: keyDirFor(io), protectedDirectories: keyBoundaries(io), createKey });
 }
 
 function appDeps(io: CliIo, configPath: string, approver?: Approver): AppDeps {
@@ -119,7 +120,7 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
       case "learn":
         return learn(configPath, rest, io);
       case "audit":
-        return auditCommand(configPath, rest, io);
+        return await auditCommand(configPath, rest, io);
       case "memory":
         return memoryCommand(configPath, rest, io);
       case "patterns":
@@ -389,6 +390,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     token: config.gateway.token,
     workspace: config.workspace,
     queue,
+    audit: () => app.audit.externalStatus(),
     // Telegram answers only through Telegram: a browser token must not be able to answer its approvals.
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
@@ -554,30 +556,54 @@ function secretKey(args: readonly string[], store: SecretStore, io: CliIo): CliR
   return { code: 1 };
 }
 
-function auditCommand(configPath: string, args: readonly string[], io: CliIo): CliResult {
-  const { app } = openLearningApp(configPath, io);
-  try {
-    const [action, file] = args;
-    const a = app.audit;
-    if (!a.enabled) { io.print(`Audit anchoring is off: ${a.reason}`); return { code: 1 }; }
-    if (action === undefined || action === "verify") {
-      const r = a.verify();
+async function auditCommand(configPath: string, args: readonly string[], io: CliIo): Promise<CliResult> {
+  const config = loadConfig(configPath);
+  const [action = "verify", file] = args;
+  if (action === "verify" || action === "export") {
+    if (action === "verify" && args.length > 1 && !(args.length === 3 && file === "--anchors" && args[2])) throw new ConfigError("Usage: august audit verify [--anchors configured-URL]");
+    if (action === "export" && (!file || args.length !== 2)) throw new ConfigError("Usage: august audit export FILE");
+    let inspection: ReturnType<typeof openAuditInspection>;
+    try { inspection = openAuditInspection(config, io); }
+    catch { io.print("Audit inspection unavailable: existing key/journal required, and active WAL must be checkpointed. No evidence was changed."); return { code: 1 }; }
+    try {
+      if (action === "export") {
+        const anchors = inspection.anchors();
+        try { writeFileSync(file!, JSON.stringify({ keyId: inspection.keyId, publicKey: inspection.publicKey, anchors }, null, 2), { mode: 0o600, flag: "wx" }); }
+        catch { io.print("Could not create the export file; existing files were not overwritten."); return { code: 1 }; }
+        io.print(`Wrote ${anchors.length} anchors and the public key to ${file}. Existing evidence was not modified. Keep an independent copy.`);
+        return { code: 0 };
+      }
+      const external = file === "--anchors" ? await inspection.verifyExternal(args[2]) : undefined;
+      if (external?.state === "unavailable") { io.print(`External audit unavailable (${external.reason}); no evidence was changed. Verification is NOT established.`); return { code: 1 }; }
+      const r = external ? external.report : inspection.verify();
       io.print(`Journal chain: ${r.chainBrokenAt === null ? "intact" : `BROKEN at entry ${r.chainBrokenAt}`}. Anchors: ${r.anchors}, vouching through entry ${r.anchoredThrough}; ${r.unanchored} newer entries not yet anchored.`);
       for (const p of r.problems) io.print(`  ✗ ${p}`);
-      io.print(r.ok ? "Nothing has been altered or removed behind an anchor." : "The journal does not match its signed anchors.");
-      return { code: r.ok ? 0 : 1 };
-    }
-    if (action === "anchor") { const x = a.anchor(); io.print(x ? `Anchored entry ${x.seq} (anchor ${x.n}).` : "Nothing new to anchor."); return { code: 0 }; }
-    if (action === "export" && file) {
-      writeFileSync(file, JSON.stringify({ keyId: a.keyId, publicKey: a.publicKey, anchors: a.anchors() }, null, 2), { mode: 0o600 });
-      io.print(`Wrote ${a.anchors().length} anchors and the public key to ${file}. Keep a copy somewhere the machine cannot reach: it is what proves the journal was not rewritten.`);
-      return { code: 0 };
-    }
-    io.print("Usage: august audit verify | anchor | export FILE");
-    return { code: 1 };
-  } finally {
-    app.close();
+      if (external) {
+        io.print(`External coverage: entries 1-${r.anchoredThrough}. Tail gap: ${r.unanchored} retained unanchored entries; removed entries after the last external anchor cannot be proven or ruled out. No repair or signing was performed.`);
+        io.print(external.state === "tampered" ? "The journal does not match independent signed evidence." : external.state === "unanchored" ? "No external anchors: independently verified coverage is empty." : "The anchored prefix matches independent signed evidence; this does not certify an unknown tail.");
+        return { code: external.state === "verified" && r.unanchored === 0 ? 0 : 1 };
+      }
+      io.print(r.ok ? "Nothing has been altered or removed behind an anchor. Unanchored history and removal of the local anchor file are not certified." : "The journal does not match its signed anchors.");
+      return { code: r.ok && r.anchors > 0 && r.unanchored === 0 ? 0 : 1 };
+    } catch (error) {
+      io.print(error instanceof ConfigError ? error.message : "Audit evidence is unreadable; no repair or signing was performed.");
+      return { code: 1 };
+    } finally { inspection.close(); }
   }
+  if (!["anchor", "publish"].includes(action) || args.length !== 1) { io.print("Usage: august audit verify [--anchors URL] | anchor | publish | export FILE"); return { code: 1 }; }
+  const { app } = openLearningApp(configPath, io);
+  try {
+    const a = app.audit;
+    if (!a.enabled) { io.print(`Audit anchoring is off: ${a.reason}`); return { code: 1 }; }
+    if (!config.auditExternal) {
+      if (action === "anchor") { const x = a.anchor(); io.print(x ? `Anchored entry ${x.seq} (anchor ${x.n}).` : "Nothing new to anchor."); }
+      io.print("External audit sink is not configured; local anchors do not survive removal of their file."); return { code: action === "anchor" ? 0 : 1 };
+    }
+    await a.publish();
+    const status = await a.publish();
+    io.print(`External audit: ${status.state}, independently retained through entry ${status.anchoredThrough}.`);
+    return { code: status.state === "published" && status.anchoredThrough >= status.localThrough ? 0 : 1 };
+  } finally { app.close(); }
 }
 
 function mcp(configPath: string, args: readonly string[], io: CliIo): CliResult {
@@ -834,10 +860,24 @@ async function doctor(configPath: string, io: CliIo): Promise<CliResult> {
     bad((error as Error).message);
     return { code: 1 };
   }
-  const store = storeFor(io);
+  const store = storeFor(io, false);
   if (store.kind === "file") warn("Secrets: explicitly selected plaintext store; use OS credentials or an encrypted-file store");
   else ok(`Secrets: ${store.kind}`);
   if (store instanceof EncryptedFileStore && store.plaintextNames().length) warn(`${store.plaintextNames().length} secret(s) are still in a plaintext file from an older version: run august secret migrate`);
+
+  if (!config.auditExternal) warn("External audit sink is not configured; deleting local anchors defeats independent custody. Set auditExternal.url and tokenEnv.");
+  else {
+    let inspection: ReturnType<typeof openAuditInspection> | undefined;
+    try {
+      inspection = openAuditInspection(config, { ...io, secrets: store });
+      const result = await inspection.verifyExternal();
+      if (result.state === "verified") {
+        ok(`External audit anchored through entry ${result.report.anchoredThrough}`);
+        warn(`External audit tail gap: ${result.report.unanchored} retained unanchored entries; removal after the last anchor is unknown`);
+      } else bad(`External audit ${result.state}; independent integrity is not established`);
+    } catch { bad("External audit unavailable; no evidence or keys were changed by inspection"); }
+    finally { inspection?.close(); }
+  }
 
   const keyName = config.llm.apiKeyEnv;
   const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(config.llm.baseUrl).hostname);

@@ -35,7 +35,7 @@ describe("master key", () => {
     expect(loadMasterKey({ env: { AUGUST_MASTER_KEY: raw.toString("hex") }, keyDir })).toMatchObject({ source: "env" });
     expect(loadMasterKey({ env: { AUGUST_MASTER_KEY: raw.toString("base64") }, keyDir })!.key.equals(raw)).toBe(true);
     expect(() => loadMasterKey({ env: { AUGUST_MASTER_KEY: "short" }, keyDir })).toThrow(MasterKeyError);
-    const a = loadMasterKey({ env: { AUGUST_MASTER_PASSPHRASE: "correct horse battery staple" }, keyDir })!;
+    const a = loadMasterKey({ env: { AUGUST_MASTER_PASSPHRASE: "correct horse battery staple" }, keyDir, create: true })!;
     const b = loadMasterKey({ env: { AUGUST_MASTER_PASSPHRASE: "correct horse battery staple" }, keyDir })!;
     const c = loadMasterKey({ env: { AUGUST_MASTER_PASSPHRASE: "another passphrase entirely" }, keyDir })!;
     expect(a.key.equals(b.key)).toBe(true); expect(a.key.equals(c.key)).toBe(false);

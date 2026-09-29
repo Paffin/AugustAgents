@@ -76,6 +76,7 @@ export const WEB_HTML = `<!doctype html>
   .task-request { font-weight:600; margin:12px 0 !important; }
   .task-reply { max-height:240px; overflow:auto; padding:12px 0; border-top:1px solid var(--line); }
   .billing-warning { color:var(--warn); padding:12px 0; }
+  #audit-status { color:var(--warn); font-size:13px; margin:0; padding:8px 24px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
   .receipt-form { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
   .receipt-form label { display:block; font-size:13px; }
   .receipt-form input[type=number] { display:block; width:100%; min-width:0; margin-top:4px; }
@@ -98,6 +99,7 @@ export const WEB_HTML = `<!doctype html>
 </aside>
 <main>
 <header><div><h1 id="view-title">Chat</h1><p id="view-description" class="muted">Work with your agent. Stay in control.</p></div><div><div id="connection" role="status">Not connected</div><div id="activity" role="status" aria-live="polite"></div><button id="reconnect" type="button" hidden>Retry connection</button></div></header>
+<p id="audit-status" role="status" aria-live="polite" hidden></p>
 <details class="credentials" id="credentials" name="owner-controls" hidden><summary>Secrets</summary>
 <section class="credential-panel" aria-label="Secure credential controls">
 <h2>Secure credential store</h2>
@@ -163,6 +165,18 @@ export const WEB_JS = `(() => {
   for (const button of document.querySelectorAll("[data-view]")) button.onclick = () => showView(button.dataset.view);
   const who = { channel: "web", user: "local" };
   const headers = () => ({ "content-type": "application/json", authorization: "Bearer " + token });
+  async function loadAudit() {
+    if (!token || !connected) return;
+    const status = document.getElementById("audit-status");
+    try {
+      const response = await fetch("/v1/audit", { headers: headers() });
+      const body = await response.json();
+      if (!response.ok || !["not-configured","pending","published","unavailable","conflict"].includes(body.state) || !Number.isSafeInteger(body.anchoredThrough) || !Number.isSafeInteger(body.localThrough)) throw new Error();
+      status.hidden = false;
+      status.textContent = body.state === "not-configured" ? "Audit protection is local only. Configure an independent anchor sink to detect deletion of local audit evidence." : body.state === "published" ? "External audit retained through entry " + body.anchoredThrough + ". Tail gap: " + Math.max(0, body.localThrough - body.anchoredThrough) + " retained entries. Removal beyond the last anchor is unknown." : body.state === "conflict" ? "Audit conflict: retained independent evidence does not match local history. No repair was attempted." : body.state === "pending" ? "External audit publication is pending; independent coverage is not yet confirmed." : "External audit unavailable. Local history is retained, but independent coverage is not confirmed.";
+    } catch { status.hidden = false; status.textContent = "Audit status unavailable; independent integrity is not established."; }
+  }
+  setInterval(() => { void loadAudit(); }, 5000);
   async function verifyConnection() {
     if (!token) return;
     try { const r = await fetch("/v1/runs?channel=" + who.channel + "&user=" + who.user + "&limit=1", { headers: headers() });
@@ -170,6 +184,7 @@ export const WEB_JS = `(() => {
       const ready = r.ok && Array.isArray(body.runs);
       connectionState(ready, ready ? "Runtime connected" : "Connection unavailable");
       hint.textContent = ready ? "Connected to your local runtime." : "Check the gateway and reopen its connection link.";
+      if (ready) void loadAudit();
     } catch { connectionState(false, "Runtime unreachable"); hint.textContent = "Start your gateway, then reload this page."; }
   }
   verifyConnection();

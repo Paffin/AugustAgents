@@ -43,8 +43,13 @@ CLI is refused without interrupting a live web task. CLI attachment to an existi
 gateway and broader host/platform recovery qualification remain open.
 In-flight HTTP model cancellation and durable owner stop intents are implemented:
 live pause took 221 ms; cancel survived an owned gateway SIGKILL/restart.
-Reported usage before abort is retained, but an interrupted call with no receipt
-still has unknown billing; GitHub #2/#3 are not fully closed by this increment.
+Durable model attempts retain immutable quotes and hold unresolved allowance;
+owner reconciliation is labelled explicitly rather than presented as a vendor
+receipt. Configured provider degradation/cooldown remains open under GitHub #3.
+External audit App/CLI integration is now implemented: optional configured sink,
+periodic metadata-only publication, outage/conflict UI/doctor warnings and
+strictly read-only verification that cannot re-sign inspected history. Public
+custody, key rotation continuity and the complete OUT-009 remain unqualified.
 
 ## Active Risks
 
@@ -58,7 +63,9 @@ still has unknown billing; GitHub #2/#3 are not fully closed by this increment.
   Production Keychain namespace, host permissions and concurrent path changes remain risks.
   Runtime tariffs are now explicit; setup discovers models from
   the configured endpoint or requires an owner-entered identifier. Reported usage includes decision and empty replies;
-  unreported timeout billing and quote changes across resumed runs remain gaps.
+  unreported timeout billing remains unknown and held; frozen per-attempt quotes
+  prevent resumed tariff changes from repricing old tokens. Automatic provider
+  reconciliation and real vendor invoice evidence remain gaps.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit

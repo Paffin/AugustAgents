@@ -11,6 +11,21 @@ import {
 
 const TOKEN = "correct-horse-battery-staple";
 
+describe("owner audit status", () => {
+  test("external custody status is behind Host/Origin/token checks and exposes no exception details", async () => {
+    let calls = 0;
+    const { handler } = make({ audit: () => { calls++; return { state: "unavailable", anchoredThrough: 7, localThrough: 9 }; } });
+    const get = (headers: Record<string, string>) => new Request("http://127.0.0.1:7777/v1/audit", { headers: { host: "127.0.0.1:7777", authorization: `Bearer ${TOKEN}`, ...headers } });
+    expect((await handler(get({ authorization: "Bearer wrong" }))).status).toBe(401);
+    expect((await handler(get({ origin: "https://attacker.example" }))).status).toBe(403);
+    expect((await handler(get({ host: "attacker.example" }))).status).toBe(421); expect(calls).toBe(0);
+    expect(await (await handler(get({}))).json()).toEqual({ state: "unavailable", anchoredThrough: 7, localThrough: 9 }); expect(calls).toBe(1);
+    expect((await make().handler(get({}))).status).toBe(404);
+    const failing = make({ audit: () => { throw Error("private audit token must not leak"); } }).handler;
+    const response = await failing(get({})); expect(response.status).toBe(503); expect(await response.json()).toEqual({ error: "audit status unavailable" });
+  });
+});
+
 describe("owner model reconciliation", () => {
   test("requires confirmation/auth, validates counts, and does not expose backend errors", async () => {
     const accepted: unknown[] = [];

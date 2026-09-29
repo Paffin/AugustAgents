@@ -33,6 +33,8 @@ export interface AugustConfig {
   channels: ChannelsConfig;
   /** What August keeps between runs. Nothing about your requests is retained unless you turn it on. */
   memory?: MemoryConfig;
+  /** Independent owner-managed append-only anchor collection. Only a secret reference is retained. */
+  auditExternal?: { url: string; tokenEnv: string; caFile?: string; intervalMs?: number };
 }
 
 export interface MemoryConfig {
@@ -205,10 +207,25 @@ export function parseConfig(value: unknown): AugustConfig {
     ...(c.npmRegistryUrl === undefined ? {} : { npmRegistryUrl: httpsUrl(c.npmRegistryUrl, "npmRegistryUrl").replace(/\/+$/, "") }),
     laya: parseLaya(c.laya),
     ...(c.memory === undefined ? {} : { memory: parseMemory(c.memory) }),
+    ...(c.auditExternal === undefined ? {} : { auditExternal: parseAuditExternal(c.auditExternal) }),
     channels: parseChannels(c.channels),
     llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, pricing: parsePricing(c.llm?.pricing) },
     gateway: { port: port as number, token },
   };
+}
+
+function parseAuditExternal(value: unknown): NonNullable<AugustConfig["auditExternal"]> {
+  const a = value as Record<string, unknown> | null;
+  if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).some(k => !["url", "tokenEnv", "caFile", "intervalMs"].includes(k))) throw new ConfigError("auditExternal needs url and tokenEnv (a secret name, never its value)");
+  let url: URL;
+  try { if (typeof a.url !== "string") throw Error(); url = new URL(a.url); } catch { throw new ConfigError("auditExternal.url must be a collection URL"); }
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const loopback = host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+  if (url.username || url.password || url.search || url.hash || url.port === "0" || (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))) throw new ConfigError("auditExternal.url needs HTTPS, or numeric loopback HTTP; no credentials, query or fragment");
+  if (typeof a.tokenEnv !== "string" || !/^[A-Z_][A-Z0-9_]*$/.test(a.tokenEnv)) throw new ConfigError("auditExternal.tokenEnv must be a secret name, not its value");
+  if (a.caFile !== undefined && (typeof a.caFile !== "string" || !a.caFile)) throw new ConfigError("auditExternal.caFile must be an explicit PEM certificate path");
+  if (a.intervalMs !== undefined && (!Number.isSafeInteger(a.intervalMs) || (a.intervalMs as number) < 1000 || (a.intervalMs as number) > 3_600_000)) throw new ConfigError("auditExternal.intervalMs must be 1000-3600000");
+  return { url: url.href, tokenEnv: a.tokenEnv, ...(a.caFile === undefined ? {} : { caFile: a.caFile as string }), ...(a.intervalMs === undefined ? {} : { intervalMs: a.intervalMs as number }) };
 }
 
 function parseMemory(value: unknown): MemoryConfig {

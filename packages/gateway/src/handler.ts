@@ -81,6 +81,8 @@ export interface GatewayOptions extends BindConfig {
   /** Owner-token-only controls; absent (including plaintext backends): 404. */
   secrets?: GatewaySecrets;
   runs?: GatewayRuns;
+  /** Owner-only status; never includes endpoint credentials or journal contents. */
+  audit?: () => { state: "not-configured" | "pending" | "published" | "unavailable" | "conflict"; anchoredThrough: number; localThrough: number; checkedAt?: number };
 }
 
 function json(status: number, body: unknown): Response {
@@ -163,6 +165,11 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       }
     };
 
+    if (url.pathname === "/v1/audit" && request.method === "GET") {
+      if (!options.audit) return json(404, { error: "audit status unavailable" });
+      try { return json(200, options.audit()); }
+      catch { return json(503, { error: "audit status unavailable" }); }
+    }
     if (url.pathname === "/v1/runs" && request.method === "GET") {
       if (!options.runs) return json(404, { error: "run controls unavailable" });
       const session = sessionFrom(url.searchParams.get("channel"), url.searchParams.get("user"));
