@@ -82,15 +82,21 @@ restart, tainted learning, and local database tampering.
 
 ## Security Verification
 
-### Current source and evidence at e596112, 2026-09-29
+### Current source and evidence, 2026-09-29
 
 Content parts, bound approval ledger/callbacks, target-aware writes, verified
 artifact installation, scoped secret broker, encrypted file backend and signed
 journal anchors exist in source. The aa8bf43 observations above are historical.
+Credential fixtures now use explicit owned backends; they do not access host
+Keychain/Secret Service. Automatic encrypted-store selection fails closed when
+master-key storage is unavailable and never falls back to plaintext. The CLI
+returns a safe failure before asking for a credential and can retry after the
+key-folder configuration is corrected. Explicit FileStore/legacy migration
+tooling remains, without automatic selection on encryption failure.
 Current acceptance remains incomplete: live sandbox tests skip on this host;
-secret tests select host Keychain; the global `august` service/account can collide
-across installations; failed key storage can fall back to plaintext; anchors are
-local mutable files. A signature alone does not establish protected external
+the global `august` OS service/account can collide across installations;
+configured key-folder placement and host permissions need stronger validation;
+anchors are local mutable files. A signature alone does not establish protected external
 anchoring or truncation resistance against replacement of all local evidence.
 
 Tests may touch only process-owned fixture state. Credential-test selection must

@@ -118,15 +118,40 @@ describe("EncryptedFileStore", () => {
     expect(() => new EncryptedFileStore(dir, oldKey).get("A_KEY")).toThrow(/sealed with master key/);
   });
 
-  test("the encrypted store is the default fallback when a key can be kept, and the plaintext file only when it cannot", () => {
+  test("the default fallback encrypts, and an unavailable key fails closed without a plaintext store", () => {
     const ok = openSecretStore(join(tmp(), "d"), { env: {}, keyDir: join(tmp(), "k"), platform: "freebsd" });
     expect(ok.kind).toBe("encrypted-file");
     const blocked = tmp(); writeFileSync(join(blocked, "file"), "");
-    expect(openSecretStore(join(tmp(), "d"), { env: {}, keyDir: join(blocked, "file", "k"), platform: "freebsd" }).kind).toBe("file");
+    const data = join(tmp(), "d");
+    expect(() => openSecretStore(data, { env: {}, keyDir: join(blocked, "file", "k"), platform: "freebsd" })).toThrow(SecretError);
+    expect(existsSync(join(data, "secrets.json"))).toBe(false);
+    expect(existsSync(join(data, "secrets.enc.json"))).toBe(false);
+    expect(readFileSync(join(blocked, "file"), "utf8")).toBe("");
   });
 });
 
 describe("through the CLI and the app", () => {
+  test("key storage failure stops before asking for credentials; correcting the folder resumes encrypted storage", async () => {
+    const home = tmp(); const data = join(home, ".august"); const blocker = join(home, "not-a-directory");
+    writeFileSync(blocker, "preserve-owner-fixture");
+    let keyDir = join(blocker, "keys"); let prompts = 0; const out: string[] = [];
+    const io: CliIo = {
+      home, env: {}, print: line => void out.push(line), ask: async () => { prompts++; return "owned-fixture-secret"; },
+      get secrets() { return openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir, run: () => { throw Error("OS credential access forbidden"); } }); },
+    };
+    expect((await main(["secret", "set", "OWNER_TOKEN"], io)).code).toBe(1);
+    expect(prompts).toBe(0);
+    expect(out.join("\n")).toContain("Nothing was saved in plaintext");
+    expect(existsSync(join(data, "secrets.json"))).toBe(false);
+    keyDir = join(home, "keys");
+    expect((await main(["secret", "set", "OWNER_TOKEN"], io)).code).toBe(0);
+    expect(io.secrets!.kind).toBe("encrypted-file");
+    expect(io.secrets!.get("OWNER_TOKEN")).toBe("owned-fixture-secret");
+    expect(allBytes(data).some(bytes => bytes.includes("owned-fixture-secret"))).toBe(false);
+    expect(out.join("\n")).not.toContain("owned-fixture-secret");
+    expect(readFileSync(blocker, "utf8")).toBe("preserve-owner-fixture");
+  });
+
   const cli = (home: string, env: Record<string, string | undefined> = {}) => {
     const out: string[] = []; const answers: string[] = [];
     const io: CliIo = {

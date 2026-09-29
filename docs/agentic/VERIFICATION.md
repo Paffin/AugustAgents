@@ -103,6 +103,28 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Encryption failures cannot select plaintext, 2026-09-29
+
+- Automatic credential-store selection now throws a typed safe error when a
+  master key cannot be loaded/created; it never selects FileStore because of an
+  encryption failure. CLI commands report typed credential/master-key errors
+  with failure status rather than an uncaught stack. Explicit FileStore
+  fixtures and legacy encrypted-store migration behavior are retained.
+- Meaningful regression/attack gate, after implementation: typecheck plus
+  `bun test packages/app/test/secrets-at-rest.test.ts packages/app/test/redteam.test.ts`
+  exits 0, 51 pass, 0 fail, 247 expectations, 253 ms. Recovery, theft, tamper,
+  rotation, legacy migration and existing compromised-model coverage are retained.
+- Full `bun run check` exits 0: 602 pass, 12 skip, 0 fail, 2271 expectations,
+  614 tests/36 files, 20.26 s test time. The 12 platform/sandbox skips are not passes.
+- Actual CLI exercise used random credentials and a process-owned blocked key
+  path in `august-secret-failclosed-SnMsc9`. It failed before prompting; correcting
+  the folder enabled encrypted set/get and reopening readback. Ciphertext/log
+  scans found no raw value; no plaintext secret file was created. The blocking
+  sentinel file is unchanged. Native OS credential-store calls: zero.
+- This is live CLI/backend evidence, not a frontend credential-management
+  journey. Global OS namespace collisions, key-folder containment/permissions,
+  full encrypted portability, platform sandbox and release evidence remain open.
+
 ### Native Laya App integration and host-native build, 2026-09-29
 
 - Added lazy CPU ONNX inference to App's existing shadow cascade; no Python,

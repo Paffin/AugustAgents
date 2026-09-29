@@ -295,7 +295,7 @@ export interface OpenStoreOptions {
   platform?: NodeJS.Platform;
   env?: Record<string, string | undefined>;
   run?: Runner;
-  /** Force a backend. */
+  /** Force a backend. Plaintext file is explicit only, retained for fixtures/legacy tooling. */
   kind?: SecretStore["kind"];
   /** Where the master key for the encrypted file lives: outside the data folder. Default `~/.config/august`. */
   keyDir?: string;
@@ -305,7 +305,7 @@ function has(run: Runner, cmd: string): boolean {
   return run("sh", ["-c", `command -v ${cmd}`]).status === 0;
 }
 
-/** Best store this machine offers: Keychain on macOS, Secret Service on a Linux desktop, else a private file. */
+/** Best store this machine offers: OS credentials or encrypted files. Encryption failures never downgrade protection. */
 export function openSecretStore(dir: string, options: OpenStoreOptions = {}): SecretStore {
   const run = options.run ?? defaultRunner;
   const platform = options.platform ?? process.platform;
@@ -320,15 +320,14 @@ export function openSecretStore(dir: string, options: OpenStoreOptions = {}): Se
   if (kind === "keychain") return new KeychainStore(dir, run);
   if (kind === "secret-service") return new SecretServiceStore(dir, run);
   if (kind === "file") return new FileStore(dir);
-  // The file fallback is encrypted whenever a master key can be found or created outside the data folder.
+  // Without an OS store, a usable master key is mandatory. Never silently write plaintext.
   try {
     const master = loadMasterKey({ env, keyDir: options.keyDir ?? env.AUGUST_KEY_DIR ?? join(process.env.HOME ?? "/", ".config", "august"), create: true });
     if (master) return new EncryptedFileStore(dir, master.key);
   } catch (error) {
     if (error instanceof MasterKeyError) throw new SecretError(error.message);
-    // A key that cannot be stored (read-only home, no permission) leaves only the plaintext fallback; doctor says so.
   }
-  return new FileStore(dir);
+  throw new SecretError("Cannot open encrypted secrets. Set AUGUST_KEY_DIR to a writable key folder outside the data directory, or supply AUGUST_MASTER_KEY. Nothing was saved in plaintext.");
 }
 
 /** Store first, then the environment, so CI and containers keep working with plain env vars. */

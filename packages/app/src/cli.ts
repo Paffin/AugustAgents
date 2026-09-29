@@ -10,8 +10,8 @@ import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/me
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
 import { ConfigError, EGRESS_ENTRY, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
-import { keyFromRecoveryCode, keyIdOf, loadMasterKey, recoveryCode, writeMasterKeyFile } from "./masterkey.ts";
-import { EncryptedFileStore, SECRET_NAME, openSecretStore, resolveSecret, scopedSecretName, type SecretStore } from "./secrets.ts";
+import { MasterKeyError, keyFromRecoveryCode, keyIdOf, loadMasterKey, recoveryCode, writeMasterKeyFile } from "./masterkey.ts";
+import { EncryptedFileStore, SecretError, SECRET_NAME, openSecretStore, resolveSecret, scopedSecretName, type SecretStore } from "./secrets.ts";
 
 export interface CliIo {
   print(line: string): void;
@@ -121,7 +121,7 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
         return { code: command === undefined || command === "help" || command === "--help" ? 0 : 1 };
     }
   } catch (error) {
-    if (error instanceof ConfigError) {
+    if (error instanceof ConfigError || error instanceof SecretError || error instanceof MasterKeyError) {
       io.print(`Error: ${error.message}`);
       return { code: 1 };
     }
@@ -727,7 +727,7 @@ async function doctor(configPath: string, io: CliIo): Promise<CliResult> {
     return { code: 1 };
   }
   const store = storeFor(io);
-  if (store.kind === "file") warn("Secrets: owner-only plaintext file (no master key could be stored; set AUGUST_MASTER_KEY or make the key folder writable)");
+  if (store.kind === "file") warn("Secrets: explicitly selected plaintext store; use OS credentials or an encrypted-file store");
   else ok(`Secrets: ${store.kind}`);
   if (store instanceof EncryptedFileStore && store.plaintextNames().length) warn(`${store.plaintextNames().length} secret(s) are still in a plaintext file from an older version: run august secret migrate`);
 

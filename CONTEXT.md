@@ -30,8 +30,9 @@ and zero-cost admission journeys pass locally. Preserve the full 28-outcome goal
 - Source for budgets, learning, distillation, and memory exists; full acceptance
   remains outstanding. Current local file/restart journeys pass, but latency is
   high and broader failure/platform scenarios are not yet qualified.
-- Credential tests are isolated; production Keychain namespace/plaintext fallback
-  remain risks. Runtime tariffs are now explicit; setup discovers models from
+- Credential tests are isolated; automatic plaintext fallback is removed.
+  Production Keychain namespace and key-folder validation remain risks.
+  Runtime tariffs are now explicit; setup discovers models from
   the configured endpoint or requires an owner-entered identifier. Reported usage includes decision and empty replies;
   unreported timeout billing and quote changes across resumed runs remain gaps.
 - Durable-runtime backup/readback is locally verified only; retained-data
