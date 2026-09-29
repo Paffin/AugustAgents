@@ -87,7 +87,8 @@ describe("secret stores", () => {
     const yes: Runner = () => ({ status: 0, stdout: "" });
     expect(openSecretStore(tmp(), { platform: "darwin", run: yes }).kind).toBe("keychain");
     expect(openSecretStore(tmp(), { platform: "linux", run: yes, env: { DBUS_SESSION_BUS_ADDRESS: "x" } }).kind).toBe("secret-service");
-    expect(openSecretStore(tmp(), { platform: "linux", run: yes, env: {} }).kind).toBe("file");
+    expect(openSecretStore(tmp(), { platform: "linux", run: yes, env: {}, keyDir: join(tmp(), "keys") }).kind).toBe("encrypted-file");
+    expect(openSecretStore(tmp(), { platform: "linux", run: yes, env: {}, kind: "file" }).kind).toBe("file");
   });
 
   test("the store wins over the environment", () => {

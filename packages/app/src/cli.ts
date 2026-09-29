@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
@@ -9,7 +10,8 @@ import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/me
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
 import { ConfigError, EGRESS_ENTRY, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
-import { SECRET_NAME, openSecretStore, resolveSecret, scopedSecretName, type SecretStore } from "./secrets.ts";
+import { keyFromRecoveryCode, keyIdOf, loadMasterKey, recoveryCode, writeMasterKeyFile } from "./masterkey.ts";
+import { EncryptedFileStore, SECRET_NAME, openSecretStore, resolveSecret, scopedSecretName, type SecretStore } from "./secrets.ts";
 
 export interface CliIo {
   print(line: string): void;
@@ -41,6 +43,9 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august secret set NAME       store a secret (API keys, tokens)
   august secret set --for TOOL NAME   a secret only that installed tool can receive
   august secret list | rm NAME
+  august secret key status | recovery-code | recover CODE | rotate   the master key that seals your secrets
+  august secret migrate      seal a plaintext secrets file from an older version
+  august audit verify | anchor | export FILE   check the journal against its signed anchors
   august mcp list | rm ID | allow ID HOST... | deny ID      configured MCP servers
   august skills                installed skills
   august laya status | activate [--force]
@@ -68,8 +73,10 @@ export function terminalApprover(io: Pick<CliIo, "print" | "ask">): Approver {
   };
 }
 
+const keyDirFor = (io: CliIo): string => io.env.AUGUST_KEY_DIR ?? join(io.home, ".config", "august");
+
 function storeFor(io: CliIo): SecretStore {
-  return io.secrets ?? openSecretStore(join(io.home, ".august"));
+  return io.secrets ?? openSecretStore(join(io.home, ".august"), { env: io.env, keyDir: keyDirFor(io) });
 }
 
 function appDeps(io: CliIo, configPath: string, approver?: Approver): AppDeps {
@@ -103,6 +110,8 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
         return calibrate(configPath, io);
       case "learn":
         return learn(configPath, rest, io);
+      case "audit":
+        return auditCommand(configPath, rest, io);
       case "memory":
         return memoryCommand(configPath, rest, io);
       case "patterns":
@@ -334,6 +343,13 @@ async function secret(args: readonly string[], io: CliIo): Promise<CliResult> {
   const capability = forIndex >= 0 ? args[forIndex + 1] : undefined;
   const rest = forIndex >= 0 ? [...args.slice(0, forIndex), ...args.slice(forIndex + 2)] : [...args];
   const [action, name] = rest;
+  if (action === "key") return secretKey(rest.slice(1), store, io);
+  if (action === "migrate") {
+    if (!(store instanceof EncryptedFileStore)) { io.print(`Secrets are in ${store.kind}; there is no plaintext file to move.`); return { code: 0 }; }
+    const { moved } = store.migrate();
+    io.print(moved ? `Sealed ${moved} secret(s) under your master key and destroyed the plaintext file.` : "No plaintext secrets file to move.");
+    return { code: 0 };
+  }
   if (forIndex >= 0 && (!capability || !/^[A-Za-z0-9_-]+$/.test(capability))) {
     io.print("Usage: august secret set|rm --for CAPABILITY NAME");
     return { code: 1 };
@@ -362,6 +378,65 @@ async function secret(args: readonly string[], io: CliIo): Promise<CliResult> {
   }
   io.print("Usage: august secret set NAME | list | rm NAME   (names look like OPENAI_API_KEY)\n       august secret set|rm --for CAPABILITY NAME   (a secret only that capability can receive)");
   return { code: 1 };
+}
+
+function secretKey(args: readonly string[], store: SecretStore, io: CliIo): CliResult {
+  const [action, code] = args;
+  const keyDir = keyDirFor(io);
+  const current = loadMasterKey({ env: io.env, keyDir });
+  if (action === "status" || action === undefined) {
+    io.print(current ? `Master key ${current.id} (${current.source === "env" ? "from AUGUST_MASTER_KEY" : current.source === "passphrase" ? "from AUGUST_MASTER_PASSPHRASE" : `file ${current.path}`}). It is outside the data folder.` : "No master key yet; one is created the first time a secret is stored.");
+    io.print(`Secrets are stored in: ${store.kind}`);
+    return { code: 0 };
+  }
+  if (action === "recovery-code") {
+    if (!current) { io.print("There is no master key to back up yet."); return { code: 1 }; }
+    io.print(`Recovery code for master key ${current.id}. Write it down and keep it offline, apart from your backups; anyone holding it can open your secrets:\n${recoveryCode(current.key)}`);
+    return { code: 0 };
+  }
+  if (action === "recover" && code) {
+    const key = keyFromRecoveryCode(args.slice(1).join("-").replace(/\s+/g, ""));
+    const path = writeMasterKeyFile(keyDir, key);
+    io.print(`Restored master key ${keyIdOf(key)} to ${path}. The previous key file, if any, was kept beside it.`);
+    return { code: 0 };
+  }
+  if (action === "rotate") {
+    if (!(store instanceof EncryptedFileStore) || !current) { io.print("Only the encrypted file store has a master key to rotate."); return { code: 1 }; }
+    if (current.source !== "file" && current.source !== "new") { io.print("The key comes from the environment, so August cannot replace it. Set a new AUGUST_MASTER_KEY yourself and enter the secrets again."); return { code: 1 }; }
+    const next = randomBytes(32);
+    const target = store.rotate(next);
+    writeMasterKeyFile(keyDir, next);
+    io.print(`Re-sealed ${target.list().length} secret(s) under new master key ${target.keyId}. Your recovery code changed: run august secret key recovery-code and store the new one.`);
+    return { code: 0 };
+  }
+  io.print("Usage: august secret key status | recovery-code | recover CODE | rotate");
+  return { code: 1 };
+}
+
+function auditCommand(configPath: string, args: readonly string[], io: CliIo): CliResult {
+  const { app } = openLearningApp(configPath, io);
+  try {
+    const [action, file] = args;
+    const a = app.audit;
+    if (!a.enabled) { io.print(`Audit anchoring is off: ${a.reason}`); return { code: 1 }; }
+    if (action === undefined || action === "verify") {
+      const r = a.verify();
+      io.print(`Journal chain: ${r.chainBrokenAt === null ? "intact" : `BROKEN at entry ${r.chainBrokenAt}`}. Anchors: ${r.anchors}, vouching through entry ${r.anchoredThrough}; ${r.unanchored} newer entries not yet anchored.`);
+      for (const p of r.problems) io.print(`  ✗ ${p}`);
+      io.print(r.ok ? "Nothing has been altered or removed behind an anchor." : "The journal does not match its signed anchors.");
+      return { code: r.ok ? 0 : 1 };
+    }
+    if (action === "anchor") { const x = a.anchor(); io.print(x ? `Anchored entry ${x.seq} (anchor ${x.n}).` : "Nothing new to anchor."); return { code: 0 }; }
+    if (action === "export" && file) {
+      writeFileSync(file, JSON.stringify({ keyId: a.keyId, publicKey: a.publicKey, anchors: a.anchors() }, null, 2), { mode: 0o600 });
+      io.print(`Wrote ${a.anchors().length} anchors and the public key to ${file}. Keep a copy somewhere the machine cannot reach: it is what proves the journal was not rewritten.`);
+      return { code: 0 };
+    }
+    io.print("Usage: august audit verify | anchor | export FILE");
+    return { code: 1 };
+  } finally {
+    app.close();
+  }
 }
 
 function mcp(configPath: string, args: readonly string[], io: CliIo): CliResult {
@@ -619,7 +694,9 @@ async function doctor(configPath: string, io: CliIo): Promise<CliResult> {
     return { code: 1 };
   }
   const store = storeFor(io);
-  ok(`Secrets: ${store.kind}${store.kind === "file" ? " (owner-only file, not encrypted)" : ""}`);
+  if (store.kind === "file") warn("Secrets: owner-only plaintext file (no master key could be stored; set AUGUST_MASTER_KEY or make the key folder writable)");
+  else ok(`Secrets: ${store.kind}`);
+  if (store instanceof EncryptedFileStore && store.plaintextNames().length) warn(`${store.plaintextNames().length} secret(s) are still in a plaintext file from an older version: run august secret migrate`);
 
   const keyName = config.llm.apiKeyEnv;
   const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(config.llm.baseUrl).hostname);

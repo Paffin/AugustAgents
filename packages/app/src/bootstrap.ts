@@ -17,7 +17,7 @@ import {
   type LlmProvider,
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
-import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, makeSessionKey, type SessionKey } from "@august/core";
+import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, AnchorLog, AuditAnchorer, AuditKey, EventJournal, makeSessionKey, verifyAudit, type AuditAnchor, type AuditReport, type SessionKey } from "@august/core";
 import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
 import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
 import { MemoryExecutor, MemoryStore, memoryManifest } from "@august/memory";
@@ -31,6 +31,7 @@ import { JsonlDecisionLog } from "./decision-log.ts";
 import { MetaExecutor, metaManifest, type ArtifactService } from "./meta.ts";
 import { targetsFor, type TargetRoots } from "./targets.ts";
 import { builtinVerifiers } from "./verifiers.ts";
+import { deriveKey, loadMasterKey } from "./masterkey.ts";
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
 import { SecretBroker, type DeliveryContext, type EgressMode } from "./broker.ts";
 
@@ -48,6 +49,18 @@ export interface AppDeps {
   /** Override sandbox detection, for tests. */
   sandboxKind?: SandboxKind;
   home?: string;
+}
+
+export interface AuditHandle {
+  enabled: boolean;
+  reason?: string;
+  keyId?: string;
+  /** Base64 SPKI of the public key, for verifying exported anchors elsewhere. */
+  publicKey?: string;
+  anchorLogPath?: string;
+  anchor(): AuditAnchor | undefined;
+  anchors(): AuditAnchor[];
+  verify(): AuditReport;
 }
 
 export interface StartReport {
@@ -79,6 +92,8 @@ export interface App {
   distill: DistillationEngine;
   /** What the owner asked August to remember, with where each entry came from. */
   memory: MemoryStore;
+  /** Signed anchors that make a rewrite of the journal detectable. */
+  audit: AuditHandle;
   /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
   feedback(session: SessionKey, runId: string, verdict: "success" | "failure", note?: string): void;
   /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
@@ -138,7 +153,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   mkdirSync(config.root, { recursive: true });
   const home = deps.home ?? process.env.HOME ?? dirname(config.root);
 
-  const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir));
+  // Keys live outside the data folder, so a copy or backup of the data does not carry them.
+  const keyDir = deps.env.AUGUST_KEY_DIR ?? join(deps.home ?? dirname(dirname(config.dataDir)), ".config", "august");
+  const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir), { env: deps.env, keyDir });
   const pricing = resolveLlmPricing(config);
   const llm = new UsageRequiredProvider(deps.llm ?? createLlm(config, deps, secrets));
 
@@ -292,6 +309,24 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   mcp = new McpHost(registry, { fallback: meta });
 
   const journal = new EventJournal(join(config.dataDir, "journal.db"));
+  // The journal's own hash chain can be recomputed by anyone who can edit the file. Signed anchors, kept beside the
+  // key and outside the data folder, cannot: they are what a rewrite of history fails to match.
+  let audit: AuditHandle;
+  try {
+    const master = loadMasterKey({ env: deps.env, keyDir, create: true });
+    if (!master) throw new Error("no master key is available");
+    const key = new AuditKey(deriveKey(master.key, "audit-ed25519"));
+    const log = new AnchorLog(join(keyDir, "audit", "anchors.jsonl"));
+    const anchorer = new AuditAnchorer(journal, { log, key });
+    audit = {
+      enabled: true, keyId: key.id, publicKey: key.publicKeyBytes().toString("base64"), anchorLogPath: log.path,
+      anchor: () => anchorer.anchor(), anchors: () => log.list(),
+      verify: () => verifyAudit(journal, log.list(), key.publicKeyBytes(), key.id),
+    };
+  } catch (error) {
+    const reason = (error as Error).message;
+    audit = { enabled: false, reason, anchor: () => undefined, anchors: () => [], verify: () => ({ ok: false, chainBrokenAt: journal.verify(), anchors: 0, anchoredThrough: 0, unanchored: journal.head()?.seq ?? 0, problems: [`audit anchoring is off: ${reason}`] }) };
+  }
   const verifierSet = new VerifierSet(builtinVerifiers({ root: config.root, skillsDir: config.skillsDir, registry }));
   const learning = new LearningStore(join(config.dataDir, "learning.db"), { verifiers: verifierSet.ids() });
   const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"));
@@ -464,6 +499,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     },
     distill,
     memory,
+    audit,
     recalibrate() {
       const samples = calibrationSamples(learning.examples().examples, engineId);
       const table = fitCalibrationTable(samples, { engine: engineId });
@@ -484,6 +520,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       return report;
     },
     close() {
+      // Vouch for everything up to the last event before the journal is closed.
+      try { audit.anchor(); } catch { /* the journal is still intact; the next run anchors it */ }
       mcp.closeAll();
       for (const proxy of proxies) void proxy.close();
       learning.close();

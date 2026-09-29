@@ -30,6 +30,7 @@ function digest(prevHash: string, seq: number, ts: number, event: JournalEvent):
  */
 export class EventJournal {
   private readonly db: Database;
+  private readonly observers: Array<(entry: JournalEntry) => void> = [];
 
   constructor(path = ":memory:") {
     this.db = new Database(path);
@@ -59,7 +60,26 @@ export class EventJournal {
         "INSERT INTO journal (seq, ts, kind, session, data, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
       .run(seq, now, event.kind, event.session, JSON.stringify(event.data), prevHash, hash);
-    return { ...event, seq, ts: now, prevHash, hash };
+    const entry = { ...event, seq, ts: now, prevHash, hash };
+    // An observer (the audit anchorer) must never be able to lose an event: it runs after the entry is durable.
+    for (const observe of this.observers) { try { observe(entry); } catch { /* the entry is already recorded */ } }
+    return entry;
+  }
+
+  /** Called after each append. */
+  onAppend(observer: (entry: JournalEntry) => void): void {
+    this.observers.push(observer);
+  }
+
+  /** The newest entry's position and hash, or undefined when the journal is empty. */
+  head(): { seq: number; hash: string } | undefined {
+    const row = this.db.query("SELECT seq, hash FROM journal ORDER BY seq DESC LIMIT 1").get() as { seq: number; hash: string } | null;
+    return row ?? undefined;
+  }
+
+  entry(seq: number): { seq: number; hash: string } | undefined {
+    const row = this.db.query("SELECT seq, hash FROM journal WHERE seq = ?").get(seq) as { seq: number; hash: string } | null;
+    return row ?? undefined;
   }
 
   list(session?: string): JournalEntry[] {
