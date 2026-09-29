@@ -15,11 +15,34 @@ export interface IncomingMessage {
   text: string;
 }
 
+export interface ApprovalView {
+  tool: string;
+  reason: string;
+  details?: string;
+  args: Record<string, unknown>;
+}
+
+export interface GatewayApprovals {
+  /** The approval this session is waiting on, if any. */
+  pending(session: SessionKey): ApprovalView | null;
+  /** Answer it. False when nothing was pending. */
+  answer(session: SessionKey, allow: boolean): boolean;
+}
+
+export interface WebUi {
+  html: string;
+  js: string;
+}
+
 export interface GatewayOptions extends BindConfig {
   workspace: string;
   /** The agent loop. Called serially per session, in parallel across sessions. */
   onMessage(message: IncomingMessage): Promise<{ reply: string }>;
   queue?: LaneQueue;
+  /** Approvals for browser and API clients. They bypass the lane: the lane is busy waiting for them. */
+  approvals?: GatewayApprovals;
+  /** Chat page served at "/". The token reaches it in the URL fragment, which browsers never send. */
+  webUi?: WebUi;
 }
 
 function json(status: number, body: unknown): Response {
@@ -71,6 +94,18 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
 
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") return json(200, { ok: true });
+    if (options.webUi && request.method === "GET" && (url.pathname === "/" || url.pathname === "/app.js")) {
+      const isJs = url.pathname === "/app.js";
+      return new Response(isJs ? options.webUi.js : options.webUi.html, {
+        headers: {
+          "content-type": isJs ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+        },
+      });
+    }
 
     // A token in the URL ends up in logs, history and Referer headers.
     if (url.searchParams.has("token")) {
@@ -79,6 +114,39 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
     const given = bearerToken(request);
     if (given === null || !tokensEqual(given, options.token)) {
       return json(401, { error: "unauthorized" });
+    }
+
+    const sessionFrom = (channel: unknown, user: unknown): SessionKey | null => {
+      if (typeof channel !== "string" || typeof user !== "string") return null;
+      try {
+        return makeSessionKey({ workspace: options.workspace, channel, user });
+      } catch {
+        return null;
+      }
+    };
+
+    if (url.pathname === "/v1/pending" && request.method === "GET") {
+      const session = sessionFrom(url.searchParams.get("channel"), url.searchParams.get("user"));
+      if (!session) return json(400, { error: "channel and user are required" });
+      return json(200, { approval: options.approvals?.pending(session) ?? null });
+    }
+
+    if (url.pathname === "/v1/approve" && request.method === "POST") {
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return json(415, { error: "content-type must be application/json" });
+      }
+      const raw = await readBody(request);
+      if (raw === null) return json(413, { error: "body too large" });
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(raw) ?? {};
+      } catch {
+        return json(400, { error: "invalid JSON" });
+      }
+      const session = sessionFrom(payload.channel, payload.user);
+      if (!session || typeof payload.allow !== "boolean") return json(400, { error: "channel, user and allow are required" });
+      const answered = options.approvals?.answer(session, payload.allow) ?? false;
+      return json(answered ? 200 : 409, answered ? { ok: true } : { error: "nothing is waiting for approval" });
     }
 
     if (url.pathname === "/v1/message" && request.method === "POST") {

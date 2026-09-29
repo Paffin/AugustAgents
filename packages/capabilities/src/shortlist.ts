@@ -23,7 +23,7 @@ export class ToolIndex {
 
   constructor(tools: readonly ToolDescriptor[]) {
     this.docs = tools.map((tool) => {
-      const tokens = tokenize(`${tool.name.replace(/[._-]+/g, " ")} ${tool.description}`);
+      const tokens = tokenize(`${tool.name.replace(/[._-]+/g, " ")} ${tool.description} ${(tool.keywords ?? []).join(" ")}`);
       const tf = new Map<string, number>();
       for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
       return { tool, tf, length: tokens.length };

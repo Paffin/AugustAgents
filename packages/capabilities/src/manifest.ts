@@ -10,6 +10,8 @@ export interface ToolDescriptor {
   effects: readonly Effect[];
   producesUntrusted?: boolean;
   inputSchema?: unknown;
+  /** Extra search words, e.g. in other languages ("файл", "прочитать"). */
+  keywords?: readonly string[];
 }
 
 export interface CapabilitySource {

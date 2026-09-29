@@ -1,0 +1,12 @@
+{
+  "name": "@august/channels",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@august/agent": "workspace:*",
+    "@august/core": "workspace:*",
+    "@august/gateway": "workspace:*"
+  },
+  "exports": { ".": "./src/index.ts" }
+}

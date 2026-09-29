@@ -212,3 +212,33 @@ export async function fillArguments(
   }
   throw new DecisionError(`could not get valid arguments for ${tool.name}: ${problems.join("; ")}`);
 }
+
+/**
+ * Makes lexical tool search work across languages: turns a request in any
+ * language into English search keywords. Results are cached, and only the
+ * person's own request is sent, never tool results.
+ */
+export class LlmQueryExpander {
+  private readonly cache = new Map<string, string>();
+  constructor(private readonly provider: LlmProvider, private readonly maxEntries = 200) {}
+
+  async expand(request: string): Promise<string> {
+    const key = request.trim().slice(0, 500);
+    const hit = this.cache.get(key);
+    if (hit !== undefined) return hit;
+    const text = await this.provider.complete(
+      [
+        {
+          role: "system",
+          content: "List 3 to 10 short English keywords (verbs and nouns) describing what tool the request needs. Reply with the keywords only, separated by spaces.",
+        },
+        { role: "user", content: key },
+      ],
+      { maxTokens: 40 },
+    );
+    const keywords = (text.toLowerCase().match(/[a-z][a-z0-9-]*/g) ?? []).slice(0, 10).join(" ");
+    if (this.cache.size >= this.maxEntries) this.cache.delete(this.cache.keys().next().value as string);
+    this.cache.set(key, keywords);
+    return keywords;
+  }
+}

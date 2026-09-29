@@ -1,15 +1,37 @@
 #!/usr/bin/env bun
-import { createInterface } from "node:readline/promises";
+import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { main } from "./cli.ts";
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-// A question pending when stdin ends never resolves by itself, so race it with the close event.
-const closed = new Promise<null>((resolve) => rl.on("close", () => resolve(null)));
+/**
+ * Lines are queued as they arrive, so piped input ("printf '1\n' | august setup")
+ * works as well as typing: nothing is lost between two questions, and the end
+ * of input answers null instead of hanging.
+ */
+const rl = createInterface({ input: process.stdin });
+const lines: string[] = [];
+const waiters: Array<(line: string | null) => void> = [];
+let closed = false;
+rl.on("line", (line) => {
+  const w = waiters.shift();
+  if (w) w(line);
+  else lines.push(line);
+});
+rl.on("close", () => {
+  closed = true;
+  for (const w of waiters.splice(0)) w(null);
+});
+
+function ask(prompt: string): Promise<string | null> {
+  process.stdout.write(prompt);
+  if (lines.length) return Promise.resolve(lines.shift()!);
+  if (closed) return Promise.resolve(null);
+  return new Promise((resolve) => waiters.push(resolve));
+}
 
 const result = await main(process.argv.slice(2), {
   print: (line) => console.log(line),
-  ask: (prompt) => Promise.race([rl.question(prompt).catch(() => null), closed]),
+  ask,
   env: process.env,
   home: homedir(),
 });
@@ -19,3 +41,9 @@ if (!result.gateway) {
   rl.close();
   process.exit(result.code);
 }
+const shutdown = () => {
+  result.stop?.();
+  process.exit(0);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

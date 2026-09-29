@@ -3,8 +3,9 @@
 1. `bun install`
 2. Ветка от `main`, небольшие PR.
 3. Перед PR: `bun run check` (typecheck + тесты) должен проходить.
-4. Любое изменение в `packages/policy`, `packages/capabilities`, `packages/gateway` и `packages/mcp` требует теста, который воспроизводит атаку или ошибку, которую оно закрывает.
-5. Коммиты: короткое императивное описание, зачем изменение, а не что.
+4. Любое изменение в `packages/policy`, `packages/capabilities`, `packages/gateway`, `packages/mcp`, `packages/discovery` и `packages/channels` требует теста, который воспроизводит атаку или ошибку, которую оно закрывает. Новый вектор атаки добавляется в red-team набор `packages/app/test/redteam.test.ts`.
+5. Документы (`README`, `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/ROADMAP.md`) обновляются в том же PR, что и код.
+6. Коммиты: короткое императивное описание, зачем изменение, а не что.
 
 ## Принципы
 

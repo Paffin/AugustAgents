@@ -229,4 +229,44 @@ describe("AgentRuntime", () => {
     expect(r.reply).toContain("Something went wrong");
     expect(journal.list(session).at(-1)!.kind).toBe("task.error");
   });
+
+  test("a request in another language is expanded into search words when lexical search finds too little", async () => {
+    const ex = executor({ "notes.search": "found" });
+    const decision = picks("notes.search", "none");
+    const asked: string[] = [];
+    const { agent, journal } = build({
+      decision,
+      llm: fakeLlm({ "notes.search": { q: "встреча" } }),
+      executor: ex,
+      expandQuery: async (t) => (asked.push(t), "search notes"),
+    });
+    await agent.handle(session, "найди в заметках встречу");
+    expect(asked).toEqual(["найди в заметках встречу"]);
+    expect(ex.calls[0]!.tool).toBe("notes.search");
+    expect(journal.list(session).some((e) => e.kind === "shortlist.expanded")).toBe(true);
+  });
+
+  test("a failing expander does not break the task", async () => {
+    const { agent } = build({ decision: picks("none"), llm: fakeLlm({}, "ok"), executor: executor(), expandQuery: async () => Promise.reject(new Error("x")) });
+    expect((await agent.handle(session, "привет")).reply).toBe("ok");
+  });
+
+  test("the approver sees what the executor says the call will do", async () => {
+    const ex = executor();
+    ex.describeCall = async (tool, args) => `will send mail to ${String(args.to)}`;
+    const asked: ApprovalRequest[] = [];
+    const { agent } = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: ex, approver: { approve: async (r) => (asked.push(r), false) } });
+    await agent.handle(session, "send an email");
+    expect(asked[0]!.details).toBe("will send mail to a@b.c");
+  });
+
+  test("an unreachable model is explained, without leaking the prompt", async () => {
+    const { LlmError } = await import("@august/brain");
+    const llm: LlmProvider = { name: "m", complete: async () => Promise.reject(new LlmError("m: HTTP 503", true)) };
+    const { agent } = build({ decision: picks("none"), llm, executor: executor() });
+    const r = await agent.handle(session, "secret prompt text");
+    expect(r.reply).toContain("could not reach the language model (m: HTTP 503)");
+    expect(r.reply).not.toContain("secret prompt");
+  });
 });
+
