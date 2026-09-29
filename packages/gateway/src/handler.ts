@@ -1,0 +1,129 @@
+import { LaneQueue, QueueOverflowError, makeSessionKey, type SessionKey } from "@august/core";
+import {
+  allowedHostHeaders,
+  allowedOriginList,
+  assertSafeBind,
+  bearerToken,
+  tokensEqual,
+  type BindConfig,
+} from "./guard.ts";
+
+export const MAX_BODY_BYTES = 64 * 1024;
+
+export interface IncomingMessage {
+  session: SessionKey;
+  text: string;
+}
+
+export interface GatewayOptions extends BindConfig {
+  workspace: string;
+  /** The agent loop. Called serially per session, in parallel across sessions. */
+  onMessage(message: IncomingMessage): Promise<{ reply: string }>;
+  queue?: LaneQueue;
+}
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+async function readBody(request: Request): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_BODY_BYTES) return null;
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Builds the request handler without binding a port, so every rule can be
+ * tested directly. Order: Host (DNS rebinding) -> Origin (cross-site pages)
+ * -> token (header only) -> route.
+ */
+export function createGatewayHandler(options: GatewayOptions): (request: Request) => Promise<Response> {
+  assertSafeBind(options);
+  const hosts = allowedHostHeaders(options);
+  const origins = allowedOriginList(options);
+  const queue = options.queue ?? new LaneQueue();
+
+  return async (request) => {
+    const host = request.headers.get("host")?.toLowerCase() ?? "";
+    if (!hosts.has(host)) return json(421, { error: "unexpected host" });
+
+    const origin = request.headers.get("origin");
+    if (origin !== null && !origins.has(origin.toLowerCase())) {
+      return json(403, { error: "origin not allowed" });
+    }
+
+    const url = new URL(request.url);
+    if (url.pathname === "/health" && request.method === "GET") return json(200, { ok: true });
+
+    // A token in the URL ends up in logs, history and Referer headers.
+    if (url.searchParams.has("token")) {
+      return json(400, { error: "send the token in the Authorization header, not the URL" });
+    }
+    const given = bearerToken(request);
+    if (given === null || !tokensEqual(given, options.token)) {
+      return json(401, { error: "unauthorized" });
+    }
+
+    if (url.pathname === "/v1/message" && request.method === "POST") {
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return json(415, { error: "content-type must be application/json" });
+      }
+      const raw = await readBody(request);
+      if (raw === null) return json(413, { error: "body too large" });
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        return json(400, { error: "invalid JSON" });
+      }
+      const { channel, user, text } = (payload ?? {}) as Record<string, unknown>;
+      if (typeof channel !== "string" || typeof user !== "string" || typeof text !== "string" || text.length === 0) {
+        return json(400, { error: "channel, user and text are required strings" });
+      }
+      let session: SessionKey;
+      try {
+        session = makeSessionKey({ workspace: options.workspace, channel, user });
+      } catch {
+        return json(400, { error: "invalid channel or user" });
+      }
+      try {
+        const result = await queue.enqueue(session, () => options.onMessage({ session, text }));
+        return json(200, { reply: result.reply });
+      } catch (error) {
+        if (error instanceof QueueOverflowError) return json(429, { error: "too many pending messages" });
+        return json(500, { error: "agent failed" });
+      }
+    }
+
+    return json(404, { error: "not found" });
+  };
+}
+
+export interface RunningGateway {
+  readonly port: number;
+  stop(): void;
+}
+
+export function startGateway(options: GatewayOptions): RunningGateway {
+  const fetchHandler = createGatewayHandler(options);
+  const server = Bun.serve({ hostname: options.hostname, port: options.port, fetch: fetchHandler });
+  return { port: server.port ?? options.port, stop: () => void server.stop(true) };
+}

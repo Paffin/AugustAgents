@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+.august/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+models/
+.DS_Store
+coverage/

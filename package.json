@@ -1,0 +1,18 @@
+{
+  "name": "augustagents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "August: a local-first agent platform where a small decision model (Laya) decides, an LLM writes, and a sandbox executes.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check": "bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
