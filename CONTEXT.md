@@ -14,10 +14,10 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-Continue provider configuration and budget correctness after the live-runtime
-repair at 2081216. Real web file reading and useful continuation after restarting
-the process passed. Superpowers is disabled; develop directly against the full
-requirements and 28-outcome roadmap.
+Continue model discovery, billing correctness and runtime acceptance after the
+tariff/budget-control repair. Frozen prices were removed; owner quotes and web
+task thresholds are validated. Real file reading, restart and zero-cost admission
+journeys pass locally. Superpowers is disabled; preserve the full 28-outcome goal.
 
 ## Active Risks
 
@@ -27,8 +27,9 @@ requirements and 28-outcome roadmap.
   remains outstanding. Current local file/restart journeys pass, but latency is
   high and broader failure/platform scenarios are not yet qualified.
 - Credential tests are isolated; production Keychain namespace/plaintext fallback
-  remain risks. Provider pricing/dates still contain fixed values. Reported usage
-  now includes decision and empty replies; unreported timeout billing is unknown.
+  remain risks. Runtime tariffs are now explicit; model presets remain to be
+  replaced by discovery. Reported usage includes decision and empty replies;
+  unreported timeout billing and quote changes across resumed runs remain gaps.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit

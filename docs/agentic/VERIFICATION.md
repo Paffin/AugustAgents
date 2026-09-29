@@ -103,6 +103,33 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Explicit tariffs and web task thresholds, 2026-09-29
+
+- Compiled provider tariffs and fixed quote dates removed. Runtime requires an
+  explicit quote for every endpoint, including loopback; zero/free prices and
+  positive local-proxy prices are valid. Calendar dates are checked. Setup writes
+  an explicit local quote or asks for remote rates; automatic vendor pricing and
+  dynamic model selection are still outstanding.
+- Full gate exit 0: 590 pass, 12 skip, 0 fail, 2206 expectations, 602 tests/35
+  files; tests 8.16 s, combined 9.25 s on the observed macOS/Bun1.4.2 host.
+- Real CLI setup selected the loaded local Qwen. Browser entered zero cost for
+  a configured positive owner resource tariff: failed run, 0 tools, 0 reported
+  input/output tokens and 0 cost. The tariff was a declared verification setting,
+  not a claim about the local backend charging API fees.
+- Browser then set 12000 tokens and USD0.00001 (10 microdollars). Real model read
+  random order.json reference8a9cc892b643bc5d, amount52157 and returned52166 for
+  amount+9. Persisted completed/1step, 1137 input/3625 output tokens, estimated
+  cost1microdollar under the configured17/33microdollars-per-million quote.
+- After restarting the gateway, the zero-cost request was again rejected before
+  generation. Real crypto fixture state was used; owner OS credentials untouched.
+  Both owned gateways/browser stopped, port53224 clear; foreign models preserved.
+- Regression verifies zero-cost compiled reflex still runs without LLM. The web
+  controls are stop thresholds: exact vendor billing, pre-call input reservation,
+  daily/tool budgets and quote integrity across resumed runs remain unqualified.
+- One full run hit an existing oversized-line MCP rejection failure; focused
+  MCP34tests and subsequent full gates pass. No MCP code/assertion was changed
+  or weakened; the intermittent rejection diagnostic remains a release concern.
+
 ### Live-provider repair at 2081216, 2026-09-29
 
 - Typecheck/full gate exit 0: 586 pass, 12 skip, 0 fail, 2180 expectations,
