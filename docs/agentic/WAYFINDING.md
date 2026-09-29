@@ -2,7 +2,7 @@
 
 **Artifact Type:** Agentic Foundation
 **Status:** Ready
-**Revision:** sha256:daa1906bd244f399577483b734d8c0b5983cae36173b4717518409efa76668d4
+**Revision:** sha256:8d7ba3995030c9106d52635afe23e88d7743ab43c2f07158d77b30b344ca87d2
 **Approved Revision:** none
 **Approved At:** none
 
@@ -23,9 +23,9 @@
 
 ## Destination
 
-A policy-accepted project Foundation that converts the audit of commit
-`aa8bf43` into traceable bounded outcomes, establishes evidence-gated product
-claims, and makes `OUT-001` ready for feature-level design.
+A policy-accepted closeout Foundation that records verified OUT-001 behavior,
+keeps remaining release gaps explicit, and makes bounded OUT-002 durable-runtime
+design ready for Brainstorming.
 
 ## Readiness Checklist
 
@@ -42,10 +42,10 @@ claims, and makes `OUT-001` ready for feature-level design.
 
 ## Frontier
 
-- Complete exact internal review and Autonomous Ready progression of this
-  Foundation revision.
-- Continue bounded `OUT-001` implementation without widening into later runtime
-  or security outcomes.
+- Complete exact internal review and Autonomous Ready progression of the
+  OUT-001 closeout revision.
+- Begin bounded OUT-002 Brainstorming without widening into later security,
+  learning, memory, or release outcomes.
 
 ## Fog
 

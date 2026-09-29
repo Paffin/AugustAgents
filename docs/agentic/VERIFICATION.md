@@ -92,14 +92,25 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
-- 2026-09-29, branch `main`, commit `aa8bf43`, macOS, Bun `1.4.2`, Node
-  `v26.0.0`: `bun test` produced 295 pass and 1 fail. The failing real-app
-  red-team install-injection case timed out at 5 seconds.
-- One diagnostic focused rerun with `--timeout 10000` produced 37 pass and the
-  same case timed out at 10 seconds. This is a reproducible hang, not accepted
-  timing noise.
-- `bun run typecheck` failed before type checking because `tsc` was not found;
-  `node_modules` and a dependency lockfile were absent in the clean checkout.
+- 2026-09-29, branch `codex/audit-foundation`, implementation commit `b669434`,
+  macOS, Bun `1.4.2`, Node `v26.0.0`: exact dev dependencies and text `bun.lock`
+  are committed; `bun install --frozen-lockfile` and `bun run typecheck` exit 0.
+- Checksum-verified official Bun `1.1.39` (`bun-darwin-aarch64.zip` SHA-256
+  `d6d67a65959ae82c6f8df3478b9e0ff223eaeb6a09752f109d9b58b52f4c1b5a`)
+  accepts the same lockfile with frozen dry-run exit 0.
+- `bun test`: 297 pass, 0 fail, 837 expectations across 16 files in 2.00 s.
+  The former install-injection timeout passes in about 4 ms; two public App
+  sessions prove a later Registry response cannot replace or duplicate-consume
+  the prepared plan.
+- `/usr/bin/time -p bun run check`: exit 0, 2.58 s on the observed host.
+- A real terminal CLI using temporary no-key configuration against
+  `http://127.0.0.1:8888/v1` and loaded
+  `unsloth/Qwen3.8-Flash-Next-GGUF` returned `PONG`. Command:
+  `printf 'Ответь одним словом: PONG\nexit\n' | HOME="$AUGUST_SMOKE_HOME" bun packages/app/src/bin.ts chat`;
+  exit 0; bounded output was `Ready. Type "exit" to quit.` followed by
+  `you> PONG`. The exact temporary HOME was moved to Trash after inspection.
+  Full inspectable local evidence is linked from ignored
+  `docs/superpowers/progress/OUT-001-evidence.md`.
 - No current CI run, clean-platform matrix, real Laya weights, live Linux
   sandbox/egress, Windows sandbox, release signing, updater, or recovery drill
   was verified in this Foundation pass.

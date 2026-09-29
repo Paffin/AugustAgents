@@ -186,6 +186,8 @@ python sidecar/laya_server.py            # http://127.0.0.1:7788
 
 **Текущий статус — прототип:** агентный цикл, политики и мандаты, MCP/skills discovery, опциональная песочница, секреты, web/Telegram, installer, Laya-sidecar и red-team набор присутствуют в коде. Это не означает durable runtime, outcome-verified learning, гарантированную containment-модель или production readiness; актуальные границы и доказательства ведутся в [Agentic Foundation](docs/agentic/WAYFINDING.md).
 
+**Локальный baseline 2026-09-29:** typecheck и 297 тестов проходят, полный `bun run check` занимает 2.58 с на проверенной macOS-машине; терминальный путь подтверждён на локальном Qwen. Это локальное доказательство, не CI/кроссплатформенная сертификация.
+
 **Следующий milestone:** сначала воспроизводимый baseline, durable runtime, provenance/approval safety, MCP и capability supply chain, outcome-verified learning, интегрированная лестница и memory. Порядок зафиксирован в [Agentic Roadmap](docs/agentic/ROADMAP.md).
 
 Честный список того, что ещё не закрыто, — в конце [модели угроз](docs/THREAT_MODEL.md) и в [дорожной карте](docs/ROADMAP.md). Проект на стадии MVP: пока не подключайте его к аккаунтам с деньгами.

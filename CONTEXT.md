@@ -14,15 +14,14 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-Execute the ordered audit-derived roadmap under Autonomous lifecycle review.
-Restore a reproducible green baseline in `OUT-001` before changing runtime
-architecture.
+`OUT-001` has produced a reproducible green baseline, exact install-plan
+binding, and live local-model evidence. Reconcile and integrate that outcome,
+then design the durable session/run engine in `OUT-002`.
 
 ## Active Risks
 
-- One real-app red-team test hangs beyond both 5 s and 10 s.
-- Type checking is not currently runnable in the clean checkout because
-  dependencies and a lockfile are absent.
+- Linux/Windows/CI, real Laya weights, live sandbox/egress, signing, updater,
+  and recovery evidence remain unverified.
 - Session/run durability, outcome-verified learning, integrated distillation,
   and memory are not delivered.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit
@@ -30,9 +29,8 @@ architecture.
 
 ## Roadmap Position
 
-The Foundation is being reconciled to Autonomous policy. `OUT-001` is the
-selected first implementation outcome after exact internal review and Ready
-progression.
+`OUT-001` is complete pending final branch integration. `OUT-002` is next and
+may enter Brainstorming after the current closeout revision is Ready.
 
 ## Reading Links
 

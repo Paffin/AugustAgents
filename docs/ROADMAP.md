@@ -23,7 +23,7 @@
 - [x] Установщик в 3 касания (`install.sh` + `august setup`)
 - [x] Red-team набор инъекций
 
-**Гейт 1 пока не закрыт.** На локальном baseline 2026-09-29 (`aa8bf43`, Bun 1.4.2) `bun test` дал 295 pass / 1 timeout; сфокусированный повтор с лимитом 10 секунд завис на том же real-app red-team сценарии. `bun run typecheck` не стартовал, потому что в чистом checkout отсутствовали `node_modules`, lockfile и доступный `tsc`. Точная текущая evidence-запись и новый порядок outcomes находятся в [Agentic Foundation](agentic/WAYFINDING.md) и [Agentic Roadmap](agentic/ROADMAP.md).
+**Локальная часть Гейта 1 закрыта, сам релизный гейт ещё открыт.** На baseline 2026-09-29 (Bun 1.4.2, совместимый lockfile проверен также Bun 1.1.39) typecheck проходит, `bun test` даёт 297 pass / 0 fail, `bun run check` занимает 2.58 с, а терминальный путь отвечает через локальный Qwen. До релиза всё ещё нужны чистая macOS-машина, первый подтверждённый CI run и перечисленные ниже живые platform checks. Точная evidence-запись и порядок outcomes находятся в [Agentic Foundation](agentic/WAYFINDING.md) и [Agentic Roadmap](agentic/ROADMAP.md).
 
 Что осталось проверить руками до релиза:
 
