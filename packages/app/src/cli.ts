@@ -154,14 +154,35 @@ interface Provider {
   label: string;
   baseUrl: string;
   keyName?: string;
-  model: string;
 }
 
 export const PROVIDERS: Provider[] = [
-  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyName: "OPENAI_API_KEY", model: "gpt-4o-mini" },
-  { label: "OpenRouter (many models, one key)", baseUrl: "https://openrouter.ai/api/v1", keyName: "OPENROUTER_API_KEY", model: "qwen/qwen3-32b" },
-  { label: "Ollama on this computer (no key, fully local)", baseUrl: "http://localhost:11434/v1", model: "qwen3" },
+  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyName: "OPENAI_API_KEY" },
+  { label: "OpenRouter (many models, one key)", baseUrl: "https://openrouter.ai/api/v1", keyName: "OPENROUTER_API_KEY" },
+  { label: "Ollama endpoint on this computer", baseUrl: "http://localhost:11434/v1" },
 ];
+
+async function modelCatalog(provider: Provider, key: string | undefined, io: CliIo): Promise<Array<{ id: string; loaded: boolean }>> {
+  let response: Response;
+  try {
+    response = await (io.fetch ?? fetch)(`${provider.baseUrl.replace(/\/+$/, "")}/models`, {
+      headers: key ? { authorization: `Bearer ${key}` } : {}, redirect: "error", signal: AbortSignal.timeout(10_000),
+    });
+  } catch { io.print("Model catalog unavailable; enter your model identifier explicitly."); return []; }
+  if (response.status === 401 || response.status === 403) throw new ConfigError("Model catalog authentication failed; check the provider credential.");
+  if (!response.ok) { io.print("Model catalog unavailable; enter your model identifier explicitly."); return []; }
+  const reader = response.body?.getReader(); if (!reader) return [];
+  let size = 0; const chunks: Uint8Array[] = [];
+  for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > 10 * 1024 * 1024) { await reader.cancel(); throw new ConfigError("Model catalog exceeds the safe response size"); } chunks.push(value); }
+  let value: unknown; try { value = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { io.print("Model catalog was not readable; enter your model identifier explicitly."); return []; }
+  const rows = (value as { data?: unknown } | null)?.data;
+  if (!Array.isArray(rows)) return [];
+  const ids = new Set<string>();
+  return rows.flatMap(row => {
+    if (!row || typeof row.id !== "string" || !row.id.trim() || row.id.length > 256 || /[\x00-\x1f\x7f]/.test(row.id) || ids.has(row.id)) return [];
+    ids.add(row.id); return [{ id: row.id, loaded: row.loaded === true }];
+  });
+}
 
 async function choose(io: CliIo, question: string, options: string[]): Promise<number | null> {
   io.print(question);
@@ -193,8 +214,9 @@ async function setup(configPath: string, io: CliIo): Promise<CliResult> {
     const url = (await io.ask("Base URL (https://.../v1): "))?.trim();
     if (!url) return { code: 1 };
     const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
-    provider = { label: "custom", baseUrl: url, keyName: local ? undefined : "LLM_API_KEY", model: "" };
+    provider = { label: "custom", baseUrl: url, keyName: local ? undefined : "LLM_API_KEY" };
   }
+  parseConfig({ ...base, llm: { ...base.llm, baseUrl: provider.baseUrl } });
   const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(provider.baseUrl).hostname);
   let pricing: LlmPricing = { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "local API price", asOf: new Date().toISOString().slice(0, 10) };
   if (!local) {
@@ -202,20 +224,26 @@ async function setup(configPath: string, io: CliIo): Promise<CliResult> {
     if (!rates || rates.length !== 2 || rates.some((n) => !Number.isSafeInteger(n) || n < 0)) { io.print("Pricing needs two non-negative integer rates."); return { code: 1 }; }
     pricing = { inputMicrosPerMillion: rates[0]!, outputMicrosPerMillion: rates[1]!, source: provider.baseUrl, asOf: new Date().toISOString().slice(0, 10) };
   }
-  const model = (await io.ask(`Model [${provider.model || "required"}]: `))?.trim() || provider.model;
-  if (!model) return { code: 1 };
-
+  let key: string | undefined;
   if (provider.keyName) {
     const existing = resolveSecret(provider.keyName, store, io.env);
-    const key = (await io.ask(`2/3 ${provider.keyName}${existing ? " [press Enter to keep the saved one]" : ""}: `))?.trim();
-    if (key) store.set(provider.keyName, key);
-    else if (!existing) {
+    key = (await io.ask(`2/3 ${provider.keyName}${existing ? " [press Enter to keep the saved one]" : ""}: `))?.trim() || existing;
+    if (!key) {
       io.print("A key is needed for this provider.");
       return { code: 1 };
     }
   } else {
     io.print("2/3 No key needed for a local model.");
   }
+
+  const catalog = await modelCatalog(provider, key, io);
+  for (const model of catalog) io.print(`  ${model.id}${model.loaded ? " (loaded)" : ""}`);
+  const loaded = catalog.filter(model => model.loaded);
+  const previous = base.llm.baseUrl.replace(/\/+$/, "") === provider.baseUrl.replace(/\/+$/, "") && catalog.some(model => model.id === base.llm.model) ? base.llm.model : undefined;
+  const preferred = previous ?? (loaded.length === 1 ? loaded[0]!.id : undefined);
+  const model = (await io.ask(`Model identifier [${preferred ?? "required"}]: `))?.trim() || preferred;
+  if (!model || model.length > 256 || /[\x00-\x1f\x7f]/.test(model)) { io.print("Choose an explicit model identifier."); return { code: 1 }; }
+  if (key && provider.keyName) store.set(provider.keyName, key);
 
   const c = await choose(io, "3/3 Where will you talk to August?", ["Terminal and browser on this computer", "Also Telegram"]);
   if (c === null) return { code: 1 };

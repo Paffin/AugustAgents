@@ -103,13 +103,31 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Provider model discovery, 2026-09-29
+
+- Production templates no longer select a compiled model identifier. Setup reads
+  the configured endpoint's catalog, preserves an existing available selection,
+  or offers its unique loaded model. Without those observations, the owner must
+  enter an identifier. Authentication failures do not persist the supplied key;
+  redirects and oversized catalog responses are rejected.
+- Implementation-first verification, without TDD: `bun run check` exits 0;
+  593 pass, 12 skip, 0 fail, 2221 expectations across 605 tests/35 files, 8.27 s
+  test time. The skips remain unavailable sandbox/platform evidence.
+- Actual CLI setup against `http://127.0.0.1:8888/v1` selected the catalog's
+  unique loaded `unsloth/Qwen3.8-Flash-Next-GGUF` on Enter, then retained it on
+  repeat setup. The owned temporary home used encrypted-file secrets with OS
+  credential access forbidden. No host model process was changed.
+- This verifies live CLI discovery, not a new frontend task journey, vendor
+  billing, native Laya operation, or completion of the full platform goal.
+
 ### Explicit tariffs and web task thresholds, 2026-09-29
 
 - Compiled provider tariffs and fixed quote dates removed. Runtime requires an
   explicit quote for every endpoint, including loopback; zero/free prices and
   positive local-proxy prices are valid. Calendar dates are checked. Setup writes
   an explicit local quote or asks for remote rates; automatic vendor pricing and
-  dynamic model selection are still outstanding.
+  dynamic model selection were still outstanding at that revision; subsequent
+  CLI discovery evidence is recorded above.
 - Full gate exit 0: 590 pass, 12 skip, 0 fail, 2206 expectations, 602 tests/35
   files; tests 8.16 s, combined 9.25 s on the observed macOS/Bun1.4.2 host.
 - Real CLI setup selected the loaded local Qwen. Browser entered zero cost for

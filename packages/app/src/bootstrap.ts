@@ -114,14 +114,11 @@ export interface App {
   close(): void;
 }
 
-function isLocal(baseUrl: string): boolean {
-  return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(baseUrl).hostname);
-}
-
 export function createLlm(config: AugustConfig, deps: Pick<AppDeps, "env" | "fetch">, secrets?: SecretStore): LlmProvider {
+  if (!config.llm.model.trim()) throw new ConfigError('no model selected; run "august setup"');
   const keyName = config.llm.apiKeyEnv;
   const apiKey = keyName ? resolveSecret(keyName, secrets, deps.env) : undefined;
-  if (keyName && !apiKey && !isLocal(config.llm.baseUrl)) {
+  if (keyName && !apiKey) {
     throw new ConfigError(`no API key: run "august secret set ${keyName}" (or export ${keyName})`);
   }
   return new OpenAiCompatibleProvider({ baseUrl: config.llm.baseUrl, model: config.llm.model, apiKey, fetch: deps.fetch });

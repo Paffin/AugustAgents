@@ -16,6 +16,8 @@ application receipts and phase ceremonies are not prerequisites for development.
 Existing `docs/superpowers/` files are historical local records, not active gates.
 
 The user has authorized all in-scope changes and asks for no over-engineering.
+Use implementation-first verification, not TDD: implement the behavior, then
+add/run meaningful regressions and live checks. Preserve existing test coverage.
 Keep documentation consistent with verified behavior. Ask only when a real
 product/authority decision or unavailable required access prevents progress.
 

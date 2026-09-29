@@ -41,6 +41,7 @@ function makeIo(home: string, answers: Array<string | null> = [], extra: Partial
     home,
     sandboxKind: "none",
     secrets: new FileStore(join(home, ".august")),
+    fetch: (async () => new Response(JSON.stringify({ data: [{ id: "catalog-model", loaded: true }] }), { status: 200 })) as unknown as typeof fetch,
     ...extra,
   };
   return { io, out };
@@ -100,9 +101,46 @@ describe("secret stores", () => {
 });
 
 describe("august setup (three questions)", () => {
+  // Product behavior and safety: provider metadata selects models; invalid credentials never persist.
+  test("uses the unique loaded catalog model and authenticates the catalog request", async () => {
+    const home = tmp();
+    const { io, out } = makeIo(home, ["1", "0/0", "fixture-key", "", "1"], {
+      fetch: (async (url, options) => {
+        expect(String(url)).toBe("https://api.openai.com/v1/models");
+        expect(new Headers(options?.headers).get("authorization")).toBe("Bearer fixture-key");
+        expect(options?.redirect).toBe("error");
+        return Response.json({ data: [{ id: "available" }, { id: "owner-loaded", loaded: true }, { id: "owner-loaded", loaded: true }, { id: "bad\nidentifier", loaded: true }] });
+      }) as typeof fetch,
+    });
+    expect((await main(["setup"], io)).code).toBe(0);
+    expect(loadConfig(defaultConfigPath(home)).llm.model).toBe("owner-loaded");
+    expect(out.join("\n")).not.toContain("fixture-key");
+    expect(out.filter(line => line.includes("owner-loaded (loaded)"))).toHaveLength(1);
+  });
+
+  test("requires an explicit model when the catalog is unavailable", async () => {
+    const unavailable = { fetch: (async () => new Response("unavailable", { status: 503 })) as unknown as typeof fetch };
+    const missing = makeIo(tmp(), ["3", ""], unavailable);
+    expect((await main(["setup"], missing.io)).code).toBe(1);
+    expect(existsSync(defaultConfigPath(missing.io.home!))).toBe(false);
+    const explicit = makeIo(tmp(), ["3", "owner-model", "1"], unavailable);
+    expect((await main(["setup"], explicit.io)).code).toBe(0);
+    expect(loadConfig(defaultConfigPath(explicit.io.home!)).llm.model).toBe("owner-model");
+  });
+
+  test("catalog authentication failure saves neither the credential nor config", async () => {
+    const { io, out } = makeIo(tmp(), ["1", "0/0", "fixture-key"], {
+      fetch: (async () => new Response("private diagnostic", { status: 401 })) as unknown as typeof fetch,
+    });
+    expect((await main(["setup"], io)).code).toBe(1);
+    expect(io.secrets!.get("OPENAI_API_KEY")).toBeUndefined();
+    expect(existsSync(defaultConfigPath(io.home!))).toBe(false);
+    expect(out.join("\n")).not.toMatch(/fixture-key|private diagnostic/);
+  });
+
   test("OpenAI: key goes to the store, never into the config file", async () => {
     const home = tmp();
-    const { io, out } = makeIo(home, ["1", "150000/600000", "", "sk-live-abc", "1"]);
+    const { io, out } = makeIo(home, ["1", "150000/600000", "sk-live-abc", "", "1"]);
     expect((await main(["setup"], io)).code).toBe(0);
     const raw = readFileSync(defaultConfigPath(home), "utf8");
     expect(raw).not.toContain("sk-live-abc");
@@ -122,7 +160,7 @@ describe("august setup (three questions)", () => {
   });
 
   test("custom remote setup records explicit token pricing", async () => {
-    const home = tmp(); const { io } = makeIo(home, ["4", "https://llm.example/v1", "100000/400000", "custom-model", "key", "1"]); expect((await main(["setup"], io)).code).toBe(0); expect(loadConfig(defaultConfigPath(home)).llm.pricing).toMatchObject({ inputMicrosPerMillion: 100_000, outputMicrosPerMillion: 400_000, source: "https://llm.example/v1" });
+    const home = tmp(); const { io } = makeIo(home, ["4", "https://llm.example/v1", "100000/400000", "key", "custom-model", "1"]); expect((await main(["setup"], io)).code).toBe(0); expect(loadConfig(defaultConfigPath(home)).llm.pricing).toMatchObject({ inputMicrosPerMillion: 100_000, outputMicrosPerMillion: 400_000, source: "https://llm.example/v1" });
   });
 
   test("stops cleanly when the person gives up or omits a required key", async () => {

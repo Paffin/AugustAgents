@@ -279,7 +279,7 @@ describe("createApp", () => {
 
   test("a local model needs no key", () => {
     const home = tmp();
-    const cfg = { ...defaultConfig(home), llm: { baseUrl: "http://localhost:11434/v1", model: "qwen", apiKeyEnv: "OPENAI_API_KEY", pricing: { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "owner local quote", asOf: new Date().toISOString().slice(0, 10) } } };
+    const cfg = { ...defaultConfig(home), llm: { baseUrl: "http://localhost:11434/v1", model: "qwen", pricing: { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "owner local quote", asOf: new Date().toISOString().slice(0, 10) } } };
     expect(() => createApp(cfg, { env: {} })).not.toThrow();
   });
 

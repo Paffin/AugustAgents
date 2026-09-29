@@ -27,8 +27,8 @@ journeys pass locally. Superpowers is disabled; preserve the full 28-outcome goa
   remains outstanding. Current local file/restart journeys pass, but latency is
   high and broader failure/platform scenarios are not yet qualified.
 - Credential tests are isolated; production Keychain namespace/plaintext fallback
-  remain risks. Runtime tariffs are now explicit; model presets remain to be
-  replaced by discovery. Reported usage includes decision and empty replies;
+  remain risks. Runtime tariffs are now explicit; setup discovers models from
+  the configured endpoint or requires an owner-entered identifier. Reported usage includes decision and empty replies;
   unreported timeout billing and quote changes across resumed runs remain gaps.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.

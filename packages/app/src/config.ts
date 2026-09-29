@@ -137,7 +137,7 @@ export function defaultConfig(home: string): AugustConfig {
   return {
     workspace: "home",
     root: join(home, "August"),
-    llm: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", apiKeyEnv: "OPENAI_API_KEY" },
+    llm: { baseUrl: "https://api.openai.com/v1", model: "", apiKeyEnv: "OPENAI_API_KEY" },
     gateway: { port: 7777, token: randomBytes(24).toString("hex") },
     dataDir: join(home, ".august", "data"),
     mcp: [],
@@ -164,7 +164,8 @@ export function parseConfig(value: unknown): AugustConfig {
   const root = str(c.root, "root");
   const dataDir = str(c.dataDir, "dataDir");
   const baseUrl = str(c.llm?.baseUrl, "llm.baseUrl");
-  const model = str(c.llm?.model, "llm.model");
+  if (typeof c.llm?.model !== "string") throw new ConfigError("llm.model must be a string; choose a model with august setup");
+  const model = c.llm.model;
 
   let url: URL;
   try {
@@ -176,6 +177,7 @@ export function parseConfig(value: unknown): AugustConfig {
   if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalUrl(url))) {
     throw new ConfigError("llm.baseUrl must use https (http is allowed only for localhost)");
   }
+  if (url.username || url.password || url.search || url.hash) throw new ConfigError("llm.baseUrl must be a base address without credentials, query or fragment");
   if (c.llm?.apiKeyEnv !== undefined && !/^[A-Z_][A-Z0-9_]*$/.test(c.llm.apiKeyEnv)) {
     throw new ConfigError("llm.apiKeyEnv must be an environment variable name, not the key itself");
   }
