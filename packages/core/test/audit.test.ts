@@ -14,7 +14,11 @@ function setup(events = 120, every = 50) {
   const dir = tmp(); const journal = new EventJournal(join(dir, "journal.db"));
   const key = new AuditKey(randomBytes(32)); const log = new AnchorLog(join(dir, "keys", "anchors.jsonl"));
   const anchorer = new AuditAnchorer(journal, { log, key, every });
-  for (let i = 0; i < events; i++) journal.append({ kind: "tool.call", session: "s", data: { i } }, 1000 + i);
+  // Construct synthesized fixture history atomically: filesystem fsync latency is not the attack under test.
+  // Production append/observer durability is unchanged; reopened-file and independent-process tests remain.
+  journal.rawDb.transaction(() => {
+    for (let i = 0; i < events; i++) journal.append({ kind: "tool.call", session: "s", data: { i } }, 1000 + i);
+  })();
   return { dir, journal, key, log, anchorer };
 }
 

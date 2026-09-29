@@ -103,6 +103,85 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### External audit App/CLI and independent-process journey — `f4a2ada`, 2026-09-30
+
+- Configured `auditExternal` resolves only a secret reference and optional owner
+  CA. App periodically reconciles the retained external prefix before signing;
+  configured CLI, automatic append and shutdown cannot bypass that preflight.
+  Signed local backlog and unsigned retained journal tail resume after outage.
+  Owner-only `/v1/audit`, web and doctor report absent/unavailable/conflicting
+  custody; external metadata contains no task contents.
+- `audit verify --anchors configured-URL` and export do not construct App, own
+  runtime, migrate, provision keys/salts or sign inspected history. A private
+  query-only SQLite image refuses active WAL. A different CLI URL receives no
+  credential. Regression hashes/mtimes/listings remain unchanged after verify;
+  export refuses an existing target. Wrong/missing evidence is not repaired.
+- Actual loaded model discovered at the owner's existing local endpoint; no
+  manufactured inference response or forced tool selection. Owned web task
+  `7fe5d74b-862c-4e03-bf26-42d76975929a` read the random `order.json`, returned
+  reference `a1a4a1ed07712b5b` and correct `20029 + 41 = 20070`, completed with
+  one tool step / 2426 reported tokens (957 input / 1469 output). Its source file
+  remained unchanged. The independent process retained six signed anchors
+  covering journal entry 8 and possessed only public key/metadata, not master
+  key, journal or model credentials.
+- Physical lost-ACK retention/readback and owned custody SIGSTOP/SIGCONT showed
+  unavailable/recovered warnings through the real browser. Independent service
+  restart then verified the stopped journal with CLI exit 0 and unchanged
+  file fingerprints. After rewriting/re-hashing that owned journal and removing
+  its local anchor file, external verification exited 1, identifying all six
+  signed-head mismatches; fingerprints/external records were unchanged. Doctor
+  also rejected integrity. Original journal/anchor copies were kept in the
+  owned evidence directory before this deliberate attack.
+- The final guarded code cold-started against that attacked fixture: web showed
+  `Audit conflict`, and startup/shutdown left the missing local anchor file
+  absent. Regressions additionally exercise 51 appends and CLI publish after
+  local-log deletion: neither manufactures a replacement chain.
+- A separate clone of the retained original journal added two synthesized
+  unpublished events: CLI reported gap 2 / exit 1. Removing that unpublished
+  tail yielded anchored-prefix exit 0 but **explicitly unknown post-anchor
+  removal**, not a claim of untouched whole history; both inspections left
+  files unchanged. No cryptographic system can prove deleted entries that were
+  never independently witnessed. This geometry check is not another model run.
+- Desktop/mobile screenshots were inspected at 1280x900 and 390x844; WCAG2 A/AA
+  axe-core 4.12.1 returned 0 violations / 0 incomplete / 20 passes in both
+  observed task states, with no unhandled browser errors. Evidence lives under
+  `/private/tmp/august-live-audit.FUqq6X/`; the root gateway/custody/browser were
+  stopped. Foreign model/services and owner credentials were not modified.
+- Final `f4a2ada` implementation gate: `bun --no-env-file run typecheck` and
+  `bun --no-env-file test` exited 0: 662 pass / 12 Linux-only skip / 0 fail,
+  2644 assertions / 674 tests / 39 files / 22.70s. Host-native standalone build
+  also passed. Independent review found the signing bypass, then rechecked its
+  removal. Public HTTPS/DNS custody, actual immutable owner service deployment,
+  multi-key rotation, host-power-loss/permission and Windows qualification remain
+  open. The full 28-outcome goal and OUT-009 are not complete.
+
+### Linux audit fixture I/O diagnosis, 2026-09-30
+
+- Exact remote `e2096fa` run `36644848142`: macOS and sidecar succeeded;
+  Ubuntu had 667 pass / 0 skip / 1 fail, 2648 assertions / 668 tests / 80.50s.
+  The middle-anchor attack timed out at 5435.46ms against the unchanged 5000ms
+  limit. Other audit cases took 424-3159ms. Windows Bun 1.4.2 crashed with a
+  segmentation fault after external-audit tests: complete counts/JUnit were
+  unavailable. Earlier POSIX/filesystem failures remain. Neither is a pass.
+- Isolated non-root/cap-drop/network-none Debian arm64 container used immutable
+  owned runner image `c199d53263cb50ead3c02b542cda9137a71c9190a5c2a327a20050ac90595a03`
+  and Bun 1.4.2 Linux archive checksum
+  `54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7`.
+  No `.env`, PAT, socket, host home or source-worktree mount was passed; only an
+  archived source copy and private diagnostic inputs were mounted read-only.
+- Matched 220-event fixture: individual auto-commit construction 383.90ms,
+  attack verification 1.28ms; transaction construction 2.88ms, verification
+  1.13ms. Both had four anchors, identical head hash
+  `2cf66a0bb44a1e5d4f0d5635df2d3c898563c3529ca6ac695a98e87eb756230a`,
+  and detected both attacks. The fixture-only optimization wraps synthesized
+  setup in one transaction; production append/observer durability and the test
+  timeout are unchanged. Same eight container tests changed 1.68s to 297ms,
+  19 assertions / 0 failures; the formerly slow case changed 326.40 to 4.16ms.
+  Native eight cases also passed. This supports an I/O diagnosis, not a claim
+  that the 5-second Ubuntu failure or Windows crash was reproduced here.
+  GitHub matrix revalidation remains required. Diagnostic containers were
+  ephemeral and did not change unrelated Docker workloads.
+
 ### Durable model accounting and owner reconciliation, 2026-09-30
 
 - Runtime schema v3 records an attempt before the actual generation request,
@@ -183,10 +262,12 @@ only configuration intent.
   `bun --no-env-file test`: 628 pass, 12 skip, 0 fail; 2439 assertions /
   640 tests / 36 files, 20.47s. Typecheck and host-native build pass. Tests did not
   load the owner's newly supplied GitHub `.env` credentials.
-- **Issue #2 is NOT closed:** an interrupted provider request without a usage
+- **Historical checkpoint, superseded by `e2096fa` accounting:** at this point
+  issue #2 was NOT closed. An interrupted provider request without a usage
   receipt still has unknown billing. Displayed totals are received reports, not
   proof of zero charge for that interruption. Durable attempt/reservation and
-  reconciliation work remains under #2/#3; complete native/platform/external
+  reconciliation work was still pending here; current unknown holds and
+  owner-sourced reconciliation are recorded above. Complete native/platform/external
   effect qualification and the full 28-outcome goal remain open.
 
 ### CI matrix source and local evidence, 2026-09-30
