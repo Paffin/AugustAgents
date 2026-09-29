@@ -58,6 +58,11 @@ describe("PolicyEngine basics", () => {
 });
 
 describe("prompt injection", () => {
+  test("Safety/reliability invariant: taint snapshots restore exactly and malformed snapshots fail closed", () => {
+    expect(new TaintState({ tainted: true, sources: ["web.fetch"] }).snapshot()).toEqual({ tainted: true, sources: ["web.fetch"] });
+    expect(() => new TaintState({ tainted: true, sources: [] })).toThrow(/invalid TaintState/);
+  });
+
   test("mail read then send from the tainted context asks, naming the source", () => {
     const e = new PolicyEngine();
     const taint = new TaintState();
@@ -180,6 +185,15 @@ describe("skill upgrades", () => {
 });
 
 describe("LoopGuard", () => {
+  test("Safety/reliability invariant: restored loop state retains step and repeat limits", () => {
+    const first = new LoopGuard({ maxSteps: 3, maxRepeats: 2 });
+    first.record("web.fetch", { url: "x" });
+    first.record("web.fetch", { url: "x" });
+    const restored = new LoopGuard({ maxSteps: 3, maxRepeats: 2 });
+    restored.restore(first.snapshot());
+    expect(restored.record("web.fetch", { url: "x" }).rule).toBe("repeat-limit");
+  });
+
   test("denies repeated identical calls regardless of key order", () => {
     const g = new LoopGuard({ maxRepeats: 2 });
     expect(g.record("web.fetch", { a: 1, b: 2 }).decision).toBe("allow");

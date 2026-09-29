@@ -77,12 +77,50 @@ export interface AgentReply {
   reply: string;
   steps: number;
   tainted: boolean;
+  stopReason?: "cancelled" | "deadline" | "external-effect-budget";
+}
+
+export interface AgentCheckpointState {
+  history: string[];
+  taint: ReturnType<TaintState["snapshot"]>;
+  loop: ReturnType<LoopGuard["snapshot"]>;
+  steps: number;
+  externalEffects: number;
+}
+export type AgentRunEvent =
+  | ({ type: "checkpoint"; phase: "before_decision" | "waiting_approval" | "tool_started" | "tool_finished"; safeToResume: boolean; lastTool?: string; argsHash?: string } & AgentCheckpointState)
+  | { type: "stopped"; reason: NonNullable<AgentReply["stopReason"]> };
+export interface AgentExecutionContext {
+  priorMessages?: readonly string[];
+  checkpoint?: AgentCheckpointState;
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  maxSteps?: number;
+  maxExternalEffects?: number;
+  onEvent?: (event: AgentRunEvent) => void | Promise<void>;
+}
+
+class RunControlError extends Error {
+  constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>) { super(reason); this.name = "RunControlError"; }
 }
 
 const DEFAULT_SCHEMA: JsonSchema = { type: "object", additionalProperties: true };
 
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 12);
+}
+
+function boundedCheckpointHistory(history: readonly string[]): string[] {
+  const marker = "[earlier content truncated]\n";
+  const selected: string[] = [];
+  let left = 16_000;
+  for (let i = history.length - 1; i >= 0 && selected.length < 8; i--) {
+    const item = history[i]!;
+    if (item.length <= left) { selected.push(item); left -= item.length; continue; }
+    if (selected.length === 0 && left > marker.length) selected.push(`${marker}${item.slice(-(left - marker.length))}`);
+    break;
+  }
+  return selected.reverse();
 }
 
 /**
@@ -101,19 +139,31 @@ export class AgentRuntime {
     this.maxResultChars = options.maxResultChars ?? 4000;
   }
 
-  async handle(session: SessionKey, text: string): Promise<AgentReply> {
+  async handle(session: SessionKey, text: string, context: AgentExecutionContext = {}): Promise<AgentReply> {
     const { journal } = this.options;
     const log = (kind: string, data: unknown) => journal.append({ kind, session, data }, this.now());
-    const taint = new TaintState();
-    const guard = new LoopGuard({ maxSteps: this.options.maxSteps ?? 12 });
-    const history: string[] = [];
-    let steps = 0;
+    const taint = new TaintState(context.checkpoint?.taint);
+    const guard = new LoopGuard({ maxSteps: context.maxSteps ?? this.options.maxSteps ?? 12 });
+    if (context.checkpoint) guard.restore(context.checkpoint.loop);
+    const history: string[] = [...(context.checkpoint?.history ?? context.priorMessages ?? [])];
+    let steps = context.checkpoint?.steps ?? 0;
+    let externalEffects = context.checkpoint?.externalEffects ?? 0;
     let expansion: string | undefined;
+    const notify = (event: AgentRunEvent) => context.onEvent?.(event);
+    const control = (): void => {
+      if (context.signal?.aborted) throw new RunControlError("cancelled");
+      if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) throw new RunControlError("deadline");
+    };
+    const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
+      await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra });
+    };
 
     log("task.start", { chars: text.length });
 
     try {
       for (;;) {
+        control();
+        await checkpoint("before_decision", true);
         const tools = this.options.registry.enabledTools();
         const index = new ToolIndex(tools);
         let shortlist = index.search(`${text}\n${history.join("\n")}`);
@@ -194,6 +244,8 @@ export class AgentRuntime {
           return await this.finish(text, history, `Blocked: ${verdict.reason}.`, steps, taint, log);
         }
         if (verdict.decision === "ask") {
+          control();
+          await checkpoint("waiting_approval", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
           const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
           const ok = await this.approver.approve({ session, tool: descriptor.name, args, verdict, details });
           log("approval", { tool: descriptor.name, granted: ok, rule: verdict.rule });
@@ -202,6 +254,11 @@ export class AgentRuntime {
           }
         }
 
+        control();
+        const hasExternalEffect = descriptor.effects.some((effect) => effect !== "read");
+        if (hasExternalEffect && externalEffects >= (context.maxExternalEffects ?? Number.MAX_SAFE_INTEGER)) throw new RunControlError("external-effect-budget");
+        if (hasExternalEffect) externalEffects += 1;
+        await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
         log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
         let result: string;
         let failed = false;
@@ -224,8 +281,14 @@ export class AgentRuntime {
             ? `Result of ${descriptor.name}:\n${fenceUntrusted(clipped, descriptor.name)}`
             : `Result of ${descriptor.name}: ${clipped}`,
         );
+        await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
       }
     } catch (error) {
+      if (error instanceof RunControlError) {
+        log("task.stop", { reason: error.reason });
+        await notify({ type: "stopped", reason: error.reason });
+        return { reply: `Stopped: ${error.reason}.`, steps, tainted: taint.snapshot().tainted, stopReason: error.reason };
+      }
       const name = (error as Error).name;
       log("task.error", { name });
       // LLM errors name the provider and the HTTP status, never the key or the prompt.

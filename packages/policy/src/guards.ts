@@ -31,6 +31,7 @@ export interface LoopGuardOptions {
   maxSteps?: number;
   maxRepeats?: number;
 }
+export interface LoopGuardSnapshot { steps: number; repeats: Array<[string, number]> }
 
 /** Stops runaway tasks: too many steps, or the same call over and over. */
 export class LoopGuard {
@@ -42,6 +43,18 @@ export class LoopGuard {
   constructor(options: LoopGuardOptions = {}) {
     this.maxSteps = options.maxSteps ?? 50;
     this.maxRepeats = options.maxRepeats ?? 3;
+  }
+
+  snapshot(): LoopGuardSnapshot { return { steps: this.steps, repeats: [...this.repeats.entries()] }; }
+
+  restore(snapshot: LoopGuardSnapshot): void {
+    if (!snapshot || !Number.isInteger(snapshot.steps) || snapshot.steps < 0 || !Array.isArray(snapshot.repeats)) throw new Error("invalid LoopGuard snapshot");
+    this.steps = snapshot.steps;
+    this.repeats.clear();
+    for (const [key, count] of snapshot.repeats) {
+      if (typeof key !== "string" || !Number.isInteger(count) || count < 1) throw new Error("invalid LoopGuard repeat state");
+      this.repeats.set(key, count);
+    }
   }
 
   record(tool: string, args: unknown): Verdict {

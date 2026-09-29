@@ -7,6 +7,14 @@ import type { TaintSnapshot, ToolSpec } from "./types.ts";
 export class TaintState {
   private readonly seen = new Set<string>();
 
+  constructor(initial?: TaintSnapshot) {
+    if (!initial) return;
+    if (!Array.isArray(initial.sources) || initial.sources.some((source) => typeof source !== "string") || initial.tainted !== (initial.sources.length > 0)) {
+      throw new Error("invalid TaintState snapshot");
+    }
+    for (const source of initial.sources) this.seen.add(source);
+  }
+
   mark(source: string): void {
     this.seen.add(source);
   }

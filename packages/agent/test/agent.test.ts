@@ -3,7 +3,7 @@ import { EventJournal, makeSessionKey } from "@august/core";
 import { CapabilityRegistry, type ToolDescriptor } from "@august/capabilities";
 import type { ChatMessage, DecisionEngine, LlmProvider } from "@august/brain";
 import { PolicyEngine } from "@august/policy";
-import { AgentRuntime, type ApprovalRequest, type ToolExecutor } from "../src/index.ts";
+import { AgentRuntime, type AgentRunEvent, type ApprovalRequest, type ToolExecutor } from "../src/index.ts";
 
 const session = makeSessionKey({ workspace: "home", channel: "cli", user: "dan" });
 
@@ -74,6 +74,49 @@ function build(over: Partial<ConstructorParameters<typeof AgentRuntime>[0]> & { 
 }
 
 describe("AgentRuntime", () => {
+  test("Product behavior: prior durable context reaches decisions and the final answer", async () => {
+    const decision = picks("none");
+    const llm = fakeLlm({}, "remembered");
+    const { agent } = build({ decision, llm, executor: executor() });
+    await agent.handle(session, "search notes: what was it?", { priorMessages: ["User: remember NEPTUNE-7429", "Assistant: okay"] });
+    expect(decision.asked[0]).toContain("NEPTUNE-7429");
+    expect(llm.prompts.at(-1)!.at(-1)!.content).toContain("NEPTUNE-7429");
+  });
+
+  test("Safety/reliability invariant: observer checkpoints are bounded and name unsafe tool start", async () => {
+    const events: AgentRunEvent[] = [];
+    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor() });
+    await agent.handle(session, "search notes", { priorMessages: Array.from({ length: 12 }, (_, i) => `${i}-${"x".repeat(3000)}`), onEvent: (event) => void events.push(event) });
+    const checkpoints = events.filter((event) => event.type === "checkpoint");
+    expect(checkpoints.some((event) => event.phase === "tool_started" && !event.safeToResume && event.lastTool === "notes.search")).toBe(true);
+    expect(checkpoints.every((event) => event.history.length <= 8 && event.history.join("").length <= 16_000)).toBe(true);
+  });
+
+  test("Safety/reliability invariant: cancel, deadline, effect and step budgets stop before another call", async () => {
+    const cancelled = new AbortController(); cancelled.abort();
+    const ex = executor();
+    const { agent } = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: ex, approver: { approve: async () => true }, now: () => 10 });
+    expect((await agent.handle(session, "send", { signal: cancelled.signal })).stopReason).toBe("cancelled");
+    expect((await agent.handle(session, "send", { deadlineAt: 10 })).stopReason).toBe("deadline");
+    expect((await agent.handle(session, "send", { maxExternalEffects: 0 })).stopReason).toBe("external-effect-budget");
+    expect(ex.calls).toHaveLength(0);
+    const stepEx = executor();
+    const stepped = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: stepEx });
+    expect((await stepped.agent.handle(session, "search", { maxSteps: 1 })).reply).toContain("Stopped");
+    expect(stepEx.calls).toHaveLength(1);
+  });
+
+  test("Safety/reliability invariant: restored taint and loop state keep their safeguards", async () => {
+    const ex = executor();
+    const asked: ApprovalRequest[] = [];
+    const { agent } = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: ex, approver: { approve: async (r) => (asked.push(r), false) } });
+    await agent.handle(session, "send", { checkpoint: { history: [], taint: { tainted: true, sources: ["web.fetch"] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } });
+    expect(asked[0]?.verdict.rule).toBe("tainted-context");
+    const looped = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor() });
+    const reply = await looped.agent.handle(session, "search", { checkpoint: { history: [], taint: { tainted: false, sources: [] }, loop: { steps: 2, repeats: [["notes.search:{\"q\":\"x\"}", 3]] }, steps: 2, externalEffects: 0 } });
+    expect(reply.reply).toContain("Stopped");
+  });
+
   test("answers without a tool when the decision is none", async () => {
     const ex = executor();
     const { agent } = build({ decision: picks("none"), llm: fakeLlm({}, "hello!"), executor: ex });
@@ -269,4 +312,3 @@ describe("AgentRuntime", () => {
     expect(r.reply).not.toContain("secret prompt");
   });
 });
-
