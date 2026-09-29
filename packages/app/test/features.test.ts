@@ -566,7 +566,7 @@ describe("august serve", () => {
       expect((await (await fetch(`${base}/v1/pending?channel=web&user=local`, { headers: auth })).json() as any).approval.id).toBe(pending.id);
       const ok = await answer({ approvalId: pending.id, nonce: pending.nonce });
       expect(ok.status).toBe(200);
-      expect(await (await reply).json()).toEqual({ reply: "installed", runId: expect.any(String), state: "completed" });
+      expect(await (await reply).json()).toEqual({ reply: "installed", runId: expect.any(String), state: "completed", feedbackId: expect.any(String) });
       // Replaying the same answer after it was used is refused as gone.
       expect((await answer({ approvalId: pending.id, nonce: pending.nonce })).status).toBe(410);
     } finally {

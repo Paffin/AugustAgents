@@ -50,7 +50,7 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august skills                installed skills
   august laya status | activate [--force]
   august calibrate             fit Laya's confidence on verified outcomes (per question, language, option count)
-  august learn status | report | export FILE | feedback RUN good|bad [note]   verified outcomes and training data
+  august learn status | report | export FILE | feedback FEEDBACK_ID good|bad [note]   exact-result outcomes and training data
   august memory list [KIND] | search WORDS | show ID | add semantic|procedural TEXT | trust ID | forget ID | erase --yes | eval FILE   what August remembers, and where each item came from
   august patterns [list] | show ID | approve ID | disable ID | enable ID | forget ID   repeated work August has learned to do without asking the model
 `;
@@ -305,8 +305,8 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
       continue;
     }
     try {
-      const { reply, runId } = await app.handle(session, line);
-      lastRun = runId;
+      const { reply, feedbackId } = await app.handle(session, line);
+      lastRun = feedbackId;
       io.print(reply);
     } catch {
       io.print("Something went wrong.");
@@ -322,10 +322,13 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
   await reportServers(app, io);
   const approvals = new PendingApprovals(app.approvals);
   const queue = new LaneQueue();
-  const runView = (run: DurableRun): GatewayRunView => ({ id: run.id, state: run.state, request: run.request,
+  const runView = (run: DurableRun): GatewayRunView => {
+    const feedbackId = run.state === "completed" ? app.learning.latestSegmentId(run.id) : undefined;
+    return { id: run.id, state: run.state, request: run.request,
+    feedbackId, feedbackRecorded: feedbackId ? app.learning.hasOwnerFeedback(feedbackId) : false,
     steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) ? run.reply : undefined, updatedAt: run.updatedAt,
     canResume: ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
-  });
+  }; };
   const gatewayRunSession = (session: string) => { if (session.split(":")[1] === "telegram") throw Error("channel has its own transport"); };
 
   let inner: RunningGateway;
@@ -340,7 +343,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
     // The browser polls /v1/pending, so the prompt itself needs no push.
-    onMessage: async ({ session, text, budget }) => { const r = await app.handle(session, text, approvals.approverFor(() => {}), { budget }); return { reply: r.reply, runId: r.runId, state: app.getRun(r.runId)?.state }; },
+    onMessage: async ({ session, text, budget }) => { const r = await app.handle(session, text, approvals.approverFor(() => {}), { budget }); return { reply: r.reply, runId: r.runId, state: app.getRun(r.runId)?.state, feedbackId: r.feedbackId }; },
     runs: {
       list: (session, limit) => { gatewayRunSession(session); return app.listRuns({ session, limit }).map(runView); },
       control: async ({ session, id, action }) => {
@@ -356,7 +359,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
         return runView(app.getRun(id)!);
       },
     },
-    feedback: ({ session, runId, verdict, note }) => app.feedback(session, runId, verdict, note),
+    feedback: ({ session, feedbackId, verdict, note }) => app.feedback(session, feedbackId, verdict, note),
     secrets: app.secrets.kind === "file" ? undefined : {
       list: () => ({ backend: app.secrets.kind, names: app.secrets.list() }),
       set: (name, value) => {
@@ -659,13 +662,13 @@ function learn(configPath: string, args: readonly string[], io: CliIo): CliResul
       return { code: 0 };
     }
     if (action === "feedback" && a && (b === "good" || b === "bad")) {
-      const session = app.learning.sessionOf(app.learning.latestSegmentId(a) ?? a);
+      const session = app.learning.sessionOf(a);
       if (!session) { io.print(`No run ${a}.`); return { code: 1 }; }
       app.feedback(session as never, a, b === "good" ? "success" : "failure", note.join(" "));
       io.print("Recorded.");
       return { code: 0 };
     }
-    io.print("Usage: august learn status | report | export FILE | feedback RUN good|bad [note]");
+    io.print("Usage: august learn status | report | export FILE | feedback FEEDBACK_ID good|bad [note]");
     return { code: 1 };
   } catch (error) {
     io.print((error as Error).message);

@@ -8,9 +8,9 @@ export interface TelegramOptions {
   workspace: string;
   /** Only these Telegram user ids are served; everyone else gets no answer at all. */
   allowedUsers: readonly number[];
-  handle(session: SessionKey, text: string, approver: Approver): Promise<{ reply: string; runId?: string }>;
+  handle(session: SessionKey, text: string, approver: Approver): Promise<{ reply: string; runId?: string; feedbackId?: string }>;
   /** Records the owner's judgement of an answer. Throws when it is not theirs or was already judged. */
-  feedback?(session: SessionKey, runId: string, verdict: "success" | "failure"): void;
+  feedback?(session: SessionKey, feedbackId: string, verdict: "success" | "failure"): void;
   approvals: PendingApprovals;
   fetch?: typeof fetch;
   queue?: LaneQueue;
@@ -160,8 +160,8 @@ export class TelegramChannel {
     }
     const approver = this.o.approvals.approverFor((text, view) => this.send(chatId, text, view));
     try {
-      const { reply, runId } = await this.queue.enqueue(session, () => this.o.handle(session, m.text!, approver));
-      await this.send(chatId, reply, undefined, this.o.feedback ? runId : undefined);
+      const { reply, feedbackId } = await this.queue.enqueue(session, () => this.o.handle(session, m.text!, approver));
+      await this.send(chatId, reply, undefined, this.o.feedback ? feedbackId : undefined);
     } catch (error) {
       await this.send(chatId, error instanceof QueueOverflowError ? "Too many messages at once, please wait." : "Something went wrong.");
     }

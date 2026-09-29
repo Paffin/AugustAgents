@@ -316,7 +316,7 @@ describe("startGateway", () => {
 // Suite category: Product behavior (owner feedback is an independent outcome) and Safety/security invariant (auth, validation, and only the owner's own runs).
 describe("/v1/feedback", () => {
   const feedbackReq = (body: unknown, headers: Record<string, string> = {}) => post(body, headers, "/v1/feedback");
-  const good = { channel: "web", user: "local", runId: "run-1", verdict: "success" };
+  const good = { channel: "web", user: "local", runId: "run-1", feedbackId: "run-1", verdict: "success" };
 
   test("is absent unless a sink is wired, needs the token, and passes what it got to the sink", async () => {
     expect((await make().handler(feedbackReq(good))).status).toBe(404);
@@ -325,12 +325,12 @@ describe("/v1/feedback", () => {
     expect((await handler(feedbackReq(good, { authorization: "Bearer wrong-token-value" }))).status).toBe(401);
     const ok = await handler(feedbackReq({ ...good, note: "wrong file" }));
     expect(ok.status).toBe(200); expect(await ok.json()).toEqual({ ok: true });
-    expect(seen).toEqual([{ session: "home:web:local", runId: "run-1", verdict: "success", note: "wrong file" }]);
+    expect(seen).toEqual([{ session: "home:web:local", runId: "run-1", feedbackId: "run-1", verdict: "success", note: "wrong file" }]);
   });
 
   test("rejects malformed bodies without calling the sink", async () => {
     const seen: unknown[] = []; const { handler } = make({ feedback: (i) => void seen.push(i) });
-    for (const bad of [{ ...good, verdict: "maybe" }, { ...good, runId: "" }, { ...good, runId: "x".repeat(201) }, { ...good, channel: 5 }, { ...good, user: "a b" }, { ...good, note: "y".repeat(301) }, { ...good, note: 5 }, {}, [], "nope"]) {
+    for (const bad of [{ ...good, feedbackId: undefined }, { ...good, feedbackId: "another-run~1" }, { ...good, verdict: "maybe" }, { ...good, runId: "" }, { ...good, runId: "x".repeat(201) }, { ...good, channel: 5 }, { ...good, user: "a b" }, { ...good, note: "y".repeat(301) }, { ...good, note: 5 }, {}, [], "nope"]) {
       expect((await handler(feedbackReq(bad))).status).toBe(400);
     }
     const nonJson = new Request("http://127.0.0.1:7777/v1/feedback", { method: "POST", headers: { host: "127.0.0.1:7777", authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" }, body: "x" });
@@ -340,8 +340,8 @@ describe("/v1/feedback", () => {
 
   test("a run that is not this session's, or was already judged, gets a status that says so and nothing else", async () => {
     const { handler } = make({ feedback: ({ runId }) => { if (runId === "dup") throw new Error("owner already gave a verdict"); throw new Error("no such run for this session"); } });
-    const notMine = await handler(feedbackReq({ ...good, runId: "other" })); expect(notMine.status).toBe(409); expect(await notMine.json()).toEqual({ error: "no such answer for this session" });
-    const again = await handler(feedbackReq({ ...good, runId: "dup" })); expect(again.status).toBe(410); expect(await again.json()).toEqual({ error: "that answer was already judged" });
+    const notMine = await handler(feedbackReq({ ...good, runId: "other", feedbackId: "other" })); expect(notMine.status).toBe(409); expect(await notMine.json()).toEqual({ error: "no such answer for this session" });
+    const again = await handler(feedbackReq({ ...good, runId: "dup", feedbackId: "dup" })); expect(again.status).toBe(410); expect(await again.json()).toEqual({ error: "that answer was already judged" });
   });
 
   test("message replies carry the run id so the page can offer the judgement", async () => {

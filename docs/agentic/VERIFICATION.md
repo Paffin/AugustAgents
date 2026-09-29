@@ -103,6 +103,38 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Exact-result owner-feedback binding, 2026-09-30
+
+- Replaced implicit latest-segment selection with an exact feedback-id. The
+  completed response supplies its saved segment, web requests must correlate
+  run-id/feedback-id, and App checks that segment's persisted session. CLI and
+  Telegram retain the returned id. Task cards expose a recorded-status marker;
+  stopped/unrecorded outcomes do not offer misleading successful-answer buttons.
+- Implementation-first regressions preserve prior auth/replay/session checks.
+  An old receipt judged after a second segment was stored records only the old
+  segment, leaving the new one unjudged; independent exact feedback can then
+  judge the new segment. Telegram tests carry a resumed `~1` receipt within the
+  callback size bound. Missing and unrelated web bindings are refused.
+- Real browser exercise reopened the existing useful file-task fixture with two
+  actual pause/resume segments. Rating its completed card created exactly one
+  owner-feedback row for `95d93691-1b34-4390-a655-d436fd968558~1`, not the base
+  segment. Duplicate submission returned 410; missing feedback-id returned 400.
+  After gateway/browser reload the UI retained the recorded marker and hid the
+  rating controls. No native credentials or foreign model service was touched.
+- This click is automated verification in owned synthetic state, **not** a real
+  human evaluation sample for model activation. Original independent host file
+  verification remains separate. No new model/answer smoke was substituted.
+- A clipped paragraph produced one incomplete color-contrast check; with the
+  task panel scrolled to its top, axe WCAG A/AA reports 0 violations, 0 incomplete,
+  23 passes. The final reloaded recorded-state screen also passes that audit.
+- Runtime provenance, full training exams, signed user identity/team roles and
+  broader channel/platform acceptance remain incomplete; no full-goal completion
+  follows from this bounded repair.
+- Final `bun run check` exits 0: 618 pass, 12 skip, 0 fail, 2377 expectations,
+  630 tests/36 files, 20.83 s test time. The 12 sandbox/platform skips remain
+  unavailable evidence. Owned gateway/browser were stopped after verification;
+  port 55205 is clear and generated evidence remains outside Git.
+
 ### Web durable task state and safe controls, 2026-09-29
 
 - Added bounded session-specific run projections and pause/cancel/resume APIs.

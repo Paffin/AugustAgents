@@ -111,6 +111,15 @@
 
 ### Web task controls
 
+Completed responses expose the exact recorded learning-segment `feedbackId`.
+Owner feedback targets that segment, with persisted session ownership and one
+owner verdict per segment. It never resolves a base run-id to a later segment.
+Web feedback includes both correlated run-id and feedback-id; CLI `/good` and
+Telegram buttons retain the returned feedback-id. Task projections expose only
+feedback identity/recorded status, not internal trajectory data. Paused/failed/
+cancelled responses do not offer an answer-rating receipt. No schema migration
+or new signing/nonce registry is introduced by this correlation repair.
+
 GET `/v1/runs?channel&user&limit` projects recent durable run state, steps,
 reported usage, configured budgets and safe-continuation eligibility. It does
 not expose checkpoint history, arguments or other internal persistence fields.

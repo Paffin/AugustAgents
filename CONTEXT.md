@@ -28,6 +28,9 @@ First-run web setup and the rest of the complete control center remain open.
 The web task panel now reads durable state/usage and controls safe pause,
 cancel-further-work and continuation. Live pause/restart/continue passed for
 one real file/computation task; unsafe recovery remains blocked.
+Owner answer ratings now bind exact learning segments across Web/CLI/Telegram,
+including persisted completed task cards after resume. Automated fixture feedback
+is not a real human rating or activation qualification.
 
 ## Active Risks
 

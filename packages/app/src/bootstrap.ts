@@ -71,7 +71,7 @@ export interface StartReport {
 }
 
 export interface HandleOptions { idempotencyKey?: string; budget?: RunBudgetRequest }
-export interface DurableAgentReply extends AgentReply { runId: string; replayed: boolean }
+export interface DurableAgentReply extends AgentReply { runId: string; replayed: boolean; feedbackId?: string }
 export interface RunListOptions { session?: SessionKey; states?: RunState[]; limit?: number }
 
 export interface App {
@@ -97,7 +97,7 @@ export interface App {
   /** Signed anchors that make a rewrite of the journal detectable. */
   audit: AuditHandle;
   /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
-  feedback(session: SessionKey, runId: string, verdict: "success" | "failure", note?: string): void;
+  feedback(session: SessionKey, feedbackId: string, verdict: "success" | "failure", note?: string): void;
   /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
   recalibrate(): { samples: number; segments: number; table: CalibrationTable };
   /** Whether verified outcomes support letting Laya decide alone. */
@@ -391,7 +391,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     });
   };
   /** Records what a run decided and did, then lets the host check what it can. A failure here never changes what the person gets. */
-  const learnFrom = async (run: DurableRun, reply: AgentReply, seg: { startedAt: number; llmCalls: number; usageBefore: DurableRun["usage"]; route: Route }): Promise<void> => {
+  const learnFrom = async (run: DurableRun, reply: AgentReply, seg: { startedAt: number; llmCalls: number; usageBefore: DurableRun["usage"]; route: Route }): Promise<string | undefined> => {
     if (!reply.trace || reply.trace.decisions.length === 0) return;
     try {
       const after = runs.getRun(run.id)!.usage; const id = learning.nextSegmentId(run.id);
@@ -406,6 +406,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       const confirmed = new Set(checks.filter((c) => c.evidence.verdict === "success").map((c) => c.decisionIndex));
       if (checks.some((c) => c.evidence.verdict === "failure")) distill.settle(id, "failed");
       else if (reply.trace.executions.length > 0 && reply.trace.executions.every((e) => confirmed.has(e.decisionIndex))) distill.settle(id, "verified");
+      return id;
     } catch (error) {
       journal.append({ kind: "learning.error", session: run.session, data: { name: (error as Error).name } });
     }
@@ -458,8 +459,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       } else {
         run = runs.finishRun(run.id, "completed", reply.reply, { steps: reply.steps });
       }
-      await learnFrom(run, reply, { startedAt: segmentStart, llmCalls, usageBefore, route });
-      return { ...reply, runId: run.id, replayed: false };
+      const feedbackId = await learnFrom(run, reply, { startedAt: segmentStart, llmCalls, usageBefore, route });
+      return { ...reply, runId: run.id, replayed: false, ...(run.state === "completed" && feedbackId ? { feedbackId } : {}) };
     } catch (error) {
       const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, current.checkpoint?.phase === "tool_started" && !current.checkpoint.safeToResume ? "recovering" : "failed", { error: (error as Error).message });
       throw error;
@@ -485,7 +486,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     sandbox,
     async handle(session, text, perMessage, options = {}) {
       const started = runs.startRun({ session, request: text, ...options });
-      if (started.replayed) { if (started.run.reply === undefined) throw new Error("completed run has no reply"); return { reply: started.run.reply, steps: started.run.steps, tainted: (started.run.checkpoint?.taint as { tainted?: boolean } | undefined)?.tainted === true, runId: started.run.id, replayed: true }; }
+      if (started.replayed) { if (started.run.reply === undefined) throw new Error("completed run has no reply"); return { reply: started.run.reply, steps: started.run.steps, tainted: (started.run.checkpoint?.taint as { tainted?: boolean } | undefined)?.tainted === true, runId: started.run.id, replayed: true, feedbackId: learning.latestSegmentId(started.run.id) }; }
       const prior = runs.stateView(session); const priorProvenance = runs.provenance(session); runs.appendMessage(session, "user", text);
       return execute(started.run, perMessage, prior, priorProvenance);
     },
@@ -497,8 +498,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     learning,
-    feedback(session, runId, verdict, note) {
-      const segment = learning.latestSegmentId(runId);
+    feedback(session, segment, verdict, note) {
       // Only the person whose run it was can judge it: the session recorded with the run must be theirs.
       if (!segment || learning.sessionOf(segment) !== session) throw new Error("no such run for this session");
       recordOwnerFeedback(learning, segment, verdict, note);

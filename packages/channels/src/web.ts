@@ -163,6 +163,8 @@ export const WEB_JS = `(() => {
         metrics.textContent = run.steps + "/" + run.budget.maxSteps + " steps · " + run.usage.totalTokens + "/" + run.budget.maxTokens + " tokens (" + run.usage.inputTokens + " in / " + run.usage.outputTokens + " out) · USD " + usd(run.usage.costMicros) + "/" + usd(run.budget.maxCostMicros) + " estimate";
         request.textContent = run.request.slice(0, 600); item.append(title, metrics, request);
         if (run.reply) { const reply = document.createElement("p"); reply.textContent = run.reply; item.appendChild(reply); }
+        if (run.feedbackId && !run.feedbackRecorded) judge(item, run.id, run.feedbackId);
+        if (run.feedbackRecorded) { const recorded = document.createElement("p"); recorded.className = "muted"; recorded.textContent = "Your assessment is recorded for this result."; item.appendChild(recorded); }
         if (run.state === "recovering" && !run.canResume) { const caution = document.createElement("p"); caution.textContent = "Continuation blocked: an external effect may be uncertain. Owner resolution is required."; item.appendChild(caution); }
         const active = ["created", "running", "waiting_approval", "waiting_external", "paused", "recovering"].includes(run.state);
         const actions = [...(active && run.state !== "paused" && run.state !== "recovering" ? [["Pause", "pause"]] : []), ...(run.canResume ? [["Continue", "resume"]] : []), ...(active ? [["Cancel further work", "cancel"]] : [])];
@@ -230,13 +232,13 @@ export const WEB_JS = `(() => {
     card.focus();
   }
   // The owner's verdict on an answer is an outcome nobody else can supply; it is what August learns from.
-  function judge(card, runId) {
+  function judge(card, runId, feedbackId) {
     const bar = document.createElement("div"); bar.className = "judge"; bar.setAttribute("role", "group"); bar.setAttribute("aria-label", "Was this answer right?");
     for (const [label, verdict, aria] of [["Good answer", "success", "Mark this answer as good"], ["Not right", "failure", "Mark this answer as not right"]]) {
       const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.setAttribute("aria-label", aria);
       b.onclick = async () => {
         bar.querySelectorAll("button").forEach((x) => { x.disabled = true; });
-        const r = await fetch("/v1/feedback", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, runId, verdict }) }).catch(() => null);
+        const r = await fetch("/v1/feedback", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, runId, feedbackId, verdict }) }).catch(() => null);
         bar.textContent = r && r.ok ? "Thank you." : "Could not record that.";
       };
       bar.appendChild(b);
@@ -268,7 +270,7 @@ export const WEB_JS = `(() => {
       const r = await fetch("/v1/message", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, text, ...(Object.keys(budget).length ? { budget } : {}) }) });
       const body = await r.json().catch(() => ({}));
       wait.remove(); const shownReply = add(r.ok ? body.reply : "Error: " + (body.error || r.status));
-      if (r.ok && body.runId && (body.state === undefined || body.state === "completed")) judge(shownReply, body.runId);
+      if (r.ok && body.runId && body.feedbackId && (body.state === undefined || body.state === "completed")) judge(shownReply, body.runId, body.feedbackId);
     } catch { wait.remove(); add("The agent is not reachable."); }
     finally { clearInterval(timer); if (shown) { resolved(shown.card); shown = null; } }
   };

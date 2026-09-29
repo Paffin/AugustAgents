@@ -110,6 +110,10 @@ export class LearningStore {
     return this.db.query("SELECT 1 FROM runs WHERE run_id=?").get(runId) !== null;
   }
 
+  hasOwnerFeedback(runId: string): boolean {
+    return this.db.query("SELECT 1 FROM evidence WHERE run_id=? AND decision_idx IS NULL AND verifier='owner'").get(runId) !== null;
+  }
+
   /**
    * Adds one piece of independent evidence about a decision (`decisionIndex`) or the run as a whole (`null`).
    * The verifier must be registered, the method one of the allowed kinds, and there is one verdict per verifier

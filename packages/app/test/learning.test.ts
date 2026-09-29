@@ -97,6 +97,12 @@ describe("the agent learns from what actually happened", () => {
     const second = app.learning.nextSegmentId(r.runId); expect(second).toBe(`${r.runId}~1`);
     app.learning.recordRun({ runId: second, session, startedAt: Date.now(), finishedAt: Date.now(), trace: { decisions: [], executions: [] } });
     expect(app.learning.latestSegmentId(r.runId)).toBe(`${r.runId}~1`); expect(app.learning.nextSegmentId(r.runId)).toBe(`${r.runId}~2`);
+    expect(r.feedbackId).toBe(r.runId);
+    app.feedback(session, r.feedbackId!, "success");
+    expect(app.learning.hasOwnerFeedback(r.feedbackId!)).toBe(true);
+    expect(app.learning.hasOwnerFeedback(second)).toBe(false);
+    app.feedback(session, second, "failure");
+    expect(app.learning.hasOwnerFeedback(second)).toBe(true);
     app.close();
   });
 });

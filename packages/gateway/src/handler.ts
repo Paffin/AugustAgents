@@ -11,7 +11,7 @@ import {
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /** The owner's verdict on an answer they were shown. Throws when the run is not theirs or was already judged. */
-export type FeedbackSink = (input: { session: SessionKey; runId: string; verdict: "success" | "failure"; note?: string }) => void;
+export type FeedbackSink = (input: { session: SessionKey; runId: string; feedbackId: string; verdict: "success" | "failure"; note?: string }) => void;
 
 export interface IncomingMessage {
   session: SessionKey;
@@ -57,7 +57,7 @@ const SECRET_API_NAME = /^(?:[A-Za-z0-9_-]{1,64}\.)?[A-Z_][A-Z0-9_]{0,127}$/;
 
 export interface GatewayRunView {
   id: string; state: RunState; request: string; steps: number; usage: RunUsage;
-  budget: RunBudget; canResume: boolean; reply?: string; updatedAt: number;
+  budget: RunBudget; canResume: boolean; reply?: string; feedbackId?: string; feedbackRecorded?: boolean; updatedAt: number;
 }
 export interface GatewayRuns {
   list(session: SessionKey, limit: number): readonly GatewayRunView[];
@@ -67,7 +67,7 @@ export interface GatewayRuns {
 export interface GatewayOptions extends BindConfig {
   workspace: string;
   /** The agent loop. Called serially per session, in parallel across sessions. */
-  onMessage(message: IncomingMessage): Promise<{ reply: string; runId?: string; state?: RunState }>;
+  onMessage(message: IncomingMessage): Promise<{ reply: string; runId?: string; state?: RunState; feedbackId?: string }>;
   /** Records the owner's judgement of an answer as an independent outcome. Absent: the route answers 404. */
   feedback?: FeedbackSink;
   queue?: LaneQueue;
@@ -245,11 +245,11 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       let payload: Record<string, unknown>;
       try { payload = JSON.parse(raw) ?? {}; } catch { return json(400, { error: "invalid JSON" }); }
       const session = sessionFrom(payload.channel, payload.user);
-      if (!session || typeof payload.runId !== "string" || payload.runId.length === 0 || payload.runId.length > 200 || (payload.verdict !== "success" && payload.verdict !== "failure") || (payload.note !== undefined && (typeof payload.note !== "string" || payload.note.length > 300))) {
-        return json(400, { error: "channel, user, runId and verdict (success or failure) are required" });
+      if (!session || typeof payload.runId !== "string" || payload.runId.length === 0 || payload.runId.length > 200 || typeof payload.feedbackId !== "string" || payload.feedbackId.length === 0 || payload.feedbackId.length > 220 || (payload.feedbackId !== payload.runId && !payload.feedbackId.startsWith(payload.runId + "~")) || (payload.verdict !== "success" && payload.verdict !== "failure") || (payload.note !== undefined && (typeof payload.note !== "string" || payload.note.length > 300))) {
+        return json(400, { error: "channel, user, runId, matching feedbackId and verdict are required" });
       }
       try {
-        options.feedback({ session, runId: payload.runId, verdict: payload.verdict, note: payload.note as string | undefined });
+        options.feedback({ session, runId: payload.runId, feedbackId: payload.feedbackId, verdict: payload.verdict, note: payload.note as string | undefined });
         return json(200, { ok: true });
       } catch (error) {
         // Not theirs, unknown or already judged look the same from outside.
@@ -286,7 +286,7 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       }
       try {
         const result = await queue.enqueue(session, () => options.onMessage({ session, text, ...(budget === undefined ? {} : { budget: budget as RunBudgetRequest }) }));
-        return json(200, { reply: result.reply, ...(result.runId ? { runId: result.runId } : {}), ...(result.state ? { state: result.state } : {}) });
+        return json(200, { reply: result.reply, ...(result.runId ? { runId: result.runId } : {}), ...(result.state ? { state: result.state } : {}), ...(result.feedbackId ? { feedbackId: result.feedbackId } : {}) });
       } catch (error) {
         if (error instanceof QueueOverflowError) return json(429, { error: "too many pending messages" });
         return json(500, { error: "agent failed" });

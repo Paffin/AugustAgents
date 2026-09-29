@@ -249,7 +249,7 @@ describe("TelegramChannel", () => {
   test("answers carry judgement buttons bound to the run; only the person the run belongs to can press them, once", async () => {
     const approvals = new PendingApprovals(); const judged: Array<[string, string, string]> = [];
     const { f, calls } = fakeTelegram([[msg(1, 42, "hello")]]);
-    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42, 7], fetch: f, approvals, handle: async () => ({ reply: "hi there", runId: "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a" }),
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42, 7], fetch: f, approvals, handle: async () => ({ reply: "hi there", runId: "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a", feedbackId: "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a~1" }),
       feedback: (session, runId, verdict) => { if (judged.some((j) => j[1] === runId && j[0] === session)) throw new Error("owner already gave a verdict"); if (session !== "home:telegram:42") throw new Error("no such run for this session"); judged.push([session, runId, verdict]); } });
     await tg.poll(); await tick();
     const reply = calls.filter((c) => c.method === "sendMessage").at(-1)!.body;
@@ -259,7 +259,7 @@ describe("TelegramChannel", () => {
     const fb = (id: number, from: number, data: string) => ({ update_id: id, callback_query: { id: `c${id}`, from: { id: from }, data, message: { message_id: 5, chat: { id: from } } } });
     await tg.dispatchForTest(fb(2, 7, row[0]!.callback_data)); await tg.dispatchForTest(fb(3, 99, row[0]!.callback_data));
     await tg.dispatchForTest(fb(4, 42, "fb:bad data!:g")); await tg.dispatchForTest(fb(5, 42, row[1]!.callback_data)); await tg.dispatchForTest(fb(6, 42, row[0]!.callback_data)); await tick();
-    expect(judged).toEqual([["home:telegram:42", "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a", "failure"]]);
+    expect(judged).toEqual([["home:telegram:42", "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a~1", "failure"]]);
     expect(calls.filter((c) => c.method === "answerCallbackQuery").map((c) => c.body.text)).toEqual(["Nothing to judge", "Nothing to approve", "Thank you", "You already judged this answer"]);
     expect(calls.some((c) => c.method === "editMessageReplyMarkup")).toBe(true);
   });
