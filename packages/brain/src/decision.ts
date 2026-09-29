@@ -1,5 +1,6 @@
 import { tokenize } from "@august/capabilities";
 import { temperatureScale } from "./calibration.ts";
+import type { LlmUsageObserver } from "./usage.ts";
 
 /** Laya reads `choice` questions best with at most this many options. */
 export const LAYA_MAX_OPTIONS = 16;
@@ -23,6 +24,9 @@ export interface DecisionInput {
   state: string;
   /** The state contains text from an untrusted source. */
   tainted: boolean;
+  onUsage?: LlmUsageObserver;
+  requireUsage?: boolean;
+  maxCompletionTokens?: number;
 }
 
 export interface DecisionResult {

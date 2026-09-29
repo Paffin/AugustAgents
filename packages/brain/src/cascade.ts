@@ -7,6 +7,7 @@ import {
   type DecisionQuestion,
   type DecisionResult,
 } from "./decision.ts";
+import { LlmUsageError, LlmUsageObserverError } from "./llm.ts";
 
 export type DecisionSource = "primary" | "fallback";
 
@@ -122,7 +123,8 @@ export class DecisionCascade implements DecisionEngine {
     let primary: DecisionResult | undefined;
     try {
       primary = await this.options.primary.decide(input, question);
-    } catch {
+    } catch (error) {
+      if (error instanceof LlmUsageError || error instanceof LlmUsageObserverError) throw error;
       this.counters.primaryErrors += 1;
     }
 
