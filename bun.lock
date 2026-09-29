@@ -69,6 +69,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@august/capabilities": "workspace:*",
+        "@august/policy": "workspace:*",
       },
     },
     "packages/gateway": {

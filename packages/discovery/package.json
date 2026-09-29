@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@august/capabilities": "workspace:*" },
-  "exports": { ".": "./src/index.ts" }
+  "dependencies": {
+    "@august/capabilities": "workspace:*",
+    "@august/policy": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }
