@@ -220,4 +220,4 @@ bun run check        # типы + ~300 тестов, включая red-team
 
 ---
 
-<p align="center">MIT · сделано, чтобы агенту можно было доверять</p>
+<p align="center"><img src="docs/assets/logo.svg" alt="August" width="56"><br><sub>MIT · сделано, чтобы агенту можно было доверять</sub></p>

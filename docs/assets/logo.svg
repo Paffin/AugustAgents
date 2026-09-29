@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="August logo">
+  <g transform="translate(0 0) scale(1.0)">
+    <defs>
+      <linearGradient id="logo-tile" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#1c2340"/>
+        <stop offset="1" stop-color="#0b0e1a"/>
+      </linearGradient>
+      <linearGradient id="logo-sun" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffd27a"/>
+        <stop offset="0.55" stop-color="#ff8a5b"/>
+        <stop offset="1" stop-color="#e2467f"/>
+      </linearGradient>
+      <linearGradient id="logo-stroke" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffffff"/>
+        <stop offset="1" stop-color="#ffe9d6"/>
+      </linearGradient>
+      <radialGradient id="logo-glow" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="#ff8a5b" stop-opacity="0.32"/>
+        <stop offset="1" stop-color="#ff8a5b" stop-opacity="0"/>
+      </radialGradient>
+      <clipPath id="logo-sky"><rect x="0" y="0" width="512" height="336"/></clipPath>
+    </defs>
+    <rect width="512" height="512" rx="120" fill="url(#logo-tile)"/>
+    <rect x="3" y="3" width="506" height="506" rx="117" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="6"/>
+    <circle cx="256" cy="300" r="190" fill="url(#logo-glow)"/>
+    <circle cx="256" cy="336" r="78" fill="url(#logo-sun)" clip-path="url(#logo-sky)"/>
+    <path d="M128 412 L256 108 L384 412" fill="none" stroke="url(#logo-stroke)" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M172 336 H340" stroke="#fff1e4" stroke-width="22" stroke-linecap="round"/>
+  </g>
+</svg>
