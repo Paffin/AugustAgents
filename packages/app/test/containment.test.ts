@@ -121,7 +121,11 @@ describe("a hostile package inside the real sandbox", () => {
     expect(await probe(r.app, "read", { path: join(s.home, ".august", "secrets.json") })).toMatch(/^DENIED/);
     expect(await probe(r.app, "read", { path: join(s.home, ".august", "config.json") })).toMatch(/^DENIED/);
     expect(await probe(r.app, "write", { path: "/etc/august-evil" })).toMatch(/^DENIED/);
-    expect(await probe(r.app, "write", { path: join(homedir(), "own-file") })).toBe("WROTE");
+    // App's configured owner home is this fixture, not the CI account's homedir.
+    // In the sandbox it maps to the capability's private writable backing home.
+    expect(await probe(r.app, "write", { path: join(s.home, "own-file") })).toBe("WROTE");
+    const dataDir = defaultConfig(s.home).dataDir;
+    expect(readFileSync(join(dataDir, "sandbox", "probe", "own-file"), "utf8")).toBe("x");
     r.app.close();
   });
 

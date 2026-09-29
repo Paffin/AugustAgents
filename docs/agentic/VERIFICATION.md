@@ -177,6 +177,27 @@ only configuration intent.
   packaged AppArmor profile; the next patch supplies a narrow bwrap-only CI
   profile and richer bounded startup diagnostics, not broader test timeouts.
 
+### Second real runner job and hosted Linux coverage, 2026-09-30
+
+- GitHub runner 22 (`august-runner-owner-20260930-2`) was online/idle before a
+  manual dispatch bound to exact main `9c8b951`.
+  [Job run 36634432914](https://github.com/Paffin/AugustAgents/actions/runs/36634432914)
+  completed setup-bun, frozen install, unchanged lock, typecheck and the full
+  engineering suite: 622 pass, 12 skip, 0 fail. Artifacts were uploaded. Its
+  evidence gate remained failed because Docker denied bubblewrap namespaces.
+  The runner then removed its credentials and unregistered normally. This
+  proves real registration/job execution, not Linux isolation qualification.
+- Hosted [run 36634369687](https://github.com/Paffin/AugustAgents/actions/runs/36634369687)
+  successfully loaded the narrow bwrap CI profile and exercised all 12 formerly
+  skipped Linux checks: 633 pass, 0 skip, 1 fail. The remaining positive test
+  wrote to the real CI account's `homedir()` although App was configured with
+  the owned fixture home. The patch targets that actual configured private HOME
+  and adds backing-file readback; all negative boundary checks are retained.
+  Fresh hosted results are required to accept that correction.
+- macOS still showed a live fixture child with no output and timed-out health
+  probes before its original hook deadline. A bounded faulthandler trace now
+  localizes startup stalls; it does not increase deadlines or establish a fix.
+
 ### Exclusive runtime owner, 2026-09-30
 
 - Fixed the concurrent-start defect observed in the UX increment below. Ordinary
