@@ -165,6 +165,8 @@ describe("AgentRuntime", () => {
     expect((await approvalAgent.handle(session, "send an email", { signal: approvalController.signal })).stopReason).toBe("cancelled"); expect(approvals).toBe(0);
     const expandController = new AbortController(); let expansions = 0; const expanding = build({ decision: picks("none"), llm: fakeLlm({}, "no"), executor: executor(), expandQuery: async () => (++expansions, "search notes") }).agent;
     const stopped = await expanding.handle(session, "привет", { signal: expandController.signal, onEvent: (event) => { if (event.type === "checkpoint") expandController.abort(); } }); expect(stopped.stopReason).toBe("cancelled"); expect(expansions).toBe(0);
+    const toolController = new AbortController(); const toolEx = executor(); const toolAgent = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: toolEx }).agent;
+    const beforeCall = await toolAgent.handle(session, "search notes", { signal: toolController.signal, onEvent: (event) => { if (event.type === "checkpoint" && event.phase === "tool_started") toolController.abort(); } }); expect(beforeCall.stopReason).toBe("cancelled"); expect(toolEx.calls).toHaveLength(0);
   });
 
   test("answers without a tool when the decision is none", async () => {

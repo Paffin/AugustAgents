@@ -275,6 +275,7 @@ export class AgentRuntime {
         if (hasExternalEffect && externalEffects >= (context.maxExternalEffects ?? Number.MAX_SAFE_INTEGER)) throw new RunControlError("external-effect-budget");
         if (hasExternalEffect) externalEffects += 1;
         await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
+        control();
         log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
         let result: string;
         let failed = false;
