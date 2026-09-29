@@ -25,10 +25,13 @@ and zero-cost admission journeys pass locally. Preserve the full 28-outcome goal
 Owner credential controls are now implemented and live-verified in the web UI:
 direct encrypted writes, names-only lists, restart, failure and confirmed deletion.
 First-run web setup and the rest of the complete control center remain open.
+The web task panel now reads durable state/usage and controls safe pause,
+cancel-further-work and continuation. Live pause/restart/continue passed for
+one real file/computation task; unsafe recovery remains blocked.
 
 ## Active Risks
 
-- Linux/Windows/CI, real Laya weights, live sandbox/egress, signing, updater,
+- Linux/Windows/CI, Laya activation exams, live sandbox/egress, signing, updater,
   and recovery evidence remain unverified.
 - Source for budgets, learning, distillation, and memory exists; full acceptance
   remains outstanding. Current local file/restart journeys pass, but latency is

@@ -109,6 +109,22 @@
 
 ## Data Flow
 
+### Web task controls
+
+GET `/v1/runs?channel&user&limit` projects recent durable run state, steps,
+reported usage, configured budgets and safe-continuation eligibility. It does
+not expose checkpoint history, arguments or other internal persistence fields.
+POST `/v1/runs/:id` accepts a bound session and pause/cancel/resume action. App
+checks the persisted session and safety state; gateway controls cannot manage
+Telegram's separate transport. Resume enters the shared session lane; stops
+bypass it so they can interrupt a busy message loop at its next safe boundary.
+
+The browser polls real state while the panel is open. Long control requests do
+not disable unrelated stop actions. Paused/cancelled replies are not offered
+as independently verified successful answers. This is not a durable control-
+intent protocol: in-flight stop requests and crash/budget edge cases still need
+qualification before long-mission and team-control completion.
+
 ### Owner credential controls
 
 The configured web gateway has a direct `GatewaySecrets` adapter to the secure

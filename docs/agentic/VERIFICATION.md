@@ -103,6 +103,48 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Web durable task state and safe controls, 2026-09-29
+
+- Added bounded session-specific run projections and pause/cancel/resume APIs.
+  Reported tokens, cost estimate and budgets come from actual durable rows.
+  No checkpoint history/arguments are returned. Unknown/wrong-session runs and
+  unsafe recovery return opaque 409; Telegram sessions cannot use this adapter.
+- After implementation, regression tests retain gateway authentication, approval
+  binding and message behavior. Two old exact-response tests initially failed
+  because the additive run-state field was not in their expected DTOs. A new
+  fixture initially omitted persisted safety/taint fields; runtime correctly
+  refused continuation. The fixture was corrected, not the runtime safeguards.
+- Final `bun run check` exits 0: 618 pass, 12 skip, 0 fail, 2371 expectations,
+  630 tests/36 files, 20.66 s test time. Skips are unavailable platform/sandbox
+  evidence, not passes. Test authoring remained implementation-first, no TDD.
+- Actual browser task read fresh order reference `e6d556f3a3d433f4` / amount
+  14656 and computed +41 = 14697. Run `95d93691-1b34-4390-a655-d436fd968558`
+  paused at a safe checkpoint before reading the file, retaining 352 input /
+  1330 output tokens and 1 microUSD configured estimate. After owned gateway
+  restart, UI continued that exact run-id and completed one file-read step.
+  Final UI numbers match SQLite: 1328 input / 2416 output / 3744 total tokens,
+  1 microUSD estimate, completed. The source file is unchanged.
+- Second real file task `c336f6e5-23b1-4660-8189-a541b520d212` was cancelled
+  through the panel before any tool step: 491 input / 920 output tokens and
+  1 microUSD estimate retained; persisted state is cancelled, source unchanged.
+  The UI did not offer successful-answer feedback for that stopped reply.
+- The quote (17/33 micros per million) is an owner-defined verification resource
+  estimate, not claimed vendor billing. Pause was not instant: it waited for the
+  in-flight model response. A browser observation wait expired while the run
+  remained running; the same job was observed to pause, not restarted/replaced.
+- Scoped real encrypted stores guarded all fixture credential operations; no
+  native credential access or foreign model restart occurred. Browser captures
+  are in owned `/private/tmp/august-task-controls.O4O0qH/`. Initial task-panel
+  WCAG A/AA audit: 0 violations/0 incomplete, 23 passes.
+- Completed/cancelled captures were inspected, including 320 px: no horizontal
+  overflow. Browser reports no unhandled errors; final WCAG audit also passes.
+- Owned gateway/browser stopped after completion/cancellation; port 55205 is
+  clear. Scratch files and runtime evidence remain outside Git.
+- Unsafe external-effect resolution, durable control intents across crashes,
+  remaining wall-time/budget semantics, multi-process coordination, full team
+  authorization, complete outcome feedback after resume and broader platform
+  journeys remain open. This is not completion of OUT-002/OUT-014 or the full goal.
+
 ### Direct owner web credential controls, 2026-09-29
 
 - Added authenticated GET names/backend, PUT opaque value and DELETE managed

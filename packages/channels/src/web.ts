@@ -23,6 +23,11 @@ export const WEB_HTML = `<!doctype html>
   #credential-list li { display:flex; gap:8px; align-items:center; justify-content:space-between; margin:8px 0; overflow-wrap:anywhere; }
   #credential-list button, #credential-refresh { padding:4px 10px; border:1px solid var(--line); border-radius:8px; color:var(--fg); background:var(--card); font:inherit; cursor:pointer; }
   @media (max-width:480px) { #credential-fields { grid-template-columns:minmax(0,1fr); } }
+  .task-panel { max-height:50vh; overflow:auto; }
+  #task-list { padding:0; list-style:none; }
+  #task-list li { margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  #task-list p { margin:4px 0; overflow-wrap:anywhere; white-space:pre-wrap; }
+  #task-list button, #task-refresh { padding:6px 10px; margin:4px 8px 0 0; border:1px solid var(--line); border-radius:8px; color:var(--fg); background:var(--card); font:inherit; cursor:pointer; }
   h1 { margin:0; font-size:1rem; font-weight:600; }
   main { flex:1; display:flex; flex-direction:column; min-height:0; }
   #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; max-width:760px; width:100%; margin:0 auto; }
@@ -46,7 +51,7 @@ export const WEB_HTML = `<!doctype html>
 </head>
 <body>
 <header><h1>August</h1></header>
-<details class="credentials" id="credentials"><summary>Secrets</summary>
+<details class="credentials" id="credentials" name="owner-controls"><summary>Secrets</summary>
 <section class="credential-panel" aria-label="Secure credential controls">
 <p class="muted">Sent directly to your credential store, never through chat. Values cannot be displayed. Running providers or capabilities may need a restart after replacement.</p>
 <p id="credential-warning" class="muted" hidden>This OS backend currently shares credential names across installations. Verify the scope before changing entries.</p>
@@ -60,6 +65,13 @@ export const WEB_HTML = `<!doctype html>
 <p id="credential-status" class="muted" role="status" aria-live="polite">Connect to your local agent to manage secrets.</p>
 <button id="credential-refresh" type="button" disabled>Refresh names</button>
 <ul id="credential-list" aria-label="Stored secret names"></ul>
+</section></details>
+<details class="credentials" id="tasks" name="owner-controls"><summary>Tasks</summary>
+<section class="task-panel" aria-label="Recent task controls">
+<p class="muted">Latest 20 tasks in this browser session. Stops wait for a safe boundary and do not undo calls already started. Cost is based on your configured estimate, not a vendor bill.</p>
+<button id="task-refresh" type="button" disabled>Refresh tasks</button>
+<p id="task-status" class="muted" role="status" aria-live="polite">Connect to view tasks.</p>
+<ul id="task-list" aria-label="Recent tasks"></ul>
 </section></details>
 <main>
 <div id="log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" tabindex="0"><p class="muted" id="hint"></p></div>
@@ -129,6 +141,60 @@ export const WEB_JS = `(() => {
     finally { credentialBusy = false; credentialFields.disabled = !credentialAvailable; if (credentialAvailable) field.focus(); }
   };
   const add = (text, cls) => { const d = document.createElement("div"); d.className = "msg " + (cls || ""); d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
+  const taskPanel = document.getElementById("tasks"), taskList = document.getElementById("task-list"), taskStatus = document.getElementById("task-status");
+  let taskTimer = null, taskLoading = false, taskFingerprint = "";
+  const controlling = new Set();
+  const usd = value => { const n = BigInt(value); return (n / 1000000n).toString() + "." + (n % 1000000n).toString().padStart(6, "0"); };
+  async function loadTasks() {
+    if (!token || taskLoading) return;
+    taskLoading = true;
+    try {
+      const response = await fetch("/v1/runs?channel=" + who.channel + "&user=" + who.user + "&limit=20", { headers: headers() });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !Array.isArray(body.runs)) { taskList.replaceChildren(); taskFingerprint = ""; taskStatus.textContent = "Tasks unavailable. Check your connection."; return; }
+      const fingerprint = JSON.stringify(body.runs) + Array.from(controlling).join(",");
+      if (fingerprint === taskFingerprint) return;
+      const focused = taskList.contains(document.activeElement) ? { run: document.activeElement.dataset.run, action: document.activeElement.dataset.action } : null;
+      taskFingerprint = fingerprint; taskList.replaceChildren();
+      taskStatus.textContent = body.runs.length ? "Runtime state and reported usage." : "No tasks in this session yet.";
+      for (const run of body.runs) {
+        const item = document.createElement("li"), title = document.createElement("p"), metrics = document.createElement("p"), request = document.createElement("p");
+        title.textContent = run.state + " · " + run.id; metrics.className = "muted";
+        metrics.textContent = run.steps + "/" + run.budget.maxSteps + " steps · " + run.usage.totalTokens + "/" + run.budget.maxTokens + " tokens (" + run.usage.inputTokens + " in / " + run.usage.outputTokens + " out) · USD " + usd(run.usage.costMicros) + "/" + usd(run.budget.maxCostMicros) + " estimate";
+        request.textContent = run.request.slice(0, 600); item.append(title, metrics, request);
+        if (run.reply) { const reply = document.createElement("p"); reply.textContent = run.reply; item.appendChild(reply); }
+        if (run.state === "recovering" && !run.canResume) { const caution = document.createElement("p"); caution.textContent = "Continuation blocked: an external effect may be uncertain. Owner resolution is required."; item.appendChild(caution); }
+        const active = ["created", "running", "waiting_approval", "waiting_external", "paused", "recovering"].includes(run.state);
+        const actions = [...(active && run.state !== "paused" && run.state !== "recovering" ? [["Pause", "pause"]] : []), ...(run.canResume ? [["Continue", "resume"]] : []), ...(active ? [["Cancel further work", "cancel"]] : [])];
+        for (const [label, action] of actions) {
+          const button = document.createElement("button"), key = run.id + ":" + action;
+          button.type = "button"; button.textContent = controlling.has(key) ? label + " requested…" : label;
+          button.dataset.run = run.id; button.dataset.action = action; button.setAttribute("aria-label", label + " task " + run.id); button.disabled = controlling.has(key);
+          button.onclick = async () => {
+            if (controlling.has(key)) return;
+            controlling.add(key); button.disabled = true; taskStatus.textContent = label + " requested; waiting for the runtime.";
+            let failed = false;
+            const poll = setInterval(() => checkPending().catch(() => {}), 1000);
+            try {
+              const r = await fetch("/v1/runs/" + encodeURIComponent(run.id), { method: "POST", headers: headers(), body: JSON.stringify({ ...who, action }) });
+              if (!r.ok) throw new Error();
+            } catch { failed = true; }
+            finally { clearInterval(poll); controlling.delete(key); taskFingerprint = ""; await loadTasks(); if (failed) taskStatus.textContent = "Could not complete that control. Refresh the authoritative state before retrying."; }
+          };
+          item.appendChild(button);
+        }
+        taskList.appendChild(item);
+      }
+      if (focused) { const button = Array.from(taskList.querySelectorAll("button")).find(b => b.dataset.run === focused.run && b.dataset.action === focused.action); if (button && !button.disabled) button.focus({ preventScroll: true }); }
+    } catch { taskStatus.textContent = "Runtime is not reachable."; }
+    finally { taskLoading = false; }
+  }
+  document.getElementById("task-refresh").disabled = !token;
+  document.getElementById("task-refresh").onclick = () => { taskFingerprint = ""; loadTasks(); };
+  taskPanel.ontoggle = () => {
+    if (taskTimer) clearInterval(taskTimer); taskTimer = null;
+    if (taskPanel.open && token) { loadTasks(); taskTimer = setInterval(loadTasks, 1000); }
+  };
   let shown = null;
   // An answered request stays in the log as a record, no longer a dialog.
   const resolved = (card) => { card.querySelectorAll("button").forEach((x) => x.remove()); card.removeAttribute("role"); card.removeAttribute("aria-labelledby"); card.removeAttribute("aria-describedby"); card.removeAttribute("tabindex"); };
@@ -202,7 +268,7 @@ export const WEB_JS = `(() => {
       const r = await fetch("/v1/message", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, text, ...(Object.keys(budget).length ? { budget } : {}) }) });
       const body = await r.json().catch(() => ({}));
       wait.remove(); const shownReply = add(r.ok ? body.reply : "Error: " + (body.error || r.status));
-      if (r.ok && body.runId) judge(shownReply, body.runId);
+      if (r.ok && body.runId && (body.state === undefined || body.state === "completed")) judge(shownReply, body.runId);
     } catch { wait.remove(); add("The agent is not reachable."); }
     finally { clearInterval(timer); if (shown) { resolved(shown.card); shown = null; } }
   };

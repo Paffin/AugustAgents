@@ -1,4 +1,4 @@
-import { LaneQueue, QueueOverflowError, makeSessionKey, normalizeRunBudget, type RunBudgetRequest, type SessionKey } from "@august/core";
+import { LaneQueue, QueueOverflowError, makeSessionKey, normalizeRunBudget, type RunBudget, type RunBudgetRequest, type RunState, type RunUsage, type SessionKey } from "@august/core";
 import {
   allowedHostHeaders,
   allowedOriginList,
@@ -55,10 +55,19 @@ export interface GatewaySecrets {
 
 const SECRET_API_NAME = /^(?:[A-Za-z0-9_-]{1,64}\.)?[A-Z_][A-Z0-9_]{0,127}$/;
 
+export interface GatewayRunView {
+  id: string; state: RunState; request: string; steps: number; usage: RunUsage;
+  budget: RunBudget; canResume: boolean; reply?: string; updatedAt: number;
+}
+export interface GatewayRuns {
+  list(session: SessionKey, limit: number): readonly GatewayRunView[];
+  control(input: { session: SessionKey; id: string; action: "pause" | "cancel" | "resume" }): Promise<GatewayRunView>;
+}
+
 export interface GatewayOptions extends BindConfig {
   workspace: string;
   /** The agent loop. Called serially per session, in parallel across sessions. */
-  onMessage(message: IncomingMessage): Promise<{ reply: string; runId?: string }>;
+  onMessage(message: IncomingMessage): Promise<{ reply: string; runId?: string; state?: RunState }>;
   /** Records the owner's judgement of an answer as an independent outcome. Absent: the route answers 404. */
   feedback?: FeedbackSink;
   queue?: LaneQueue;
@@ -68,6 +77,7 @@ export interface GatewayOptions extends BindConfig {
   webUi?: WebUi;
   /** Owner-token-only controls; absent (including plaintext backends): 404. */
   secrets?: GatewaySecrets;
+  runs?: GatewayRuns;
 }
 
 function json(status: number, body: unknown): Response {
@@ -149,6 +159,28 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
         return null;
       }
     };
+
+    if (url.pathname === "/v1/runs" && request.method === "GET") {
+      if (!options.runs) return json(404, { error: "run controls unavailable" });
+      const session = sessionFrom(url.searchParams.get("channel"), url.searchParams.get("user"));
+      const limit = Number(url.searchParams.get("limit") ?? 20);
+      if (!session || !Number.isInteger(limit) || limit < 1 || limit > 50) return json(400, { error: "invalid session or limit" });
+      try { return json(200, { runs: options.runs.list(session, limit) }); }
+      catch { return json(409, { error: "run session unavailable" }); }
+    }
+    if (url.pathname.startsWith("/v1/runs/") && request.method === "POST") {
+      if (!options.runs) return json(404, { error: "run controls unavailable" });
+      const id = url.pathname.slice("/v1/runs/".length);
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(id) || id !== id.trim()) return json(400, { error: "invalid run id" });
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return json(415, { error: "content-type must be application/json" });
+      const raw = await readBody(request); if (raw === null) return json(413, { error: "body too large" });
+      let body: Record<string, unknown>;
+      try { const value = JSON.parse(raw); if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(); body = value; } catch { return json(400, { error: "invalid JSON" }); }
+      const session = sessionFrom(body.channel, body.user);
+      if (!session || typeof body.action !== "string" || !["pause", "cancel", "resume"].includes(body.action) || Object.keys(body).some(key => !["channel", "user", "action"].includes(key))) return json(400, { error: "invalid run control" });
+      try { return json(200, { run: await options.runs.control({ session, id, action: body.action as "pause" | "cancel" | "resume" }) }); }
+      catch { return json(409, { error: "run unavailable or unsafe to control" }); }
+    }
 
     if (url.pathname === "/v1/secrets" && request.method === "GET") {
       if (!options.secrets) return json(404, { error: "secure credential controls unavailable" });
@@ -254,7 +286,7 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       }
       try {
         const result = await queue.enqueue(session, () => options.onMessage({ session, text, ...(budget === undefined ? {} : { budget: budget as RunBudgetRequest }) }));
-        return json(200, { reply: result.reply, ...(result.runId ? { runId: result.runId } : {}) });
+        return json(200, { reply: result.reply, ...(result.runId ? { runId: result.runId } : {}), ...(result.state ? { state: result.state } : {}) });
       } catch (error) {
         if (error instanceof QueueOverflowError) return json(429, { error: "too many pending messages" });
         return json(500, { error: "agent failed" });

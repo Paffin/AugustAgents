@@ -42,6 +42,27 @@ function post(body: unknown, headers: Record<string, string> = {}, path = "/v1/m
 
 const valid = { channel: "cli", user: "dan", text: "hello" };
 
+describe("run control boundaries (REQ-REL-001)", () => {
+  test("authenticated session and bounded limit reach the adapter without message execution", async () => {
+    let input: unknown;
+    const { handler, seen } = make({ runs: { list: (session, limit) => { input = { session, limit }; return []; }, control: async () => { throw Error("unused"); } } });
+    const response = await handler(new Request("http://127.0.0.1:7777/v1/runs?channel=web&user=local&limit=12", { headers: { host: "127.0.0.1:7777", authorization: `Bearer ${TOKEN}` } }));
+    expect(response.status).toBe(200); expect(await response.json()).toEqual({ runs: [] });
+    expect(input).toEqual({ session: "home:web:local", limit: 12 }); expect(seen).toHaveLength(0);
+  });
+  test("malformed controls and authentication failures do not call the adapter", async () => {
+    let calls = 0;
+    const { handler } = make({ runs: { list: () => [], control: async () => { calls++; throw Error("private-context"); } } });
+    for (const body of [null, [], { channel: "web", user: "local", action: "delete" }, { channel: "web", user: "local", action: {} }, { channel: "web", user: "local", action: "resume", budget: {} }]) {
+      expect((await handler(post(body, {}, "/v1/runs/run-id"))).status).toBe(400);
+    }
+    expect((await handler(post({ channel: "web", user: "local", action: "pause" }, { authorization: "" }, "/v1/runs/run-id"))).status).toBe(401);
+    expect(calls).toBe(0);
+    const failure = await handler(post({ channel: "web", user: "local", action: "resume" }, {}, "/v1/runs/run-id"));
+    expect(failure.status).toBe(409); expect(await failure.text()).not.toContain("private-context");
+  });
+});
+
 describe("owner secret controls (REQ-SEC-004)", () => {
   // Safety/security invariant: owner auth, bounded direct writes, no value-reading route or model call.
   function setup() {

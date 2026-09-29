@@ -334,6 +334,15 @@ describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
     expect(() => new Function(WEB_JS)).not.toThrow();
   });
 
+  test("Product behavior: task controls render durable usage and do not treat a paused reply as a verified answer", () => {
+    expect(WEB_HTML).toContain('aria-label="Recent task controls"');
+    expect(WEB_JS).toContain('"/v1/runs?channel="');
+    expect(WEB_JS).toContain('run.usage.totalTokens');
+    expect(WEB_JS).toContain('run.canResume');
+    expect(WEB_JS).toContain('body.state === "completed"');
+    expect(WEB_JS).toContain('"Cancel further work"');
+  });
+
   test("Safety (REQ-SEC-004): credentials use a separate password form, direct endpoint and names-only display", () => {
     expect(WEB_HTML).toContain('id="credential-value" type="password"');
     expect(WEB_HTML).toContain('for="credential-name"');

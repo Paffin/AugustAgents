@@ -4,8 +4,8 @@ import { join, resolve } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
 import { DecisionCascade, HeuristicEngine, NativeLayaTransport, nativeLayaIdentity } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
-import { LaneQueue, makeSessionKey } from "@august/core";
-import { startGateway, type RunningGateway } from "@august/gateway";
+import { LaneQueue, makeSessionKey, type DurableRun } from "@august/core";
+import { startGateway, type GatewayRunView, type RunningGateway } from "@august/gateway";
 import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/memory";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
@@ -322,6 +322,11 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
   await reportServers(app, io);
   const approvals = new PendingApprovals(app.approvals);
   const queue = new LaneQueue();
+  const runView = (run: DurableRun): GatewayRunView => ({ id: run.id, state: run.state, request: run.request,
+    steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) ? run.reply : undefined, updatedAt: run.updatedAt,
+    canResume: ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
+  });
+  const gatewayRunSession = (session: string) => { if (session.split(":")[1] === "telegram") throw Error("channel has its own transport"); };
 
   let inner: RunningGateway;
   try {
@@ -335,7 +340,22 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
     // The browser polls /v1/pending, so the prompt itself needs no push.
-    onMessage: async ({ session, text, budget }) => { const r = await app.handle(session, text, approvals.approverFor(() => {}), { budget }); return { reply: r.reply, runId: r.runId }; },
+    onMessage: async ({ session, text, budget }) => { const r = await app.handle(session, text, approvals.approverFor(() => {}), { budget }); return { reply: r.reply, runId: r.runId, state: app.getRun(r.runId)?.state }; },
+    runs: {
+      list: (session, limit) => { gatewayRunSession(session); return app.listRuns({ session, limit }).map(runView); },
+      control: async ({ session, id, action }) => {
+        gatewayRunSession(session);
+        const run = app.getRun(id); if (!run || run.session !== session) throw Error("no run for session");
+        if (action === "resume") {
+          if (!runView(run).canResume) throw Error("unsafe checkpoint");
+          await queue.enqueue(session, () => app.resumeRun(id, approvals.approverFor(() => {})));
+        } else {
+          if (!["created", "running", "waiting_approval", "waiting_external", "paused", "recovering"].includes(run.state)) throw Error("run is not active");
+          await (action === "pause" ? app.pauseRun(id) : app.cancelRun(id));
+        }
+        return runView(app.getRun(id)!);
+      },
+    },
     feedback: ({ session, runId, verdict, note }) => app.feedback(session, runId, verdict, note),
     secrets: app.secrets.kind === "file" ? undefined : {
       list: () => ({ backend: app.secrets.kind, names: app.secrets.list() }),

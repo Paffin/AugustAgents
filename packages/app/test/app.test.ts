@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
 import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
 import { LlmUsageObserverError } from "@august/brain";
-import { IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
+import { DurableRuntimeStore, IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
 import { LoopGuard } from "@august/policy";
 import {
   BuiltinExecutor,
@@ -209,6 +209,31 @@ function makeIo(home: string, answers: Array<string | null> = [], llm?: LlmProvi
 }
 
 describe("cli", () => {
+  test("Safety: web run views hide checkpoints and controls cannot cross sessions or resume uncertain effects", async () => {
+    const home = tmp(); const { io } = makeIo(home, [], scriptedLlm({ tool: "none", args: {}, reply: "finished" }));
+    await main(["init"], io); configureTestPricing(home);
+    const cfg = loadConfig(defaultConfigPath(home)); const port = 21000 + Math.floor(Math.random() * 20000);
+    writeConfig(defaultConfigPath(home), { ...cfg, gateway: { ...cfg.gateway, port } });
+    const session = makeSessionKey({ workspace: cfg.workspace, channel: "web", user: "local" });
+    const db = new DurableRuntimeStore(join(cfg.dataDir, "runtime.db"));
+    const safe = db.startRun({ session, request: "continue my local task" }).run;
+    db.transition(safe.id, "running"); db.checkpoint(safe.id, { phase: "before_decision", safeToResume: true, history: [], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 }); db.transition(safe.id, "paused");
+    const unsafe = db.startRun({ session, request: "uncertain external task" }).run;
+    db.transition(unsafe.id, "running"); db.checkpoint(unsafe.id, { phase: "tool_started", safeToResume: false, history: ["private-checkpoint-value"], lastTool: "mail.send", taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 1 }); db.transition(unsafe.id, "recovering"); db.close();
+    const running = await main(["serve"], io);
+    try {
+      const headers = { authorization: `Bearer ${cfg.gateway.token}`, "content-type": "application/json" };
+      const response = await fetch(`http://127.0.0.1:${port}/v1/runs?channel=web&user=local`, { headers });
+      const text = await response.text(); expect(text).not.toContain("private-checkpoint-value"); expect(text).not.toContain('"checkpoint"');
+      expect(JSON.parse(text).runs.find((run: any) => run.id === unsafe.id).canResume).toBe(false);
+      const control = (id: string, action: string, user = "local") => fetch(`http://127.0.0.1:${port}/v1/runs/${id}`, { method: "POST", headers, body: JSON.stringify({ channel: "web", user, action }) });
+      expect((await control(safe.id, "cancel", "another-user")).status).toBe(409);
+      expect((await control(unsafe.id, "resume")).status).toBe(409);
+      const resumed = await control(safe.id, "resume"); expect(resumed.status).toBe(200); expect((await resumed.json() as { run: { state: string } }).run.state).toBe("completed");
+      expect((await fetch(`http://127.0.0.1:${port}/v1/runs?channel=telegram&user=local`, { headers })).status).toBe(409);
+    } finally { running.stop?.(); }
+  });
+
   test("help lists the commands; an unknown command fails", async () => {
     const { io, out } = makeIo(tmp());
     expect((await main([], io)).code).toBe(0);
@@ -271,7 +296,7 @@ describe("cli", () => {
       expect(denied.status).toBe(401);
       const ok = await fetch(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${cfg.gateway.token}` }, body });
       expect(ok.status).toBe(200);
-      expect(await ok.json()).toEqual({ reply: "hi from gateway", runId: expect.any(String) });
+      expect(await ok.json()).toEqual({ reply: "hi from gateway", runId: expect.any(String), state: "completed" });
     } finally {
       r.gateway?.stop();
     }
