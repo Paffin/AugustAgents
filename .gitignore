@@ -11,3 +11,4 @@ dist/
 models/
 .DS_Store
 coverage/
+/docs/superpowers/

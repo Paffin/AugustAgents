@@ -23,7 +23,7 @@
 - [x] Установщик в 3 касания (`install.sh` + `august setup`)
 - [x] Red-team набор инъекций
 
-**Гейт 1:** установка быстрее 5 минут, red-team набор пройден. Набор проходит локально (`bun test`); первый прогон CI на GitHub нужно подтвердить. Установщик проверен из локальной копии и из GitHub, время на чистой машине с медленной сетью ещё нужно замерить.
+**Гейт 1 пока не закрыт.** На локальном baseline 2026-09-29 (`aa8bf43`, Bun 1.4.2) `bun test` дал 295 pass / 1 timeout; сфокусированный повтор с лимитом 10 секунд завис на том же real-app red-team сценарии. `bun run typecheck` не стартовал, потому что в чистом checkout отсутствовали `node_modules`, lockfile и доступный `tsc`. Точная текущая evidence-запись и новый порядок outcomes находятся в [Agentic Foundation](agentic/WAYFINDING.md) и [Agentic Roadmap](agentic/ROADMAP.md).
 
 Что осталось проверить руками до релиза:
 

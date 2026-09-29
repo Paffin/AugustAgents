@@ -80,8 +80,8 @@ august doctor    # проверить, всё ли на месте
 <tr>
 <td valign="top">
 
-### 🧠 Дёшево думает
-Выбор инструмента — работа для маленькой [Laya Multilingual](https://huggingface.co/convaiinnovations/laya-multilingual) (322M), а не для дорогой LLM. Она учится на ваших же решениях в теневом режиме и включается, только когда доказала, что совпадает с LLM в 90% случаев.
+### 🧠 Готовит дешёвые решения
+Выбор инструмента умеет оценивать маленькая [Laya Multilingual](https://huggingface.co/convaiinnovations/laya-multilingual) (322M). В текущем прототипе тень измеряет только совпадение с LLM — это не доказательство правильности и не основание для outcome-verified обучения. Переход на независимо проверенные исходы запланирован в [Agentic Roadmap](docs/agentic/ROADMAP.md).
 
 </td>
 <td valign="top">
@@ -94,14 +94,14 @@ august doctor    # проверить, всё ли на месте
 <tr>
 <td valign="top">
 
-### 📦 Изолирует чужой код
-MCP-серверы запускаются в песочнице (bubblewrap на Linux, sandbox-exec на macOS): домашняя папка, SSH-агент и keyring скрыты, у сервера своя папка и чистое окружение без ваших ключей.
+### 📦 Ограничивает чужой код
+MCP-серверы могут запускаться через bubblewrap на Linux или sandbox-exec на macOS. В текущем режиме `auto` при отсутствии механизма процесс запускается без изоляции, сеть по умолчанию открыта, а явно назначенные `envFrom`-секреты передаются серверу. Строгая containment-модель описана как целевой outcome в [Agentic Roadmap](docs/agentic/ROADMAP.md).
 
 </td>
 <td valign="top">
 
-### 🔍 Помнит всё, но не ваши секреты
-Каждое действие записывается в журнал с цепочкой хешей — подделку истории видно сразу. В журнале только хеши и размеры, ни текста аргументов, ни ключей.
+### 🔍 Ведёт журнал без содержимого секретов
+Каждое действие записывается как хеши и размеры, без текста аргументов и ключей. Текущая SHA-цепочка обнаруживает случайные изменения, но владелец записи БД может пересчитать её целиком; защищённые подписи/anchors ещё не реализованы.
 
 </td>
 </tr>
@@ -184,9 +184,9 @@ python sidecar/laya_server.py            # http://127.0.0.1:7788
 
 ## 🗺️ Статус и планы
 
-**Готово (MVP):** агентный цикл, политики и мандаты, автопоиск MCP и навыков, песочница, секреты, веб и Telegram, установщик, Laya-sidecar с калибровкой, red-team набор.
+**Текущий статус — прототип:** агентный цикл, политики и мандаты, MCP/skills discovery, опциональная песочница, секреты, web/Telegram, installer, Laya-sidecar и red-team набор присутствуют в коде. Это не означает durable runtime, outcome-verified learning, гарантированную containment-модель или production readiness; актуальные границы и доказательства ведутся в [Agentic Foundation](docs/agentic/WAYFINDING.md).
 
-**Дальше (v1):** лестница дистилляции в цикле (агент сам превращает повторы в навыки), эмбеддинги для поиска, стриминг ответов, OAuth для удалённых MCP, подписи пакетов, дообучение Laya на ваших логах.
+**Следующий milestone:** сначала воспроизводимый baseline, durable runtime, provenance/approval safety, MCP и capability supply chain, outcome-verified learning, интегрированная лестница и memory. Порядок зафиксирован в [Agentic Roadmap](docs/agentic/ROADMAP.md).
 
 Честный список того, что ещё не закрыто, — в конце [модели угроз](docs/THREAT_MODEL.md) и в [дорожной карте](docs/ROADMAP.md). Проект на стадии MVP: пока не подключайте его к аккаунтам с деньгами.
 
@@ -194,7 +194,7 @@ python sidecar/laya_server.py            # http://127.0.0.1:7788
 
 ```bash
 bun install
-bun run check        # типы + ~300 тестов, включая red-team
+bun run check        # целевой локальный gate: typecheck + полный test suite
 ```
 
 Правила — в [CONTRIBUTING.md](CONTRIBUTING.md). Уязвимости присылайте приватно, см. [SECURITY.md](SECURITY.md).
