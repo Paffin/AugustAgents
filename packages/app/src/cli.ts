@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
 import { DecisionCascade, HeuristicEngine, NativeLayaTransport, nativeLayaIdentity } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
@@ -75,8 +75,16 @@ export function terminalApprover(io: Pick<CliIo, "print" | "ask">): Approver {
 
 const keyDirFor = (io: CliIo): string => io.env.AUGUST_KEY_DIR ?? join(io.home, ".config", "august");
 
+function keyBoundaries(io: CliIo): string[] {
+  const roots = [join(io.home, ".august")];
+  // Keep recovery usable with broken config, but do not invent safety for its unknown workspace.
+  try { const config = loadConfig(defaultConfigPath(io.home)); roots.push(config.root, resolve(config.dataDir)); }
+  catch { roots.push(join(io.home, "August")); }
+  return roots;
+}
+
 function storeFor(io: CliIo): SecretStore {
-  return io.secrets ?? openSecretStore(join(io.home, ".august"), { env: io.env, keyDir: keyDirFor(io) });
+  return io.secrets ?? openSecretStore(join(io.home, ".august"), { env: io.env, keyDir: keyDirFor(io), protectedDirectories: keyBoundaries(io) });
 }
 
 function appDeps(io: CliIo, configPath: string, approver?: Approver): AppDeps {
@@ -416,7 +424,8 @@ async function secret(args: readonly string[], io: CliIo): Promise<CliResult> {
 function secretKey(args: readonly string[], store: SecretStore, io: CliIo): CliResult {
   const [action, code] = args;
   const keyDir = keyDirFor(io);
-  const current = loadMasterKey({ env: io.env, keyDir });
+  const protectedDirectories = keyBoundaries(io);
+  const current = loadMasterKey({ env: io.env, keyDir, protectedDirectories });
   if (action === "status" || action === undefined) {
     io.print(current ? `Master key ${current.id} (${current.source === "env" ? "from AUGUST_MASTER_KEY" : current.source === "passphrase" ? "from AUGUST_MASTER_PASSPHRASE" : `file ${current.path}`}). It is outside the data folder.` : "No master key yet; one is created the first time a secret is stored.");
     io.print(`Secrets are stored in: ${store.kind}`);
@@ -429,7 +438,7 @@ function secretKey(args: readonly string[], store: SecretStore, io: CliIo): CliR
   }
   if (action === "recover" && code) {
     const key = keyFromRecoveryCode(args.slice(1).join("-").replace(/\s+/g, ""));
-    const path = writeMasterKeyFile(keyDir, key);
+    const path = writeMasterKeyFile(keyDir, key, protectedDirectories);
     io.print(`Restored master key ${keyIdOf(key)} to ${path}. The previous key file, if any, was kept beside it.`);
     return { code: 0 };
   }
@@ -438,7 +447,7 @@ function secretKey(args: readonly string[], store: SecretStore, io: CliIo): CliR
     if (current.source !== "file" && current.source !== "new") { io.print("The key comes from the environment, so August cannot replace it. Set a new AUGUST_MASTER_KEY yourself and enter the secrets again."); return { code: 1 }; }
     const next = randomBytes(32);
     const target = store.rotate(next);
-    writeMasterKeyFile(keyDir, next);
+    writeMasterKeyFile(keyDir, next, protectedDirectories);
     io.print(`Re-sealed ${target.list().length} secret(s) under new master key ${target.keyId}. Your recovery code changed: run august secret key recovery-code and store the new one.`);
     return { code: 0 };
   }

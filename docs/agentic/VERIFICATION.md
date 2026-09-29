@@ -103,6 +103,42 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### File-backed master-key placement boundary, 2026-09-29
+
+- Encrypted storage rejects master-key folders or individual `master.key`
+  symlinks into its data root, before reading/creating a key. App also rejects
+  keys inside its file-tool root. Missing final directories are resolved through
+  existing real ancestors; similarly named sibling folders remain valid. Explicit
+  environment master keys do not create a key file in the configured folder.
+- CLI key recovery/rotation checks known data/workspace boundaries before key
+  replacement. Existing files are neither moved nor deleted by this validation.
+  A broken app config does not prevent independent key recovery; its unknown
+  workspace cannot be qualified until the config is corrected.
+- After implementation, focused secret/attack coverage initially passed 55
+  tests / 261 expectations. Added recovery and path-normalization regressions;
+  final secret suite exits 0 with 20 pass, 0 fail, 102 expectations, 186 ms.
+  Prior recovery, theft, tamper, plaintext migration and attack coverage is retained.
+- One added `symlink/..` regression failed an intermediate full gate (608 pass,
+  12 skip, 1 fail). Bun normalizes the whole realpath input unlike the native
+  OS path walk, so validation now resolves existing components before applying
+  `..`. Encrypted-storage paths are normalized consistently with their actual
+  file operations; workspace roots follow their filesystem meaning. The failed
+  observation is retained, not erased by selecting a faster passing rerun.
+- Actual CLI/backend journey in owned `august-key-boundary-live-zvMTvC` refused
+  both symlink cases before prompting and preserved the existing target file.
+  Valid external storage encrypted/read back a random value. A data-only copy
+  in `august-key-boundary-restore-1vGpiD` could not decrypt it; recovery code
+  restored exact readback. Native OS credential-store calls: zero.
+- An actual CLI serve attempt in `august-parent-path-live-MAq6KO` also rejected
+  the symlink-parent workspace before opening a gateway or writing a key.
+- Final `bun run check` exits 0: 609 pass, 12 skip, 0 fail, 2295 expectations,
+  621 tests/36 files, 19.46 s test time. The platform/sandbox skips remain
+  unavailable evidence, not passes.
+- This is local CLI/filesystem evidence, not frontend credential controls or
+  another-host portability qualification. Concurrent same-user path replacement,
+  host ACLs/permissions, global OS credential namespace and fault-atomic key
+  rotation remain open; static path validation does not prove those properties.
+
 ### Encryption failures cannot select plaintext, 2026-09-29
 
 - Automatic credential-store selection now throws a typed safe error when a

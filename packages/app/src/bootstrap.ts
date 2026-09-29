@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { AgentRuntime, ApprovalLedger, denyAll, type AgentCheckpointState, type AgentReply, type Approver } from "@august/agent";
 import {
   DecisionCascade,
@@ -33,7 +33,7 @@ import { JsonlDecisionLog } from "./decision-log.ts";
 import { MetaExecutor, metaManifest, type ArtifactService } from "./meta.ts";
 import { targetsFor, type TargetRoots } from "./targets.ts";
 import { builtinVerifiers } from "./verifiers.ts";
-import { deriveKey, loadMasterKey } from "./masterkey.ts";
+import { assertKeyDirectoryOutside, deriveKey, loadMasterKey } from "./masterkey.ts";
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
 import { SecretBroker, type DeliveryContext, type EgressMode } from "./broker.ts";
 
@@ -154,6 +154,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
 
   // Keys live outside the data folder, so a copy or backup of the data does not carry them.
   const keyDir = deps.env.AUGUST_KEY_DIR ?? join(deps.home ?? dirname(dirname(config.dataDir)), ".config", "august");
+  // File tools must never be able to read the master key, even through a symlink.
+  try { assertKeyDirectoryOutside(keyDir, [config.root, resolve(dirname(config.dataDir))]); }
+  catch (error) { throw new ConfigError((error as Error).message); }
   const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir), { env: deps.env, keyDir });
   const pricing = resolveLlmPricing(config);
   const llm = new UsageRequiredProvider(deps.llm ?? createLlm(config, deps, secrets));

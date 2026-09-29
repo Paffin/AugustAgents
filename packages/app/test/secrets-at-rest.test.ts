@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -60,6 +60,48 @@ describe("master key", () => {
 });
 
 describe("EncryptedFileStore", () => {
+  test("master keys cannot be created inside data, while similarly named siblings remain valid", () => {
+    const home = tmp(); const data = join(home, "data");
+    for (const keyDir of [data, join(data, "keys", "nested")]) {
+      expect(() => openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir })).toThrow(/outside/);
+      expect(existsSync(join(keyDir, "master.key"))).toBe(false);
+    }
+    expect(existsSync(data)).toBe(false);
+    const workspace = join(home, "owner-workspace");
+    expect(() => openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir: join(workspace, "keys"), protectedDirectories: [workspace] })).toThrow(/outside/);
+    expect(existsSync(workspace)).toBe(false);
+    const safe = openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir: join(home, "data-keys") });
+    safe.set("OWNER_TOKEN", "fixture-value");
+    expect(safe.get("OWNER_TOKEN")).toBe("fixture-value");
+  });
+
+  test("directory and individual key-file symlinks into data are rejected without changing existing files", () => {
+    const home = tmp(); const data = join(home, "data"); mkdirSync(data);
+    const key = randomBytes(32).toString("hex"); const target = join(data, "preserve.key"); writeFileSync(target, key);
+    const alias = join(home, "key-folder-alias"); symlinkSync(data, alias);
+    expect(() => openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir: join(alias, "nested") })).toThrow(/outside/);
+    const keyDir = join(home, "keys"); mkdirSync(keyDir); symlinkSync(target, join(keyDir, "master.key"));
+    expect(() => openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir })).toThrow(/outside/);
+    expect(readFileSync(target, "utf8")).toBe(key);
+    expect(readdirSync(data)).toEqual(["preserve.key"]);
+  });
+
+  test("data boundary matches the normalized paths the encrypted store actually writes", () => {
+    const home = tmp(); const actual = join(home, "actual"); mkdirSync(join(actual, "child"), { recursive: true });
+    const alias = join(home, "alias"); symlinkSync(join(actual, "child"), alias);
+    const data = `${alias}/../data`; const keyDir = join(home, "data", "keys");
+    expect(() => openSecretStore(data, { kind: "encrypted-file", env: {}, keyDir })).toThrow(/outside/);
+    expect(existsSync(keyDir)).toBe(false);
+  });
+
+  test("an injected environment key needs no file inside the configured key folder", () => {
+    const home = tmp(); const data = join(home, "data"); const keyDir = join(data, "ignored-keys");
+    const store = openSecretStore(data, { kind: "encrypted-file", env: { AUGUST_MASTER_KEY: randomBytes(32).toString("hex") }, keyDir });
+    store.set("OWNER_TOKEN", "fixture-value");
+    expect(existsSync(keyDir)).toBe(false);
+    expect(store.get("OWNER_TOKEN")).toBe("fixture-value");
+  });
+
   test("values are sealed on disk, read back exactly, and the file is owner-only", () => {
     const dir = tmp(); const store = new EncryptedFileStore(dir, randomBytes(32));
     store.set("OPENAI_API_KEY", "sk-live-very-secret-value-123");
@@ -131,6 +173,34 @@ describe("EncryptedFileStore", () => {
 });
 
 describe("through the CLI and the app", () => {
+  test("App refuses file-backed keys inside the file-tool workspace before inference", () => {
+    const home = tmp(); const config = defaultConfig(home); const keyDir = join(config.root, "keys");
+    expect(() => createApp(config, { home, env: { AUGUST_KEY_DIR: keyDir }, secrets: new FileStore(join(home, ".august")), llm: { name: "unused", complete: async () => { throw Error("must not infer"); } } })).toThrow(/outside/);
+    expect(existsSync(join(keyDir, "master.key"))).toBe(false);
+  });
+
+  test("workspace boundary follows the OS meaning of symlink-parent paths", () => {
+    const home = tmp(); const actual = join(home, "actual"); mkdirSync(join(actual, "child"), { recursive: true });
+    mkdirSync(join(actual, "workspace")); const alias = join(home, "alias"); symlinkSync(join(actual, "child"), alias);
+    const config = { ...defaultConfig(home), root: `${alias}/../workspace` };
+    const keyDir = join(actual, "workspace", "keys");
+    expect(() => createApp(config, { home, env: { AUGUST_KEY_DIR: keyDir }, secrets: new FileStore(join(home, ".august")), llm: { name: "unused", complete: async () => "unused" } })).toThrow(/outside/);
+    expect(existsSync(keyDir)).toBe(false);
+  });
+
+  test("CLI recovery cannot write a master key into the configured tool workspace", async () => {
+    const home = tmp(); const config = defaultConfig(home); writeConfig(defaultConfigPath(home), config);
+    const keyDir = join(config.root, "keys"); const raw = randomBytes(32).toString("hex"); const code = recoveryCode(randomBytes(32));
+    const out: string[] = []; const env = { AUGUST_KEY_DIR: keyDir, AUGUST_MASTER_KEY: raw };
+    const io: CliIo = { home, env, print: line => void out.push(line), ask: async () => null,
+      get secrets() { return openSecretStore(join(home, ".august"), { kind: "encrypted-file", env, keyDir }); },
+    };
+    expect((await main(["secret", "key", "recover", code], io)).code).toBe(1);
+    expect(existsSync(keyDir)).toBe(false);
+    expect(out.join("\n")).not.toContain(raw);
+    expect(out.join("\n")).not.toContain(code);
+  });
+
   test("key storage failure stops before asking for credentials; correcting the folder resumes encrypted storage", async () => {
     const home = tmp(); const data = join(home, ".august"); const blocker = join(home, "not-a-directory");
     writeFileSync(blocker, "preserve-owner-fixture");

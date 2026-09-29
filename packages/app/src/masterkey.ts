@@ -1,6 +1,6 @@
 import { createHash, hkdfSync, randomBytes, scryptSync } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 export class MasterKeyError extends Error {
   constructor(message: string) {
@@ -28,6 +28,39 @@ export interface MasterKeyOptions {
   keyDir: string;
   /** Create a random key file when nothing else provides one. Default false. */
   create?: boolean;
+  /** Known data/workspace roots that must not contain a file-backed master key. */
+  protectedDirectories?: readonly string[];
+}
+
+/** Resolve symlinked ancestors even when the final key folder/file does not exist yet. */
+function canonicalPath(path: string): string {
+  // Preserve `link/..` until realpath resolves it; lexical normalization would
+  // inspect a different directory from the OS filesystem operation.
+  const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`;
+  let parent = parse(absolute).root;
+  for (const component of absolute.slice(parent.length).split(sep === "\\" ? /[\\/]+/ : /\/+/)) {
+    if (!component || component === ".") continue;
+    if (component === "..") { parent = dirname(parent); continue; }
+    parent = join(parent, component);
+    try { parent = realpathSync(parent); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new MasterKeyError("Cannot resolve the key folder safely. Set AUGUST_KEY_DIR to a writable folder outside data. Nothing was saved in plaintext.");
+    }
+  }
+  return parent;
+}
+
+/** No mutation: reject both a nested key folder and a key-file symlink back into data. */
+export function assertKeyDirectoryOutside(keyDir: string, directories: readonly string[]): void {
+  keyDir = resolve(keyDir);
+  const candidates = [canonicalPath(keyDir), canonicalPath(join(keyDir, "master.key"))];
+  for (const directory of directories) {
+    const root = canonicalPath(directory);
+    for (const candidate of candidates) {
+      const rel = relative(root, candidate);
+      if (rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw new MasterKeyError("Master key folder/file must be outside the data and tool workspace directories. Existing files were not changed.");
+    }
+  }
 }
 
 export const keyIdOf = (key: Buffer): string => createHash("sha256").update("august-key-id").update(key).digest("hex").slice(0, 16);
@@ -56,9 +89,10 @@ function privateDir(dir: string): void {
  * the data folder, so a copy or backup of the data folder does not carry the key with it.
  */
 export function loadMasterKey(options: MasterKeyOptions): MasterKey | undefined {
-  const { env, keyDir } = options;
+  const { env } = options; const keyDir = resolve(options.keyDir);
   const fromEnv = env.AUGUST_MASTER_KEY;
   if (fromEnv) { const key = parseKeyText(fromEnv, "AUGUST_MASTER_KEY"); return { key, source: "env", id: keyIdOf(key) }; }
+  assertKeyDirectoryOutside(keyDir, options.protectedDirectories ?? []);
   const passphrase = env.AUGUST_MASTER_PASSPHRASE;
   if (passphrase) {
     if (passphrase.length < 12) throw new MasterKeyError("AUGUST_MASTER_PASSPHRASE must be at least 12 characters");
@@ -81,8 +115,10 @@ export function loadMasterKey(options: MasterKeyOptions): MasterKey | undefined 
 }
 
 /** Replaces the key file (recovery or rotation). The old file is kept beside it, so a mistake can be undone. */
-export function writeMasterKeyFile(keyDir: string, key: Buffer): string {
+export function writeMasterKeyFile(keyDir: string, key: Buffer, protectedDirectories: readonly string[] = []): string {
   if (key.length !== MASTER_KEY_BYTES) throw new MasterKeyError("a master key is 32 bytes");
+  keyDir = resolve(keyDir);
+  assertKeyDirectoryOutside(keyDir, protectedDirectories);
   privateDir(keyDir);
   const path = join(keyDir, "master.key");
   if (existsSync(path)) renameSync(path, join(keyDir, `master.key.${Date.now()}.old`));

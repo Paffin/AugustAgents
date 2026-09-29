@@ -95,7 +95,8 @@ key-folder configuration is corrected. Explicit FileStore/legacy migration
 tooling remains, without automatic selection on encryption failure.
 Current acceptance remains incomplete: live sandbox tests skip on this host;
 the global `august` OS service/account can collide across installations;
-configured key-folder placement and host permissions need stronger validation;
+key folders/key-file symlinks are checked against known data and tool roots
+before use; host ACL/permission validation and concurrent path replacement remain open;
 anchors are local mutable files. A signature alone does not establish protected external
 anchoring or truncation resistance against replacement of all local evidence.
 

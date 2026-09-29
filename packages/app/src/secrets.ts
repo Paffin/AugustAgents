@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { MasterKeyError, deriveKey, keyIdOf, loadMasterKey } from "./masterkey.ts";
 
 /** Secrets August itself uses (model key, bot token) and secrets the owner set for their own tools. */
@@ -299,6 +300,8 @@ export interface OpenStoreOptions {
   kind?: SecretStore["kind"];
   /** Where the master key for the encrypted file lives: outside the data folder. Default `~/.config/august`. */
   keyDir?: string;
+  /** Additional known workspace/data roots supplied by App/CLI composition. */
+  protectedDirectories?: readonly string[];
 }
 
 function has(run: Runner, cmd: string): boolean {
@@ -322,8 +325,9 @@ export function openSecretStore(dir: string, options: OpenStoreOptions = {}): Se
   if (kind === "file") return new FileStore(dir);
   // Without an OS store, a usable master key is mandatory. Never silently write plaintext.
   try {
-    const master = loadMasterKey({ env, keyDir: options.keyDir ?? env.AUGUST_KEY_DIR ?? join(process.env.HOME ?? "/", ".config", "august"), create: true });
-    if (master) return new EncryptedFileStore(dir, master.key);
+    const storageDir = resolve(dir); // match the normalized file paths used by the encrypted store
+    const master = loadMasterKey({ env, keyDir: options.keyDir ?? env.AUGUST_KEY_DIR ?? join(homedir(), ".config", "august"), protectedDirectories: [storageDir, ...(options.protectedDirectories ?? [])], create: true });
+    if (master) return new EncryptedFileStore(storageDir, master.key);
   } catch (error) {
     if (error instanceof MasterKeyError) throw new SecretError(error.message);
   }
