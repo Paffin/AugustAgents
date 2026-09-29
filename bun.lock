@@ -32,6 +32,7 @@
         "@august/core": "workspace:*",
         "@august/discovery": "workspace:*",
         "@august/gateway": "workspace:*",
+        "@august/ladder": "workspace:*",
         "@august/learning": "workspace:*",
         "@august/mcp": "workspace:*",
         "@august/policy": "workspace:*",
@@ -84,6 +85,9 @@
       "name": "@august/ladder",
       "version": "0.1.0",
       "dependencies": {
+        "@august/agent": "workspace:*",
+        "@august/brain": "workspace:*",
+        "@august/capabilities": "workspace:*",
         "@august/policy": "workspace:*",
       },
     },

@@ -198,6 +198,8 @@ export interface AgentExecutionContext {
    * approval and budgets exactly as a chosen call does; a step that fails hands the task back to the model.
    */
   plan?: readonly PlannedStep[];
+  /** "verbatim" answers with the plan's own results and makes no model call; the default asks the model to write the answer. */
+  planReply?: "summarize" | "verbatim";
   /** Text of a learned procedure shown to the decision model as a hint. It guides; it never authorizes. */
   guidance?: string;
 }
@@ -397,6 +399,7 @@ export class AgentRuntime {
     try {
       if (context.plan?.length) {
         compiled = out.compiled = { steps: 0, completed: false };
+        const historyBefore = history.length;
         for (const [i, planned] of context.plan.entries()) {
           control();
           await checkpoint("before_decision", true);
@@ -417,7 +420,8 @@ export class AgentRuntime {
         if (!compiled.fellBack) {
           compiled.completed = true;
           control();
-          return await this.finish(text, allHistory(), undefined, steps, taint, log, llmControls(), control);
+          const verbatim = context.planReply === "verbatim" ? history.slice(historyBefore).join("\n\n") : undefined;
+          return await this.finish(text, allHistory(), verbatim, steps, taint, log, llmControls(), control);
         }
       }
       for (;;) {

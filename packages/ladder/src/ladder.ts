@@ -128,6 +128,17 @@ export class DistillationLadder {
     return { step: 3, change: "promoted" };
   }
 
+  /** Loads a task's saved state (from disk); nothing is earned by loading it. */
+  restore(task: string, state: TaskState): void {
+    this.tasks.set(task, { ...state, effects: [...state.effects] });
+  }
+
+  /** Takes a task one step back, e.g. when an eval of its compiled form fails. */
+  demoteTask(task: string): LadderResult {
+    const s = this.tasks.get(task);
+    return s ? this.demote(s) : { step: 0, change: "none" };
+  }
+
   reset(task: string): void {
     this.tasks.delete(task);
   }

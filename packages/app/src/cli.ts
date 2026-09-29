@@ -45,6 +45,7 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august laya status | activate [--force]
   august calibrate             fit Laya's confidence on verified outcomes (per question, language, option count)
   august learn status | report | export FILE | feedback RUN good|bad [note]   verified outcomes and training data
+  august patterns [list] | show ID | approve ID | disable ID | enable ID | forget ID   repeated work August has learned to do without asking the model
 `;
 
 function clip(value: unknown): string {
@@ -100,6 +101,8 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
         return calibrate(configPath, io);
       case "learn":
         return learn(configPath, rest, io);
+      case "patterns":
+        return patterns(configPath, rest, io);
       default:
         io.print(HELP);
         return { code: command === undefined || command === "help" || command === "--help" ? 0 : 1 };
@@ -512,6 +515,33 @@ function learn(configPath: string, args: readonly string[], io: CliIo): CliResul
     return { code: 1 };
   } catch (error) {
     io.print((error as Error).message);
+    return { code: 1 };
+  } finally {
+    app.close();
+  }
+}
+
+function patterns(configPath: string, args: readonly string[], io: CliIo): CliResult {
+  const { app } = openLearningApp(configPath, io);
+  try {
+    const [action, id] = args;
+    const report = app.distill.report();
+    if (action === undefined || action === "list" || action === "report") {
+      const t = report.totals;
+      io.print(`Patterns: ${t.patterns} learned, ${t.compiled} compiled, ${t.runs} runs, ${t.fallbacks} handed back to the model.`);
+      io.print(`Model work avoided by compiled runs: ${t.avoidedDecisions} tool decisions, ${t.avoidedArgumentFills} argument fills, ${t.avoidedAnswers} answers.`);
+      for (const p of report.patterns) io.print(`  ${p.id}  ${p.stage}${p.pendingApproval ? " (waiting for your approval: august patterns approve " + p.id + ")" : ""}${p.disabled ? " [disabled]" : ""}  "${p.request}"  streak ${p.streak}${p.lastChange ? `  — ${p.lastChange}` : ""}`);
+      return { code: 0 };
+    }
+    const found = id ? report.patterns.find((p) => p.id === id) : undefined;
+    if (action === "show" && found) {
+      io.print(`Pattern ${found.id} (${found.stage})\nRequest shape: ${found.request}\nEffects: ${found.effects.join(", ") || "none"}\nSteps:\n${found.procedure}\nRuns per stage (llm, skill, workflow, reflex): ${found.stats.runs.join(", ")}`);
+      return { code: 0 };
+    }
+    if (action === "approve" && id) { const r = app.distill.approve(id); io.print(r.message); return { code: r.ok ? 0 : 1 }; }
+    if ((action === "disable" || action === "enable") && found) { app.distill.disable(found.id, action === "disable"); io.print(`${action === "disable" ? "Disabled" : "Enabled"} ${found.id}.`); return { code: 0 }; }
+    if (action === "forget" && found) { app.distill.forget(found.id); io.print(`Forgot ${found.id} and its recorded runs.`); return { code: 0 }; }
+    io.print("Usage: august patterns [list] | show ID | approve ID | disable ID | enable ID | forget ID");
     return { code: 1 };
   } finally {
     app.close();

@@ -20,7 +20,8 @@ import { CapabilityRegistry } from "@august/capabilities";
 import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, makeSessionKey, type SessionKey } from "@august/core";
 import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
 import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
-import { LearningStore, VerifierSet, calibrationSamples, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
+import { DistillationEngine, PatternStore, type Route } from "@august/ladder";
+import { LearningStore,VerifierSet, calibrationSamples, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
 import { PolicyEngine } from "@august/policy";
 import { BuiltinExecutor, builtinManifest, clockManifest } from "./builtins.ts";
 import { ConfigError, loadConfig, resolveLlmPricing, writeConfig, type AugustConfig, type McpServerConfig } from "./config.ts";
@@ -72,6 +73,8 @@ export interface App {
   sandbox: SandboxKind;
   /** Decisions, executions and the evidence about their outcomes. Examples are derived from it by one rule. */
   learning: LearningStore;
+  /** Patterns learned from verified repeated work, and their place on the ladder. */
+  distill: DistillationEngine;
   /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
   feedback(session: SessionKey, runId: string, verdict: "success" | "failure", note?: string): void;
   /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
@@ -286,6 +289,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const verifierSet = new VerifierSet(builtinVerifiers({ root: config.root, skillsDir: config.skillsDir, registry }));
   const learning = new LearningStore(join(config.dataDir, "learning.db"), { verifiers: verifierSet.ids() });
   const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"));
+  const patternStore = new PatternStore(join(config.dataDir, "patterns.db"));
+  const distill = new DistillationEngine({ store: patternStore });
   const policy = new PolicyEngine();
   const registryHost = new URL(config.registryUrl).host;
   // Searching the public registry is routine; a standing mandate covers it (never from a tainted context).
@@ -331,12 +336,20 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const active = new Map<string, Active>();
   const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
   /** Records what a run decided and did, then lets the host check what it can. A failure here never changes what the person gets. */
-  const learnFrom = async (run: DurableRun, reply: AgentReply, seg: { startedAt: number; llmCalls: number; usageBefore: DurableRun["usage"] }): Promise<void> => {
+  const learnFrom = async (run: DurableRun, reply: AgentReply, seg: { startedAt: number; llmCalls: number; usageBefore: DurableRun["usage"]; route: Route }): Promise<void> => {
     if (!reply.trace || reply.trace.decisions.length === 0) return;
     try {
       const after = runs.getRun(run.id)!.usage; const id = learning.nextSegmentId(run.id);
-      learning.recordRun({ runId: id, session: run.session, startedAt: seg.startedAt, finishedAt: Date.now(), trace: reply.trace, usage: { llmCalls: seg.llmCalls, totalTokens: after.totalTokens - seg.usageBefore.totalTokens, costMicros: after.costMicros - seg.usageBefore.costMicros } });
-      for (const { decisionIndex, evidence } of await verifierSet.verify(reply.trace.executions)) learning.addEvidence(id, decisionIndex, evidence);
+      const stage = seg.route.plan && reply.compiled?.completed ? seg.route.stage : "llm";
+      learning.recordRun({ runId: id, session: run.session, startedAt: seg.startedAt, finishedAt: Date.now(), stage, trace: reply.trace, usage: { llmCalls: seg.llmCalls, totalTokens: after.totalTokens - seg.usageBefore.totalTokens, costMicros: after.costMicros - seg.usageBefore.costMicros } });
+      const checks = await verifierSet.verify(reply.trace.executions);
+      for (const { decisionIndex, evidence } of checks) learning.addEvidence(id, decisionIndex, evidence);
+      // The ladder learns from the same independent evidence: a run counts as verified only when every call was
+      // confirmed by a host check and none was contradicted. The model's own "done" is never evidence.
+      distill.observe({ runId: id, request: run.request, reply, route: seg.route });
+      const confirmed = new Set(checks.filter((c) => c.evidence.verdict === "success").map((c) => c.decisionIndex));
+      if (checks.some((c) => c.evidence.verdict === "failure")) distill.settle(id, "failed");
+      else if (reply.trace.executions.length > 0 && reply.trace.executions.every((e) => confirmed.has(e.decisionIndex))) distill.settle(id, "verified");
     } catch (error) {
       journal.append({ kind: "learning.error", session: run.session, data: { name: (error as Error).name } });
     }
@@ -352,7 +365,10 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       run = runs.transition(run.id, "running");
       const checkpoint = run.checkpoint as (AgentCheckpointState & typeof run.checkpoint) | undefined;
       if (checkpoint && (!checkpoint.taint || !checkpoint.loop || checkpoint.steps === undefined || checkpoint.externalEffects === undefined)) throw new Error("run checkpoint is missing safety state");
+      // Only a fresh run may start from a learned pattern; a resumed one continues exactly where its checkpoint says.
+      const route: Route = checkpoint ? { stage: "llm" } : distill.route(run.request, registry.enabledTools());
       let reply = await agent.handle(run.session, run.request, {
+        plan: route.plan, planReply: route.verbatim ? "verbatim" : "summarize", guidance: route.guidance,
         priorMessages, priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(priorProvenance.sensitivity === "public" ? {} : { sensitivity: priorProvenance.sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onUsage: async (usage) => { llmCalls += 1; usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
@@ -378,7 +394,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       } else {
         run = runs.finishRun(run.id, "completed", reply.reply, { steps: reply.steps });
       }
-      await learnFrom(run, reply, { startedAt: segmentStart, llmCalls, usageBefore });
+      await learnFrom(run, reply, { startedAt: segmentStart, llmCalls, usageBefore, route });
       return { ...reply, runId: run.id, replayed: false };
     } catch (error) {
       const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, current.checkpoint?.phase === "tool_started" && !current.checkpoint.safeToResume ? "recovering" : "failed", { error: (error as Error).message });
@@ -422,7 +438,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       // Only the person whose run it was can judge it: the session recorded with the run must be theirs.
       if (!segment || learning.sessionOf(segment) !== session) throw new Error("no such run for this session");
       recordOwnerFeedback(learning, segment, verdict, note);
+      distill.settle(segment, verdict === "success" ? "verified" : "failed");
     },
+    distill,
     recalibrate() {
       const samples = calibrationSamples(learning.examples().examples, engineId);
       const table = fitCalibrationTable(samples, { engine: engineId });
@@ -446,6 +464,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       mcp.closeAll();
       for (const proxy of proxies) void proxy.close();
       learning.close();
+      patternStore.close();
       runs.close();
       saveStats();
     },

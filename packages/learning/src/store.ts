@@ -193,7 +193,8 @@ export class LearningStore {
       for (const r of list) {
         const { decisions, executions, evidence } = this.rows(r.run_id);
         const report = deriveExamples({ runId: r.run_id, decisions, executions, evidence });
-        const verdicts = report.examples.map((e) => e.reward);
+        // A compiled run has no model choices to become examples; it is measured by the same independent evidence.
+        const verdicts = report.examples.length ? report.examples.map((e) => e.reward) : evidence.map((e) => (e.verdict === "success" ? 1 : -1));
         if (verdicts.length) { verified += 1; if (verdicts.every((v) => v === 1)) success += 1; }
       }
       return { stage, runs: list.length, verifiedRuns: verified, verifiedSuccessRate: verified ? success / verified : null, avgLatencyMs: avg(list.map((r) => r.finished_at - r.started_at))!, avgLlmCalls: avg(list.map((r) => r.llm_calls)), avgTokens: avg(list.map((r) => r.total_tokens)), avgCostMicros: avg(list.map((r) => r.cost_micros)) };

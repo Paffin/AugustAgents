@@ -16,6 +16,7 @@
     "@august/gateway": "workspace:*",
     "@august/mcp": "workspace:*",
     "@august/policy": "workspace:*",
+    "@august/ladder": "workspace:*",
     "@august/learning": "workspace:*"
   },
   "exports": {
