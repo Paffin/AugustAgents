@@ -27,6 +27,9 @@ primitives but lacks durable state and outcome-grounded learning.
 
 ## Goals
 
+- Realize all MVP, v1, v2 and next-generation outcomes in the user source
+  `/Users/mkiktev/Downloads/Агент-платформа на Laya архитектура и подводные камни.md`.
+  Dependency order does not exclude features. Embedded diagrams are unavailable.
 - Preserve the useful modular prototype while replacing unsafe or non-durable
   contracts through bounded outcomes.
 - Make durable execution and verified outcomes the center of the runtime.
@@ -35,7 +38,7 @@ primitives but lacks durable state and outcome-grounded learning.
 
 ## Non-Goals
 
-- Feature expansion into browser, voice, devices, A2A, payments, or cloud.
+- Hardcoded model/task/routing/price substitutes or smoke-based completion claims.
 - Compatibility layers without a current consumer, durable data, support
   window, removal condition, and proof that rebuild/reseed is insufficient.
 - Autonomous publication, deployment, or migration of user data.
@@ -56,14 +59,13 @@ primitives but lacks durable state and outcome-grounded learning.
 
 ## Release Boundaries
 
-- Foundation gate: no implementation before the exact Foundation is
-  policy-accepted as Ready or preserved Approved.
-- Outcome gate: no implementation before the exact outcome Design Spec and Plan
-  are policy-accepted as Ready or preserved Approved.
+- Foundation gate: exact Foundation Approved under the latest Review-gated policy.
+- Outcome gate: exact Design Spec and compatible Plan Approved under that policy.
 - Prototype gate: no README or release claim may say a capability is delivered
   without current runtime evidence.
-- Production gate: production readiness is unavailable until `OUT-010` closes
-  every required platform, recovery, security, and release check.
+- Core gate: OUT-010 closes core platform, recovery and security evidence.
+- Full-goal gate: OUT-028 closes every active requirement, including later
+  features. Test counts and commit titles cannot establish completion percentage.
 
 ## Requirements
 
@@ -86,7 +88,9 @@ primitives but lacks durable state and outcome-grounded learning.
   Status: planned.
 - **REQ-FUNC-005 — Provenance-aware memory.** Working, episodic, semantic, and
   procedural memory have explicit origin, lifecycle, retrieval, and deletion
-  rules. Evidence: persistence, isolation, recall, and deletion tests. Owner:
+  rules; editable md/yaml/jsonl, SQLite FTS5 and vector retrieval remain required.
+  Evidence: live owner editing, persistence, isolation, measured retrieval, and
+  physical deletion/readback. Owner:
   `ARCHITECTURE.md`. Status: planned.
 
 ### Accessibility Requirements
@@ -127,7 +131,8 @@ primitives but lacks durable state and outcome-grounded learning.
   resume do not duplicate external actions. Evidence: crash-point matrix and
   idempotency tests. Owner: `ARCHITECTURE.md`. Status: planned.
 - **REQ-REL-002 — Bounded execution.** Every run enforces step, time, token,
-  monetary, and external-effect budgets and accepts interrupt/cancel. Evidence:
+  monetary, and external-effect budgets and accepts interrupt/cancel. Daily and
+  per-tool token/cost limits plus actual UI accounting remain required. Evidence:
   boundary tests. Owner: `ARCHITECTURE.md`. Status: planned.
 - **REQ-REL-003 — Reproducible green baseline.** Clean checkout dependency
   restore, typecheck, unit/integration/red-team suites, and public status claims
@@ -146,6 +151,31 @@ primitives but lacks durable state and outcome-grounded learning.
   upgrade/rollback, and release evidence are required. Evidence: clean-checkout
   CI artifacts, SBOM/provenance records, checksum/signature verification, and a
   successful upgrade/rollback drill. Owner: `VERIFICATION.md`. Status: planned.
+
+### Additional Requirements From The Complete Goal
+
+Each requirement below is proposed and pending user agreement. Project ownership
+and complete live acceptance are explicit; detailed implementations need bounded
+Approved specs/plans. None is delivered solely by this document.
+
+| Identity | Required behavior | Live acceptance | Owner |
+| --- | --- | --- | --- |
+| REQ-FUNC-006 | Three-action signed single-binary installation; hardware/model/runtime detection, native service, web wizard, pairing, proxy/mirror/offline/resume, doctor, data-preserving uninstall | Fresh-host install to first useful reply on supported OSes | ARCHITECTURE.md |
+| REQ-FUNC-007 | Real Laya native ONNX/MLX inference, typed choices, calibrated verified-outcome gates; JSON-schema generation; provider fallback/backoff/queued recovery; owner-selected model/pricing; personal model exams | Bilingual useful tasks, actual weights, outage/recovery and frozen exams | ARCHITECTURE.md |
+| REQ-FUNC-008 | Local synchronized catalogs/offline mirrors; hierarchical retrieval and recall@16; signature/code/license checks; meaningful install acceptance/rollback; scoped OAuth refresh; dedup/version/effect/health controls; self-authored MCP if missing | Full discover-install-configure-action journey and hostile package rejection | ARCHITECTURE.md |
+| REQ-FUNC-009 | Durable heartbeat, natural-language schedules, MCP/webhook triggers, IANA timezones, quiet hours, digest and attention budget | Real timed tasks across restart, DST and quiet hours | PRODUCT.md |
+| REQ-FUNC-010 | Web control center: onboarding, runs/missions, bounded always-mandates, journal/diffs/undo, memory/user profile, task/tool/day usage, skill attribution, demotion and weekly savings | Keyboard/browser journeys against actual persisted state | PRODUCT.md |
+| REQ-FUNC-011 | Official Telegram/web/CLI then Slack, Discord, email, WhatsApp Business, Matrix; OpenClaw/Hermes skill/plugin formats | Authenticated real channel messages and unknown-user/group restrictions | ARCHITECTURE.md |
+| REQ-FUNC-012 | Dedicated browser profile/accessibility actions, scoped subagents and external coding-agent delegation under common policy | Useful browser task and worker isolation/recovery | SECURITY.md |
+| REQ-FUNC-013 | Local STT/TTS and safe PDF/spreadsheet/image attachments | Real channel media task with provenance-preserving results | ARCHITECTURE.md |
+| REQ-FUNC-014 | OpenClaw/Hermes import, encrypted export/backup and another-host restore | Real state round-trip and corrupted/archive-escape rejection | ARCHITECTURE.md |
+| REQ-FUNC-015 | Frozen holdouts, nightly local RLCD, export/calibration, three retained checkpoints, rollback and measured stage success/calls/cost/latency | Fresh train-to-runtime plus matched-task promotion/demotion | VERIFICATION.md |
+| REQ-FUNC-016 | Long missions/milestones/reports; live steering/stop; isolated supervised channel/MCP actors with CPU/memory bounds | Actor crashes and mission restart without duplicate effects | ARCHITECTURE.md |
+| REQ-FUNC-017 | Signed A2A identity/cards, untrusted inbound agents, wallet with bounded expiring payment mandates | Interoperability and provider sandbox transaction lifecycle; real payment requires separate authority | SECURITY.md |
+| REQ-FUNC-018 | Paired device peripherals, CRDT offline sync, data-local compute, team roles/shared skills/member budgets, VPS/serverless/hibernation | Multi-node offline/reconnect and team isolation journeys | ARCHITECTURE.md |
+| REQ-FUNC-019 | Opt-in malicious-hash/publisher reputation exchange and federated Laya learning with differential privacy | Multi-node exchange, consent and privacy-budget verification | SECURITY.md |
+| REQ-OPS-003 | Signed A/B updates, rehearsed copy migration, health rollback; OpenTelemetry local/owner-selected OTLP and decision explanations | Interrupted upgrade/rollback and real trace readback | VERIFICATION.md |
+| REQ-SEC-005 | Speculative preview, file snapshots/trash, undo, delayed cancellable sending and no unapproved rights growth | Live preview/apply/undo and injection against all action adapters | SECURITY.md |
 
 ## Project-Level UX And Visual Principles
 
@@ -166,7 +196,9 @@ mapped in Roadmap Traceability.
 - Windows native sandboxing and packaging are not delivered.
 - macOS `sandbox-exec` longevity and Linux egress enforcement require current
   platform evidence during the relevant design.
-- Browser/voice/devices/A2A/payments remain deferred until core runtime gates.
+- Later outcomes wait for safety prerequisites and remain part of completion.
+- External service accounts, signing identities and other OS hosts are unknown;
+  unavailable live evidence cannot count as a pass.
 
 ## Roadmap Traceability
 
@@ -181,4 +213,22 @@ mapped in Roadmap Traceability.
 | OUT-007 | REQ-FUNC-004, REQ-PERF-001, REQ-REL-002 |
 | OUT-008 | REQ-FUNC-005, REQ-SEC-001 |
 | OUT-009 | REQ-SEC-004, REQ-REL-001 |
-| OUT-010 | REQ-ACC-001, REQ-REL-003, REQ-OPS-002 and release evidence for all active requirements |
+| OUT-010 | REQ-ACC-001, REQ-REL-003, REQ-OPS-002 and core release evidence |
+| OUT-011 | REQ-FUNC-007, REQ-REL-002 |
+| OUT-012 | REQ-FUNC-006, REQ-OPS-002 |
+| OUT-013 | REQ-FUNC-009, REQ-REL-001 |
+| OUT-014 | REQ-FUNC-010, REQ-ACC-001, REQ-PERF-001 |
+| OUT-015 | REQ-FUNC-008, REQ-SEC-003 |
+| OUT-016 | REQ-FUNC-011, REQ-SEC-002 |
+| OUT-017 | REQ-FUNC-015, REQ-FUNC-003, REQ-PERF-001 |
+| OUT-018 | REQ-FUNC-014, REQ-REL-001 |
+| OUT-019 | REQ-SEC-005, REQ-SEC-002 |
+| OUT-020 | REQ-FUNC-012, REQ-SEC-003 |
+| OUT-021 | REQ-FUNC-013, REQ-SEC-001 |
+| OUT-022 | REQ-FUNC-016, REQ-REL-001, REQ-REL-002 |
+| OUT-023 | REQ-OPS-003, REQ-OPS-002 |
+| OUT-024 | REQ-FUNC-017, REQ-SEC-002, REQ-SEC-004 |
+| OUT-025 | REQ-FUNC-018, REQ-REL-001, REQ-SEC-003 |
+| OUT-026 | REQ-FUNC-019, REQ-SEC-001, REQ-SEC-004 |
+| OUT-027 | REQ-FUNC-018, REQ-OPS-003, REQ-SEC-003 |
+| OUT-028 | Full acceptance evidence for every active requirement |

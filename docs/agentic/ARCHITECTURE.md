@@ -7,9 +7,11 @@
   Bun 1.1.39 is the first release with text `bun.lock`; current development is
   observed on Bun 1.4.2. Sources: https://bun.sh/docs/pm/lockfile and
   https://bun.sh/guides/install/yarnlock, verified 2026-09-29.
-- Python HTTP sidecar for Laya on loopback.
-- Bun SQLite `runtime.db` with WAL is the current OUT-002 Phase A adapter for durable
-  conversation and run state behind logical StateStore and RunStore interfaces.
+- Current Laya integration is a Python HTTP sidecar on loopback. Native ONNX/MLX
+  inference and a real qualified checkpoint remain the requested target (OUT-011).
+- Bun SQLite `runtime.db` schema v2/WAL now stores messages/runs/checkpoints and
+  provider usage. Earlier Phase A evidence remains historical.
+- Maintained MCP SDK 1.31.0 is pinned behind the existing August adapter.
 - Local filesystem and journal persistence; current storage contracts are
   package-specific and incomplete.
 
@@ -22,13 +24,19 @@
 - Official protocol SDKs stay behind adapters and cannot leak transport types
   into domain packages.
 - Unknown retained data or consumers block destructive migration shortcuts.
+- Runtime/provider/model/pricing inputs must come from validated configuration,
+  measured metadata or calibrated policy. Fixed provider tariffs/dates and a
+  heuristic standing in for Laya cannot meet the full goal.
+- Later architecture outcomes and evidence are traced in the Blueprint; browser,
+  voice, devices, wallet, agents and cloud remain required, with separate authority
+  for actual external effects and infrastructure provisioning.
 
 ## Modules
 
-### Current state, evolved from `aa8bf43`
+### Current source at `e596112`, observed 2026-09-29
 
-- `core`: lane queue, session-key helpers, hash journal, and the schema-v1
-  `DurableRuntimeStore` for messages, runs, checkpoints, and idempotency.
+- `core`: lane queue, session keys, schema-v2 durable store with usage accounting,
+  and audit/journal primitives. Current runtime acceptance is incomplete.
 - `agent`: orchestration of decision, arguments, policy, approval, execution,
   result, and response.
 - `brain`: typed decision engines, Laya/LLM cascade, calibration, and providers.
@@ -37,8 +45,10 @@
 - `mcp`: protocol/transport adapter, server host, mapping, and sandbox wrapper.
 - `discovery`: registry lookup and installation plans for servers and skills.
 - `channels` and `gateway`: owner-facing interaction and approval surfaces.
-- `ladder`: currently an isolated promotion state machine; target distillation
-  policy engine integrated through a small runtime interface.
+- `ladder`: promotion state plus compiled-plan routing integrated by `app`.
+- `learning`: verified-outcome eligibility, traces, verifier registry and export.
+- `memory`: scoped persistent memory and lexical retrieval; required editable
+  files, vector retrieval and complete live owner controls remain incomplete.
 - `app`: configuration, secret store, composition, CLI, and process lifecycle.
 
 ## Interfaces
@@ -136,9 +146,12 @@ binary/text lock compatibility path for earlier 1.1.x releases.
 - Repository source and tests are Git-managed.
 - `~/.august` may contain retained configuration, decisions, journal, secrets,
   capability configuration, and future run/memory state.
-- `dataDir/runtime.db` schema v1 owns durable messages, runs, transitions,
-  budgets, checkpoints, and idempotency records. It is additive and does not
-  migrate or reset existing files.
+- `dataDir/runtime.db` schema v2 owns messages, runs, transitions, budgets,
+  usage, checkpoints and idempotency; source includes a v1 backup/migration path.
+  No present retained-data migration or reset is authorized. Evaluate actual
+  consumer/data/support-window evidence before extending compatibility.
+- learning.db, patterns.db and memory.db are retained runtime datasets with
+  owner/provenance boundaries; do not reseed them to achieve green tests.
 - External retained installations and production backup procedures are unknown;
   one local stopped-app exact-file backup/read-only restore drill is verified.
 - No authority exists to reset retained runtime/user data. Designs must define
@@ -160,9 +173,9 @@ binary/text lock compatibility path for earlier 1.1.x releases.
 
 ### Current Phase A and target contract
 
-`app` now composes channels, `DurableRuntimeStore`, AgentRuntime, policy,
-cooperative run controls, and the current capability runtime. The target adds
-outcome verifiers, learning, and ladder integration. `agent` coordinates
+`app` source composes channels, durable state, policy, controls, outcome verifiers,
+learning, memory, compilation and capability runtime. This integration is not
+fully accepted live. `agent` coordinates
 interfaces but does not own persistence backends, protocol details, or OS
 isolation policy.
 
@@ -185,7 +198,11 @@ isolation policy.
   production recovery and schema migration remain unverified.
 - OS-specific network enforcement and sandbox primitives need current platform
   research and runtime evidence.
-- Provider-reported token usage, pricing, and enforceable token/monetary budgets
-  remain unavailable, so `OUT-002` is not complete.
-- The current ladder, decision log, and journal are not integrated with verified
-  run outcomes.
+- Provider usage/budget source exists; hardcoded pricing, provider empty-content
+  behavior and live tool selection are current unresolved OUT-002 gaps.
+- Learning/ladder/memory/audit are integrated in source; fresh matched-task,
+  real-weight, recovery and platform acceptance remains outstanding.
+- System Keychain uses one fixed service/account namespace across installations;
+  secret tests currently escape temporary storage. Isolate before rerunning them.
+- Plaintext fallback, local mutable anchor storage, missing native inference,
+  actor supervisor and other complete-goal contracts require bounded designs.

@@ -6,6 +6,18 @@ Completion claims bind the exact revision, command, environment, result, and
 known limitations. Source review and isolated unit tests do not substitute for
 frontend journeys, restart/recovery, platform isolation, or release evidence.
 
+The latest user requires no hardcoded substitutes and no smoke-based acceptance.
+Use full useful journeys with real model/backend/tool state, independently inspect
+the outcome, and include negative, restart, budget and rollback branches relevant
+to that journey. Existing fake-adapter invariant tests remain useful engineering
+coverage but do not satisfy the live acceptance gate. Do not replace existing
+attack coverage with tests that merely mirror implementation.
+
+Before running credential tests, inspect their backend selection: temporary HOME
+or CliIo.home alone does not isolate macOS Keychain/Secret Service. Do not rerun
+the current full suite until the two failing backend tests are isolated under an
+Approved repair. Account for every skip; platform-inapplicable is not a pass.
+
 ## Test Strategy
 
 - Behavior changes require meaningful public-interface regression tests; under
@@ -91,6 +103,28 @@ MCP/Laya integration in supported environments. Capture observed behavior, not
 only configuration intent.
 
 ## Current Baseline Evidence
+
+### Current revalidation at main e596112, 2026-09-29
+
+- Frozen `bun install --frozen-lockfile` restored 92 missing packages without a
+  tracked lockfile change. Bun 1.4.2, Node 26.0.0, macOS arm64.
+- `bun run check`, outside the restricted network sandbox: typecheck exit 0;
+  tests 577 pass, 12 skip, 2 fail, 2142 expectations, 591 tests/35 files, 10.54 s;
+  combined exit 1. Both failures in secrets-at-rest.test.ts incorrectly expect
+  encrypted-file while platform selection returns Keychain.
+- A diagnostic focused run reproduced 10 pass/2 fail. One CLI test wrote a
+  synthetic OPENAI_API_KEY into the shared `august` Keychain service. Whether it
+  replaced a pre-existing value is unknown; there is no verified backup. Further
+  runs are stopped, and no credential value appears in this evidence.
+- Real browser against the real loaded local Qwen endpoint: a randomly generated
+  order.json file was not read for the Russian user request; the response denied
+  filesystem access. The English request failed with provider “response had no
+  text”. The known-file/random-values check prevents fabricated success.
+- An attempted restart journey was affected by the same provider failure;
+  complete live recovery is not established by a successful gateway restart.
+- Full evidence and UI captures live in ignored
+  `docs/superpowers/progress/2026-09-29-goal-review.md`. Previous baseline records
+  below apply to their named revisions and do not override these current failures.
 
 - 2026-09-29, branch `codex/audit-foundation`, implementation commit `b669434`,
   macOS, Bun `1.4.2`, Node `v26.0.0`: exact dev dependencies and text `bun.lock`

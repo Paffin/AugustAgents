@@ -1,10 +1,10 @@
 # AugustAgents Wayfinding
 
 **Artifact Type:** Agentic Foundation
-**Status:** Ready
-**Revision:** sha256:0c7000314530cb7a64873ab0e146027a6b4e85cc46a86b824a266cb51f5797c9
-**Approved Revision:** none
-**Approved At:** none
+**Status:** Approved
+**Revision:** sha256:05a758f38ff2245b2a02f7f6558c8fe4b2853e9d0336126d8cf0091592a3a369
+**Approved Revision:** sha256:05a758f38ff2245b2a02f7f6558c8fe4b2853e9d0336126d8cf0091592a3a369
+**Approved At:** 2026-09-29T18:17:44.747Z
 
 ## Foundation Files
 
@@ -23,9 +23,9 @@
 
 ## Destination
 
-A policy-accepted OUT-002 Phase A closeout that records verified local durable
-runtime behavior, preserves the provider-usage/pricing completion blocker, and
-keeps all remaining release gaps explicit.
+A user-agreed Foundation covering the complete supplied Laya platform goal,
+preserving its security constraints, and distinguishing current source,
+current runtime evidence, and outstanding acceptance for every outcome.
 
 ## Readiness Checklist
 
@@ -42,10 +42,12 @@ keeps all remaining release gaps explicit.
 
 ## Frontier
 
-- Complete exact implementation/final/security review and local fast-forward
-  integration of OUT-002 Phase A.
-- Design the bounded OUT-002 provider-usage/pricing successor without widening
-  into later provenance, learning, memory, or release outcomes.
+- Agree this documentation revision under the latest user instruction.
+- Design the bounded OUT-001 regression repair: prevent host credential writes
+  by tests, restore the green baseline, and retain meaningful attack coverage.
+- Then repair live provider/tool journeys before accepting OUT-002 and later
+  source integrations. Existing ignored bindings name another branch and Ready
+  artifacts; they are historical, not current execution authority.
 
 ## Fog
 
@@ -58,14 +60,17 @@ keeps all remaining release gaps explicit.
 
 ## Out of Scope
 
-- Browser automation, voice, devices, A2A, payments, teams, and cloud features.
+- Publication, live payments, third-party messages, cloud provisioning, and
+  migration/reset of retained user data without separate scoped authority.
+- Missing embedded diagrams are unavailable source material; do not invent them.
 - Deleting the current codebase or replacing all packages at once.
 - Claiming production readiness before `OUT-010` evidence exists.
 - Resetting user/runtime data or publishing releases without separate authority.
 
 ## Decision Pointers
 
-- Workflow and phase policy: [DEC-0011](DECISIONS.md#dec-0011-autonomous-document-progression), [DEC-0002](DECISIONS.md#dec-0002-same-session-phase-mode). Superseded history remains at [DEC-0001](DECISIONS.md#dec-0001-review-gated-project-documents).
+- Workflow and phase policy: [DEC-0014](DECISIONS.md#dec-0014-renewed-user-document-agreement), [DEC-0002](DECISIONS.md#dec-0002-same-session-phase-mode). Superseded history remains at DEC-0001 and DEC-0011.
+- Full destination: [DEC-0015](DECISIONS.md#dec-0015-complete-laya-platform-goal).
 - Incremental architecture strategy: [DEC-0003](DECISIONS.md#dec-0003-preserve-and-evolve-the-current-codebase).
 - Learning truth and provenance: [DEC-0004](DECISIONS.md#dec-0004-verified-outcome-is-the-learning-label), [DEC-0005](DECISIONS.md#dec-0005-provenance-belongs-to-content-parts).
 - Runtime and protocol direction: [DEC-0006](DECISIONS.md#dec-0006-durable-runengine-is-the-runtime-center), [DEC-0007](DECISIONS.md#dec-0007-official-sdk-behind-an-august-mcp-adapter).

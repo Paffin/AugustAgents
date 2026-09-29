@@ -19,8 +19,9 @@ provenance, recovery, and measurable success.
 ## Maturity And Current Consumers
 
 - **Maturity:** prototype.
-- **Source:** repository snapshot `aa8bf43` observed 2026-09-29; `SECURITY.md`
-  calls the project MVP-stage while the runtime lacks durable sessions/runs.
+- **Source:** repository `main` at `e596112`, observed 2026-09-29. Durable state,
+  learning, memory, containment and audit code exists. Current live web journeys
+  and test failures prevent readiness claims; source is not product acceptance.
 - **Current users:** repository maintainers and possible public GitHub users;
   actual installations and active users are unknown.
 - **External consumers:** unknown. The Git remote is public-facing, but no API,
@@ -51,8 +52,13 @@ provenance, recovery, and measurable success.
   reset or drop compatibility.
 - Safety and product claims must identify current evidence and observation
   boundaries.
-- Controlled feature expansion waits until core runtime and release outcomes
-  pass.
+- The complete supplied Laya document is the destination. MVP, v1, v2 and its
+  next-generation inventions remain required; core safety prerequisites determine
+  order, not scope reduction. Traceability lives in the Blueprint.
+- Model and price selection use owner configuration or verified metadata;
+  task-specific hardcoded answers and routing exceptions are forbidden.
+- Complete live journeys establish acceptance. Mock-backed tests and smoke
+  checks alone cannot close an outcome.
 
 ## UX Principles
 
@@ -65,7 +71,7 @@ provenance, recovery, and measurable success.
 ## Product-Level Non-Goals
 
 - General-purpose cloud orchestration in the current milestone.
-- Implicit background autonomy without durable run state and owner controls.
+- Background autonomy before durable owner controls and attention budgets pass.
 - Marketing claims based only on source presence or isolated unit tests.
 
 ## Open Product Risks
@@ -75,4 +81,3 @@ provenance, recovery, and measurable success.
 - The current README describes some planned or partially implemented behavior
   as delivered.
 - A release and support policy has not been established.
-

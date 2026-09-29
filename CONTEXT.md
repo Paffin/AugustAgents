@@ -14,17 +14,19 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-`OUT-001` is integrated. `OUT-002` Phase A now has SQLite/WAL-backed durable
-messages, runs, checkpoints, idempotency, restart context, owner controls, and
-live local-model restart evidence. Close out and integrate Phase A, then add
-provider-reported token usage and pricing before completing `OUT-002`.
+Reconcile the complete user goal and current `main` before further implementation.
+Source at `e596112` includes changes labelled OUT-002 through OUT-009, but those
+labels and the older OUT-002 binding do not establish current acceptance.
+The proposed Foundation awaits document agreement.
 
 ## Active Risks
 
 - Linux/Windows/CI, real Laya weights, live sandbox/egress, signing, updater,
   and recovery evidence remain unverified.
-- Token and monetary budget enforcement, outcome-verified learning, integrated
-  distillation, and provenance-aware memory are not delivered.
+- Source for budgets, learning, distillation, and memory exists; complete live
+  acceptance is outstanding. Real-model file reading failed in the current UI.
+- Current secret tests choose the real macOS Keychain; isolate them before
+  another full test run. Provider pricing and local dates contain fixed values.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit
@@ -32,9 +34,9 @@ provider-reported token usage and pricing before completing `OUT-002`.
 
 ## Roadmap Position
 
-`OUT-001` is complete. `OUT-002` is In Progress: Phase A is implemented and
-locally verified, but the outcome remains blocked from completion and cannot
-unblock `OUT-003` until its usage/pricing successor is delivered.
+OUT-001 requires regression repair and renewed acceptance. OUT-002 through
+OUT-009 have source changes with incomplete current runtime acceptance. OUT-010
+is the core release gate; the full document goal continues through OUT-028.
 
 ## Reading Links
 

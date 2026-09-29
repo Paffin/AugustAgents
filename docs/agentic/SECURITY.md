@@ -82,6 +82,28 @@ restart, tainted learning, and local database tampering.
 
 ## Security Verification
 
+### Current source and evidence at e596112, 2026-09-29
+
+Content parts, bound approval ledger/callbacks, target-aware writes, verified
+artifact installation, scoped secret broker, encrypted file backend and signed
+journal anchors exist in source. The aa8bf43 observations above are historical.
+Current acceptance remains incomplete: live sandbox tests skip on this host;
+secret tests select host Keychain; the global `august` service/account can collide
+across installations; failed key storage can fall back to plaintext; anchors are
+local mutable files. A signature alone does not establish protected external
+anchoring or truncation resistance against replacement of all local evidence.
+
+Tests may touch only process-owned fixture state. Credential-test selection must
+be explicit at the backend seam and must never access a user's OS store. Preserve
+the encryption/theft/tamper/recovery contract while fixing test isolation. Before
+any later host credential test, use its own disposable backend/account namespace.
+No runtime secret values are written into review packages or screenshots.
+
+The broader action contract includes REQ-SEC-005, browser/worker/device adapters,
+A2A wallet mandates and opt-in collective immunity. All consume common effects,
+provenance, identity and budget checks below model reasoning. External services,
+accounts, payments and publication still require scoped authority.
+
 - Every security fix includes a reproducing exploit/invariant regression test
   and relevant red-team coverage; under the selected no-TDD workflow those tests
   may be authored after implementation.

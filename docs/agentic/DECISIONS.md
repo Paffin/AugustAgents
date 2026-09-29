@@ -4,7 +4,8 @@
 
 | Area | Current decision | Current-truth owner | Supersedes |
 | --- | --- | --- | --- |
-| Workflow approval | DEC-0011 | root `AGENTS.md` / Workflow Policy | DEC-0001 |
+| Workflow approval | DEC-0014 | root `AGENTS.md` / Workflow Policy | DEC-0011 |
+| Complete destination | DEC-0015 | `PROJECT-BLUEPRINT.md` / Goals | none |
 | Phase continuity | DEC-0002 | root `AGENTS.md` / Phase Mode | none |
 | Change strategy | DEC-0003 | `ARCHITECTURE.md` / Constraints | none |
 | Learning truth | DEC-0004 | `PRODUCT.md` / Product Rules | none |
@@ -173,4 +174,28 @@
 **Current Truth:** `docs/agentic/ARCHITECTURE.md` / Technology Stack, Interfaces, Adapters, Data Durability
 **Blueprint Requirements:** REQ-FUNC-001, REQ-FUNC-002, REQ-REL-001, REQ-REL-002
 **Roadmap Outcomes:** OUT-002
+**Supersedes:** none
+
+### DEC-0014: Renewed user document agreement
+
+**Area:** Workflow approval
+**Decision:** Use Review-gated version 2 for changed documents, presenting complete readable packages before downstream use.
+**Rationale:** The latest user instruction restores document agreement after the earlier Autonomous preference.
+**Alternatives:** Continue Autonomous or treat general historical permission as new document approval; both conflict with the latest request.
+**Evidence:** User message “не забудь согласовывать все доки”, 2026-09-29.
+**Current Truth:** root `AGENTS.md` / Workflow Policy
+**Blueprint Requirements:** all
+**Roadmap Outcomes:** all
+**Supersedes:** DEC-0011
+
+### DEC-0015: Complete Laya platform goal
+
+**Area:** Complete destination
+**Decision:** Preserve all MVP, v1, v2 and next-generation outcomes in the supplied goal; dependency order does not remove scope. Core release is an intermediate gate.
+**Rationale:** The user requires 100 percent realization, no hardcoded substitutes, no smoke-based acceptance, and continuation beyond the first task.
+**Alternatives:** End at OUT-010 or exclude later features permanently; both reduce the supplied goal.
+**Evidence:** Latest user message and `/Users/mkiktev/Downloads/Агент-платформа на Laya архитектура и подводные камни.md`, read 2026-09-29; embedded diagrams are absent.
+**Current Truth:** `PROJECT-BLUEPRINT.md` / Goals and Roadmap Traceability
+**Blueprint Requirements:** all
+**Roadmap Outcomes:** OUT-001 through OUT-028
 **Supersedes:** none
