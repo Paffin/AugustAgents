@@ -15,8 +15,8 @@ attack coverage with tests that merely mirror implementation.
 
 Before running credential tests, inspect their backend selection: temporary HOME
 or CliIo.home alone does not isolate macOS Keychain/Secret Service. Do not rerun
-the current full suite until the two failing backend tests are isolated under an
-Approved repair. Account for every skip; platform-inapplicable is not a pass.
+the unsafe suite until backend fixtures are isolated and verified. That repair
+is recorded below. Account for every skip; platform-inapplicable is not a pass.
 
 ## Test Strategy
 
@@ -46,8 +46,7 @@ Approved repair. Account for every skip; platform-inapplicable is not a pass.
   boundary exists.
 - **External compatibility contract:** MCP protocol/version support with current
   consumer evidence, support window, removal condition, and sunset. Retire only
-  through a policy-accepted Ready or preserved Approved successor that preserves
-  supported consumers.
+  through a reviewed change that preserves supported consumers and the active goal.
 - **Temporary migration test:** persisted-schema upgrade/rollback bound to one
   migration, removal milestone, accountable owner, and cleanup of production
   paths, fixtures, tests, docs, and formats.
@@ -79,7 +78,7 @@ Approved repair. Account for every skip; platform-inapplicable is not a pass.
 
 ## Architecture Conformance
 
-Every spec, plan, task, and final review reports modules, interfaces, seams and
+Review each coherent change against affected modules, interfaces, seams and
 adapters, data flow, depth/locality/leverage, public test surface, constraints,
 stage appropriateness, consumer compatibility, subtraction, test categories,
 sunset, and complexity budget.
@@ -103,6 +102,20 @@ MCP/Laya integration in supported environments. Capture observed behavior, not
 only configuration intent.
 
 ## Current Baseline Evidence
+
+### Credential-regression closeout at 6c4a2d5, 2026-09-29
+
+- Real encrypted backend injection isolates App/CLI/provenance fixtures from
+  native owner stores. Focused: 61 pass/0 fail, red-team: 38 pass/0 fail.
+- Full suite: 579 pass, 12 skip, 0 fail, 2156 expectations, 591 tests/35 files,
+  8.89 s; combined typecheck/test gate exit 0, wall 10.02 s on macOS/Bun 1.4.2.
+- Actual CLI seal/copy/separate-key recovery/rotate/full-value readback, old-key
+  rejection and list/remove passed on random synthesized owned data; native
+  process calls 0. Values and recovery codes were not printed.
+- Useful live-model file/restart acceptance remains open. The previous native
+  Keychain value has not been restored; no verified original backup exists.
+- Repository presentation at f7cb009 was approved and locally browser-rendered;
+  that does not establish runtime acceptance or a GitHub render.
 
 ### Current revalidation at main e596112, 2026-09-29
 

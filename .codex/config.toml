@@ -1,0 +1,6 @@
+# Project-only overrides; keep global plugins available to other projects.
+[plugins."superpowers-architecture@superpowers-architecture"]
+enabled = false
+
+[plugins."superpowers@superpowers-dev"]
+enabled = false

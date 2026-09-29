@@ -2,11 +2,10 @@
 
 ## Outcome Order
 
-This is the proposed full destination, pending Foundation agreement. Each
-outcome needs its own compatible Approved design/plan and complete live
-acceptance before completion. Existing source is preserved; old ignored Ready
-bindings and commit titles are historical evidence only. No code is authorized
-by this Draft roadmap. Dependencies below are acceptance prerequisites.
+This is the complete user-authorized destination. Implement directly and close
+outcomes only with full live acceptance. Superpowers specifications, plans and
+receipts are historical records and do not gate development. Dependencies below
+are product/verification prerequisites, not documentation ceremonies.
 
 ### OUT-001: Reproducible baseline and truthful release status
 
@@ -14,11 +13,9 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
 **Decision Prerequisites:** DEC-0008, DEC-0009
 **Dependencies:** none
-**Readiness:** Ready for Brainstorming
+**Readiness:** Ready for implementation
 **State:** Proposed
-**Completion Note:** Reopened on main e596112: typecheck passes after frozen install, but 2 secret tests fail and access the host Keychain. Repair isolation before another full run; preserve theft/recovery invariants. The original complete outcome and accepted artifacts remain historical.
-**Brainstorming Prompt:** Design only OUT-001 baseline regression repair from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md` at its exact Approved Foundation revision. Replace the old execution selection with distinct reviewed successors; preserve all active safety requirements and user data.
-**Execution Binding:** `docs/superpowers/progress/OUT-001.md` is the ignored current-selection owner. Before Planning it must bind the exact accepted Foundation, Design Spec, and Application Receipt; before implementation it must also bind the compatible exact accepted Implementation Plan. Missing, stale, or ambiguous bindings block progression.
+**Completion Note:** Credential regression repaired at 6c4a2d5: 579 pass, 12 skip, 0 fail; real encrypted CLI recovery/rotation passes with zero native-store calls. Full OUT-001 remains open for useful real-model task/restart acceptance. Preserve original baseline/prepared-plan contracts.
 
 ### OUT-002: Durable session and run engine
 
@@ -29,8 +26,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Implementing
 **Completion Note:** Main includes Phase A plus schema-v2 usage/pricing source (227fa56). Current live provider/tool journeys fail, pricing has hardcoded fallbacks, and live budget/recovery acceptance is outstanding. Do not treat missing source as the blocker or this integration as completed acceptance.
-**Brainstorming Prompt:** Design only OUT-002 live provider/tool/budget acceptance and in-scope repairs from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md` at its exact Approved Foundation revision; preserve state/provenance and replace historical bindings through distinct successors.
-**Execution Binding:** `docs/superpowers/progress/OUT-002.md` is the ignored current-selection owner. It must bind exact policy-accepted Foundation, Design Spec, receipt, and compatible Implementation Plan identities before implementation; missing or stale bindings block progression.
 
 ### OUT-003: Content provenance and replay-safe approvals
 
@@ -41,7 +36,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** Source at aeef0aa exists; current live replay/target/provenance acceptance remains outstanding.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-003 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-004: Maintained MCP protocol adapter
 
@@ -52,7 +46,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** Official SDK 1.31.0 is pinned in packages/mcp/package.json and frozen install succeeds. Live interoperable peers and protocol acceptance remain outstanding.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-004 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-005: Capability supply chain and execution containment
 
@@ -63,7 +56,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** Main includes artifact/broker/skill source; 12 platform/capability tests skip on this macOS host. Skips do not establish containment.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-005 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-006: Outcome-verified learning and segmented calibration
 
@@ -74,7 +66,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** ff8c2c9 adds verified-learning source; current real-weight learning/activation acceptance is outstanding.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-006 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-007: Runtime-integrated distillation engine
 
@@ -85,7 +76,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** bccd5d9 adds integrated compilation source; fresh real-model matched-task promotion/demotion acceptance is outstanding.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-007 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-008: Provenance-aware memory engine
 
@@ -96,7 +86,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** a7d4b02 adds memory source. Live isolation/lifecycle acceptance and the requested vector/file-backed contract remain outstanding.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-008 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-009: Tamper-evident audit and encrypted secret fallback
 
@@ -107,7 +96,6 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Readiness:** Blocked
 **State:** Proposed
 **Current Evidence:** e596112 adds encrypted fallback/audit source. Two macOS secret tests fail; live key rotation/recovery and protected-anchor acceptance remain outstanding.
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-009 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-010: Cross-platform core release gate
 
@@ -117,16 +105,12 @@ by this Draft roadmap. Dependencies below are acceptance prerequisites.
 **Dependencies:** OUT-002, OUT-003, OUT-004, OUT-005, OUT-006, OUT-007, OUT-008, OUT-009
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-010 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
 
 ## Remaining Full-Goal Outcomes
 
-For each outcome below, the canonical Brainstorming entry is: design only its
-named OUT identity from the physical manifest
-`/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`
-at its exact Approved Foundation revision. All are Proposed and Blocked until
-their dependencies have current acceptance; DEC-0015 is their direction
-prerequisite. This table is outcome planning, not an implementation plan.
+Implement the outcomes below in dependency order; their prerequisites need
+current acceptance. DEC-0015 preserves the full destination. This table records
+product outcomes; it does not require Superpowers phase entry or artifact binding.
 
 | Outcome | Observable intent | Requirements | Dependencies |
 | --- | --- | --- | --- |

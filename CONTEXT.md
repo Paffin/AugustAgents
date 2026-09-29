@@ -14,10 +14,9 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-Reconcile the complete user goal and current `main` before further implementation.
-Source at `e596112` includes changes labelled OUT-002 through OUT-009, but those
-labels and the older OUT-002 binding do not establish current acceptance.
-The proposed Foundation awaits document agreement.
+Repair the live-provider/useful-task baseline. Credential fixtures are isolated
+and the full suite passes at 6c4a2d5; repository presentation is integrated at
+f7cb009. The complete goal remains governed by the Foundation and 28-outcome roadmap.
 
 ## Active Risks
 
@@ -25,8 +24,9 @@ The proposed Foundation awaits document agreement.
   and recovery evidence remain unverified.
 - Source for budgets, learning, distillation, and memory exists; complete live
   acceptance is outstanding. Real-model file reading failed in the current UI.
-- Current secret tests choose the real macOS Keychain; isolate them before
-  another full test run. Provider pricing and local dates contain fixed values.
+- Credential tests are isolated; production Keychain namespace/plaintext fallback
+  remain risks. Provider pricing/dates still contain fixed values; failed model
+  responses and decision calls need complete accounting and budget propagation.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit

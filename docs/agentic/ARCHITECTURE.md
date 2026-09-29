@@ -17,8 +17,8 @@
 
 ## Constraints
 
-- Preserve current packages and public interfaces unless a policy-accepted Ready
-  or preserved Approved bounded successor authorizes change.
+- Change package/public interfaces only when needed for the authorized goal;
+  inspect callers and verify retained behavior with each coherent change.
 - Runtime policy, provenance, and durable state must not depend on model
   obedience.
 - Official protocol SDKs stay behind adapters and cannot leak transport types

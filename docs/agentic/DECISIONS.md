@@ -4,7 +4,7 @@
 
 | Area | Current decision | Current-truth owner | Supersedes |
 | --- | --- | --- | --- |
-| Workflow approval | DEC-0014 | root `AGENTS.md` / Workflow Policy | DEC-0011 |
+| Development workflow | DEC-0017 | root `AGENTS.md` / Workflow | DEC-0016 |
 | Complete destination | DEC-0015 | `PROJECT-BLUEPRINT.md` / Goals | none |
 | Phase continuity | DEC-0002 | root `AGENTS.md` / Phase Mode | none |
 | Change strategy | DEC-0003 | `ARCHITECTURE.md` / Constraints | none |
@@ -199,3 +199,27 @@
 **Blueprint Requirements:** all
 **Roadmap Outcomes:** OUT-001 through OUT-028
 **Supersedes:** none
+
+### DEC-0016: Blanket in-scope change authority and direct development
+
+**Area:** Workflow approval
+**Decision:** Continue under Autonomous v2: internally reviewed Ready revisions authorize in-scope work, preserving genuine Approved history and all safety/external boundaries.
+**Rationale:** The latest user grants agreement to all changes and explicitly requests direct development without over-engineering; repeated document stops no longer apply.
+**Alternatives:** Keep requesting every spec/plan approval; falsely mark future artifacts human Approved. Both misrepresent the latest authority.
+**Evidence:** User message “Я согласовываю все правки. Но не оверинженерь и занимайся непосредственно разработкой”, 2026-09-29.
+**Current Truth:** root `AGENTS.md` / Workflow Policy
+**Blueprint Requirements:** all
+**Roadmap Outcomes:** OUT-001 through OUT-028
+**Supersedes:** DEC-0014
+
+### DEC-0017: Disable Superpowers for this project
+
+**Area:** Development workflow
+**Decision:** Disable both Superpowers plugins through project configuration and remove their development gates. Implement, verify useful behavior and commit directly.
+**Rationale:** The user explicitly requested “выключи superpower для этого проекта”.
+**Alternatives:** Disable the global installation for all projects; retain project phase gates. Neither matches the scoped request.
+**Evidence:** User instruction, 2026-09-29; project .codex/config.toml sets both plugin enabled values false.
+**Current Truth:** root `AGENTS.md` / Workflow and `.codex/config.toml`
+**Blueprint Requirements:** all preserved
+**Roadmap Outcomes:** OUT-001 through OUT-028 preserved
+**Supersedes:** DEC-0016

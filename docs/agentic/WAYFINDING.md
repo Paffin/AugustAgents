@@ -1,12 +1,12 @@
-# AugustAgents Wayfinding
+# AugustAgents project navigation
 
-**Artifact Type:** Agentic Foundation
-**Status:** Approved
-**Revision:** sha256:05a758f38ff2245b2a02f7f6558c8fe4b2853e9d0336126d8cf0091592a3a369
-**Approved Revision:** sha256:05a758f38ff2245b2a02f7f6558c8fe4b2853e9d0336126d8cf0091592a3a369
-**Approved At:** 2026-09-29T18:17:44.747Z
 
-## Foundation Files
+**Workflow:** Direct development; Superpowers disabled by the user on 2026-09-29.
+
+Historical lifecycle revisions and receipts remain in Git/ignored local records.
+They are not active approval, planning or implementation prerequisites.
+
+## Document owners
 
 - `AGENTS.md`
 - `CONTEXT.md`
@@ -35,19 +35,17 @@ current runtime evidence, and outstanding acceptance for every outcome.
   behavior.
 - Reset authority, external actions, and publication permissions are explicit.
 - The first outcome is bounded and has no unresolved product decision.
-- Workflow Policy Version 2, Approval Policy, and Phase Mode are durably owned
-  by root `AGENTS.md` and are validated independently.
+- Root `AGENTS.md` owns direct development and authority boundaries.
 - Baseline failures and unavailable checks are recorded as failures or unknown,
   never as passes.
 
 ## Frontier
 
-- Agree this documentation revision under the latest user instruction.
-- Design the bounded OUT-001 regression repair: prevent host credential writes
-  by tests, restore the green baseline, and retain meaningful attack coverage.
-- Then repair live provider/tool journeys before accepting OUT-002 and later
-  source integrations. Existing ignored bindings name another branch and Ready
-  artifacts; they are historical, not current execution authority.
+- Continue direct in-scope development; Superpowers is disabled for this project.
+- Complete the remaining OUT-001 live-provider/task acceptance after the verified
+  credential regression repair; retain the complete roadmap destination.
+- Repair live provider/tool journeys, then continue remaining source integration
+  and product acceptance in roadmap order.
 
 ## Fog
 
@@ -69,7 +67,7 @@ current runtime evidence, and outstanding acceptance for every outcome.
 
 ## Decision Pointers
 
-- Workflow and phase policy: [DEC-0014](DECISIONS.md#dec-0014-renewed-user-document-agreement), [DEC-0002](DECISIONS.md#dec-0002-same-session-phase-mode). Superseded history remains at DEC-0001 and DEC-0011.
+- Workflow and phase policy: [DEC-0017](DECISIONS.md#dec-0017-disable-superpowers-for-this-project), [DEC-0002](DECISIONS.md#dec-0002-same-session-phase-mode). Superseded history remains at DEC-0001 and DEC-0011.
 - Full destination: [DEC-0015](DECISIONS.md#dec-0015-complete-laya-platform-goal).
 - Incremental architecture strategy: [DEC-0003](DECISIONS.md#dec-0003-preserve-and-evolve-the-current-codebase).
 - Learning truth and provenance: [DEC-0004](DECISIONS.md#dec-0004-verified-outcome-is-the-learning-label), [DEC-0005](DECISIONS.md#dec-0005-provenance-belongs-to-content-parts).

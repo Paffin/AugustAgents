@@ -59,8 +59,8 @@ primitives but lacks durable state and outcome-grounded learning.
 
 ## Release Boundaries
 
-- Foundation gate: exact Foundation Approved under the latest Review-gated policy.
-- Outcome gate: exact Design Spec and compatible Plan Approved under that policy.
+- Development: direct implementation and verification under the user's in-scope
+  authority; Superpowers specifications, plans and lifecycle receipts are not gates.
 - Prototype gate: no README or release claim may say a capability is delivered
   without current runtime evidence.
 - Core gate: OUT-010 closes core platform, recovery and security evidence.
@@ -156,7 +156,7 @@ primitives but lacks durable state and outcome-grounded learning.
 
 Each requirement below is proposed and pending user agreement. Project ownership
 and complete live acceptance are explicit; detailed implementations need bounded
-Approved specs/plans. None is delivered solely by this document.
+implementation and evidence. None is delivered solely by this document.
 
 | Identity | Required behavior | Live acceptance | Owner |
 | --- | --- | --- | --- |
