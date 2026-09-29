@@ -1,14 +1,13 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   CLIENT_INFO,
   McpError,
-  PROTOCOL_VERSION,
-  formatCallResult,
-  listToolsPaged,
+  SdkSession,
+  describeFailure,
+  requireSupportedVersion,
   resolveConnectOptions,
-  type McpCallResult,
   type McpConnectOptions,
-  type McpSession,
-  type McpTool,
 } from "./client.ts";
 
 export interface McpHttpSpec {
@@ -22,56 +21,44 @@ function isLocal(url: URL): boolean {
   return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
 }
 
-async function readLimited(response: Response, maxBytes: number, id: string): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const chunks: Uint8Array[] = [];
+/** The body of a response, ending in an error once it would exceed `maxBytes`. */
+function limitBody(body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> {
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new McpError(`${id}: message too large`);
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-/** Messages out of a text/event-stream body: every `data:` block that parses as JSON. */
-export function parseSse(text: string): unknown[] {
-  const out: unknown[] = [];
-  for (const block of text.split(/\r?\n\r?\n/)) {
-    const data = block
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith("data:"))
-      .map((l) => l.slice(5).replace(/^ /, ""))
-      .join("\n");
-    if (!data) continue;
-    try {
-      out.push(JSON.parse(data));
-    } catch {
-      // skip keep-alives and junk
-    }
-  }
-  return out;
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        total += chunk.byteLength;
+        if (total > maxBytes) controller.error(new Error("message too large"));
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
 }
 
 /**
- * MCP over streamable HTTP. Each request is a POST; the reply is JSON or a
- * short event stream. Only https (or localhost) is allowed, since headers
- * carry credentials.
+ * The only network door the SDK transport gets. It never follows redirects (they could carry the
+ * credentials elsewhere: set by the caller), reads no more than `maxBytes` of any reply, and does not
+ * open the server-to-client event stream at all: August answers no server requests, so a server
+ * has no reason to push anything, and the spec lets a server answer that GET with 405.
  */
-export class McpHttpConnection implements McpSession {
-  private sessionId: string | undefined;
-  private nextId = 1;
-  private closed = false;
-  private readonly options: Required<McpConnectOptions>;
+export function guardedFetch(fetchFn: typeof fetch, maxBytes: number): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? "GET").toUpperCase() === "GET") return new Response(null, { status: 405 });
+    const response = await fetchFn(input, init);
+    if (!response.body) return response;
+    return new Response(limitBody(response.body, maxBytes), { status: response.status, statusText: response.statusText, headers: response.headers });
+  }) as typeof fetch;
+}
 
-  private constructor(private readonly spec: McpHttpSpec, options: McpConnectOptions, private readonly fetchFn: typeof fetch) {
-    this.options = resolveConnectOptions(options);
+/**
+ * MCP over streamable HTTP through the official SDK transport. Only https (or localhost) is
+ * allowed, since headers carry credentials.
+ */
+export class McpHttpConnection extends SdkSession {
+  private expired = false;
+
+  private constructor(private readonly spec: McpHttpSpec, client: Client, options: Required<McpConnectOptions>, private readonly transport: StreamableHTTPClientTransport) {
+    super(spec.id, client, options);
   }
 
   static async connect(spec: McpHttpSpec, options: McpConnectOptions = {}, fetchFn: typeof fetch = fetch): Promise<McpHttpConnection> {
@@ -85,89 +72,41 @@ export class McpHttpConnection implements McpSession {
     if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocal(url))) {
       throw new McpError(`${spec.id}: remote MCP servers must use https`);
     }
-    const conn = new McpHttpConnection(spec, options, fetchFn);
-    await conn.request("initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: CLIENT_INFO });
-    await conn.post({ jsonrpc: "2.0", method: "notifications/initialized" });
+    const resolved = resolveConnectOptions(options);
+    const transport = new StreamableHTTPClientTransport(url, {
+      fetch: guardedFetch(fetchFn, resolved.maxMessageBytes),
+      requestInit: { headers: { ...spec.headers }, redirect: "error" },
+    });
+    const client = new Client(CLIENT_INFO, { capabilities: {} });
+    const conn = new McpHttpConnection(spec, client, resolved, transport);
+    try {
+      await client.connect(transport, { timeout: resolved.requestTimeoutMs });
+      requireSupportedVersion(spec.id, transport.protocolVersion);
+    } catch (error) {
+      conn.close();
+      throw error instanceof McpError && /older than/.test(error.message) ? error : describeFailure(spec.id, "initialize", error);
+    }
     return conn;
   }
 
-  get id(): string {
-    return this.spec.id;
-  }
-
   get alive(): boolean {
-    return !this.closed;
+    return !this.closed && !this.expired;
   }
 
-  listTools(): Promise<McpTool[]> {
-    return listToolsPaged(this.spec.id, (m, p) => this.request(m, p), this.options.maxToolPages);
-  }
-
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpCallResult> {
-    return formatCallResult(await this.request("tools/call", { name, arguments: args }), this.options.maxResultChars);
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    if (this.sessionId) {
-      void this.fetchFn(this.spec.url, { method: "DELETE", headers: this.headers() }).catch(() => undefined);
-    }
-  }
-
-  private headers(): Record<string, string> {
-    const h: Record<string, string> = {
-      ...this.spec.headers,
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": PROTOCOL_VERSION,
-    };
-    if (this.sessionId) h["mcp-session-id"] = this.sessionId;
-    return h;
-  }
-
-  private async post(message: Record<string, unknown>): Promise<Response> {
-    if (this.closed) throw new McpError(`${this.spec.id}: connection closed`);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.spec.url, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(message),
-        redirect: "error", // a redirect could carry our credentials elsewhere
-        signal: AbortSignal.timeout(this.options.requestTimeoutMs),
-      });
-    } catch (error) {
-      const name = (error as Error).name;
-      throw new McpError(`${this.spec.id}: ${name === "TimeoutError" ? `${String(message.method)} timed out` : "request failed"}`);
-    }
-    if (response.status === 404 && this.sessionId) {
-      this.closed = true;
-      throw new McpError(`${this.spec.id}: session expired`);
-    }
-    if (!response.ok) throw new McpError(`${this.spec.id}: HTTP ${response.status}`);
-    const sid = response.headers.get("mcp-session-id");
-    if (sid && /^[\x21-\x7e]{1,256}$/.test(sid)) this.sessionId = sid;
-    return response;
-  }
-
-  private async request(method: string, params: unknown): Promise<unknown> {
-    const id = this.nextId++;
-    const response = await this.post({ jsonrpc: "2.0", id, method, params });
-    const text = await readLimited(response, this.options.maxMessageBytes, this.spec.id);
-    const type = response.headers.get("content-type") ?? "";
-    const messages = type.includes("text/event-stream") ? parseSse(text) : [safeJson(text)];
-    const reply = messages.find((m) => (m as { id?: unknown })?.id === id) as { result?: unknown; error?: { message?: string } } | undefined;
-    if (!reply) throw new McpError(`${this.spec.id}: no reply to ${method}`);
-    if (reply.error) throw new McpError(`${this.spec.id}: ${reply.error.message ?? "request failed"}`);
-    return reply.result ?? {};
-  }
-}
-
-function safeJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
+  protected exitCode(): undefined {
     return undefined;
+  }
+
+  protected override fail(method: string, error: unknown): McpError {
+    if (error instanceof StreamableHTTPError && error.code === 404 && this.transport.sessionId) {
+      this.expired = true;
+      return new McpError(`${this.spec.id}: session expired`);
+    }
+    return super.fail(method, error);
+  }
+
+  protected shutdown(): void {
+    // Ending the session politely is best effort; nothing waits for it.
+    void this.transport.terminateSession().catch(() => undefined).finally(() => void this.client.close().catch(() => undefined));
   }
 }

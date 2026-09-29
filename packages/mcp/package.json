@@ -6,7 +6,11 @@
   "dependencies": {
     "@august/agent": "workspace:*",
     "@august/capabilities": "workspace:*",
-    "@august/policy": "workspace:*"
+    "@august/policy": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "zod": "4.6.5"
   },
-  "exports": { ".": "./src/index.ts" }
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }

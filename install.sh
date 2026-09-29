@@ -7,8 +7,9 @@
 # What it does, and nothing else:
 #   1. checks for Bun (offers to install it from bun.sh if missing)
 #   2. puts August in ~/.august/app (git clone, or a tarball when git is absent)
-#   3. adds the "august" command to ~/.local/bin
-#   4. runs "august setup" (three questions) when a terminal is attached
+#   3. installs its dependencies exactly as pinned in bun.lock (bun install --frozen-lockfile --production)
+#   4. adds the "august" command to ~/.local/bin
+#   5. runs "august setup" (three questions) when a terminal is attached
 #
 # Settings: AUGUST_REF (branch or tag, default main), AUGUST_SOURCE (local folder to copy instead of downloading),
 #           AUGUST_HOME (default ~/.august), AUGUST_BIN (default ~/.local/bin), AUGUST_NO_SETUP=1.
@@ -83,7 +84,11 @@ else
   rm -rf "$tmp"
 fi
 
-# 3. The command
+# 3. Dependencies, exactly as pinned in the lockfile. Nothing is resolved or upgraded here.
+say "Installing dependencies"
+(cd "$APP" && bun install --frozen-lockfile --production >/dev/null) || die "could not install dependencies (check your network or proxy, then run this again)"
+
+# 4. The command
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/august" <<LAUNCHER
 #!/bin/sh
@@ -98,7 +103,7 @@ esac
 say "August is installed."
 [ "$on_path" = 1 ] || printf 'Add this to your shell profile: export PATH="%s:$PATH"\n' "$BIN_DIR"
 
-# 4. Setup
+# 5. Setup
 if [ "${AUGUST_NO_SETUP:-0}" != 1 ] && tty_available; then
   "$BIN_DIR/august" setup </dev/tty
 else
