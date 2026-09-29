@@ -381,7 +381,8 @@ describe("mcp servers from the config", () => {
 
   test("starts servers, reports failures, and one failure does not stop the rest", async () => {
     const home = tmp();
-    const cfg = parseConfig(withMcp(home, [server(), server({ id: "broken", command: "/no/such/binary" }), server({ id: "needs", envFrom: ["MISSING_KEY"] })]));
+    // Owner-configured servers (trust "known") may run unsandboxed on a machine with no sandbox; community ones may not (see containment.test.ts).
+    const cfg = parseConfig(withMcp(home, [server({ trust: "known" }), server({ id: "broken", trust: "known", command: "/no/such/binary" }), server({ id: "needs", trust: "known", envFrom: ["MISSING_KEY"] })]));
     const app = createApp(cfg, { sandboxKind: "none", env: { OPENAI_API_KEY: "k", PATH: process.env.PATH }, llm: scriptedLlm({ tool: "none", args: {}, reply: "" }) });
     try {
       const r = await app.startServers();
@@ -401,7 +402,8 @@ describe("mcp servers from the config", () => {
     await main(["init"], io);
     const path = defaultConfigPath(home);
     const cfg = loadConfig(path);
-    writeConfig(path, parseConfig({ ...cfg, mcp: [server()] }));
+    // The owner explicitly runs this community server without a sandbox: the only way to do so.
+    writeConfig(path, parseConfig({ ...cfg, mcp: [server({ sandbox: "off" })] }));
     io.env = { ...io.env, PATH: process.env.PATH };
     await main(["chat"], io);
     expect(out).toContain("Tools from: fake (not sandboxed)");

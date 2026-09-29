@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
 import { DecisionCascade, HeuristicEngine, expectedCalibrationError, fitTemperature, samplesFromLog, type DecisionRecord } from "@august/brain";
@@ -7,8 +7,8 @@ import { LaneQueue, makeSessionKey } from "@august/core";
 import { startGateway, type RunningGateway } from "@august/gateway";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
-import { ConfigError, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
-import { SECRET_NAME, openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
+import { ConfigError, EGRESS_ENTRY, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
+import { SECRET_NAME, openSecretStore, resolveSecret, scopedSecretName, type SecretStore } from "./secrets.ts";
 
 export interface CliIo {
   print(line: string): void;
@@ -38,8 +38,9 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august doctor                check that everything is in place
 
   august secret set NAME       store a secret (API keys, tokens)
+  august secret set --for TOOL NAME   a secret only that installed tool can receive
   august secret list | rm NAME
-  august mcp list | rm ID      configured MCP servers
+  august mcp list | rm ID | allow ID HOST... | deny ID      configured MCP servers
   august skills                installed skills
   august laya status | activate [--force]
   august calibrate             fit Laya's confidence on your logged decisions
@@ -303,7 +304,15 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
 
 async function secret(args: readonly string[], io: CliIo): Promise<CliResult> {
   const store = storeFor(io);
-  const [action, name] = args;
+  // `--for <capability>` keeps a secret in that capability's own namespace: only it can ever receive it.
+  const forIndex = args.indexOf("--for");
+  const capability = forIndex >= 0 ? args[forIndex + 1] : undefined;
+  const rest = forIndex >= 0 ? [...args.slice(0, forIndex), ...args.slice(forIndex + 2)] : [...args];
+  const [action, name] = rest;
+  if (forIndex >= 0 && (!capability || !/^[A-Za-z0-9_-]+$/.test(capability))) {
+    io.print("Usage: august secret set|rm --for CAPABILITY NAME");
+    return { code: 1 };
+  }
   if (action === "list") {
     const names = store.list();
     io.print(names.length ? names.join("\n") : "(no secrets)");
@@ -311,29 +320,35 @@ async function secret(args: readonly string[], io: CliIo): Promise<CliResult> {
     return { code: 0 };
   }
   if ((action === "set" || action === "rm") && name && SECRET_NAME.test(name)) {
+    const key = capability ? scopedSecretName(capability, name) : name;
+    const label = capability ? `${name} for ${capability}` : name;
     if (action === "rm") {
-      io.print(store.delete(name) ? `Removed ${name}.` : `${name} was not set.`);
+      io.print(store.delete(key) ? `Removed ${label}.` : `${label} was not set.`);
       return { code: 0 };
     }
-    const value = (await io.ask(`${name}: `))?.trim();
+    const value = (await io.ask(`${label}: `))?.trim();
     if (!value) {
       io.print("Nothing saved.");
       return { code: 1 };
     }
-    store.set(name, value);
-    io.print(`Saved ${name} (${store.kind}).`);
+    store.set(key, value);
+    io.print(`Saved ${label} (${store.kind}).`);
     return { code: 0 };
   }
-  io.print("Usage: august secret set NAME | list | rm NAME   (names look like OPENAI_API_KEY)");
+  io.print("Usage: august secret set NAME | list | rm NAME   (names look like OPENAI_API_KEY)\n       august secret set|rm --for CAPABILITY NAME   (a secret only that capability can receive)");
   return { code: 1 };
 }
 
 function mcp(configPath: string, args: readonly string[], io: CliIo): CliResult {
   const config = loadConfig(configPath);
-  const [action, id] = args;
+  const [action, id, ...hosts] = args;
   if (action === undefined || action === "list") {
     if (!config.mcp.length) io.print('No MCP servers. Ask the agent to find one, e.g. "find a tool for GitHub".');
-    for (const s of config.mcp) io.print(`${s.id}  ${s.url ?? [s.command, ...(s.args ?? [])].join(" ")}  (trust: ${s.trust ?? "community"})`);
+    for (const s of config.mcp) {
+      const what = s.url ?? (s.artifact ? `${s.artifact.registry}:${s.artifact.name}@${s.artifact.version} (verified, ${s.artifact.signature === "none" ? "unsigned" : "registry-signed"})` : [s.command, ...(s.args ?? [])].join(" "));
+      const reach = s.egress?.length ? `egress: ${s.egress.join(", ")}` : s.network === true || (s.network === undefined && s.trust && s.trust !== "community") ? "network: open" : "network: none";
+      io.print(`${s.id}  ${what}  (trust: ${s.trust ?? "community"}; ${reach})`);
+    }
     return { code: 0 };
   }
   if (action === "rm" && id) {
@@ -342,10 +357,27 @@ function mcp(configPath: string, args: readonly string[], io: CliIo): CliResult 
       return { code: 1 };
     }
     writeConfig(configPath, { ...config, mcp: config.mcp.filter((s) => s.id !== id) });
+    // An installed package goes with its entry; nothing of it stays behind to be started again.
+    rmSync(join(config.dataDir, "capabilities", id), { recursive: true, force: true });
     io.print(`Removed "${id}". It stops on the next start.`);
     return { code: 0 };
   }
-  io.print("Usage: august mcp list | rm ID");
+  if ((action === "allow" || action === "deny") && id) {
+    const server = config.mcp.find((s) => s.id === id);
+    if (!server) { io.print(`No server "${id}".`); return { code: 1 }; }
+    if (action === "deny") {
+      const { egress: _egress, ...rest } = server;
+      writeConfig(configPath, { ...config, mcp: config.mcp.map((s) => (s.id === id ? rest : s)) });
+      io.print(`"${id}" can no longer reach any host. It picks this up on the next start.`);
+      return { code: 0 };
+    }
+    if (!hosts.length || !hosts.every((h) => EGRESS_ENTRY.test(h))) { io.print("Usage: august mcp allow ID HOST...   (hosts like api.github.com, *.example.com or host:port)"); return { code: 1 }; }
+    const egress = [...new Set([...(server.egress ?? []), ...hosts.map((h) => h.toLowerCase())])];
+    writeConfig(configPath, { ...config, mcp: config.mcp.map((s) => (s.id === id ? { ...s, egress } : s)) });
+    io.print(`"${id}" may now reach: ${egress.join(", ")} (through August's egress proxy; other hosts and private addresses stay blocked). It picks this up on the next start.`);
+    return { code: 0 };
+  }
+  io.print("Usage: august mcp list | rm ID | allow ID HOST... | deny ID");
   return { code: 1 };
 }
 

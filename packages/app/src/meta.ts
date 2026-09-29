@@ -1,13 +1,18 @@
 import type { ToolExecutor, ToolResult } from "@august/agent";
 import type { CapabilityManifest, CapabilityRegistry } from "@august/capabilities";
 import {
+  ArtifactError,
   RegistryClient,
+  describeEvidence,
   fetchGithubSkill,
   loadSkills,
   planInstall,
   skillsManifest,
   writeSkill,
+  type ArtifactEvidence,
   type InstallPlan,
+  type InstalledArtifact,
+  type PackageRef,
   type Skill,
 } from "@august/discovery";
 import type { McpServerConfig } from "./config.ts";
@@ -44,7 +49,17 @@ export const metaManifest: CapabilityManifest = {
   ],
 };
 
+/** Fetches and installs the exact package an install plan names, and reports what it verified. */
+export interface ArtifactService {
+  resolve(ref: PackageRef): Promise<ArtifactEvidence>;
+  install(evidence: ArtifactEvidence, id: string): Promise<InstalledArtifact>;
+}
+
 export interface MetaExecutorOptions {
+  /** Required to install a local package. */
+  artifacts?: ArtifactService;
+  /** Whether this machine can contain a community program (a working sandbox). Checked before anything is downloaded. */
+  containment?(): { ok: true } | { ok: false; reason: string };
   registry: CapabilityRegistry;
   registryClient: RegistryClient;
   skillsDir: string;
@@ -62,6 +77,8 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}...` : s
 export class MetaExecutor implements ToolExecutor {
   private skills = new Map<string, Skill>();
   private readonly plans = new Map<string, InstallPlan>();
+  /** Registry evidence per plan, resolved once for the approval preview and reused by the install, so what is approved is what is installed. */
+  private readonly evidence = new Map<string, Promise<ArtifactEvidence>>();
   private readonly skillPreviews = new Map<string, Skill>();
 
   constructor(private readonly o: MetaExecutorOptions) {}
@@ -82,7 +99,12 @@ export class MetaExecutor implements ToolExecutor {
         const plan = this.plans.get(name);
         if (!plan) return `cannot install: "${name}" has no prepared plan; search with august.find_tools first`;
         const secrets = plan.secrets.length ? `; needs secrets: ${plan.secrets.map((s) => s.name).join(", ")}` : "";
-        return `install ${plan.registryName}@${plan.version}: ${plan.summary} (trust: community, sandboxed when possible)${secrets}`;
+        if (plan.server.package) {
+          const evidence = await this.evidenceFor(plan);
+          this.requireInstallable(plan, evidence);
+          return `install ${plan.registryName}@${plan.version}: ${describeEvidence(evidence)}. Runs sandboxed with no network until you allow hosts (august mcp allow ${plan.server.id} HOST)${secrets}`;
+        }
+        return `install ${plan.registryName}@${plan.version}: ${plan.summary} (trust: community; your secrets stay in your process)${secrets}`;
       }
       if (tool === "august.install_skill") {
         const skill = await this.previewSkill(String(args.url));
@@ -106,7 +128,7 @@ export class MetaExecutor implements ToolExecutor {
           // Take before the first await: only one concurrent caller can consume
           // the exact plan that was rendered in the approval preview.
           this.plans.delete(name);
-          return { content: await this.o.addServer(plan.server as McpServerConfig, plan) };
+          return { content: await this.o.addServer(await this.entryFor(plan), plan) };
         }
         case "august.install_skill": {
           const url = String(args.url);
@@ -127,6 +149,30 @@ export class MetaExecutor implements ToolExecutor {
       return { content: (error as Error).message, isError: true };
     }
     return this.o.fallback.call(tool, args);
+  }
+
+  private evidenceFor(plan: InstallPlan): Promise<ArtifactEvidence> {
+    if (!this.o.artifacts) throw new Error("this build cannot install packages");
+    let pending = this.evidence.get(plan.registryName);
+    if (!pending) { pending = this.o.artifacts.resolve(plan.server.package!); this.evidence.set(plan.registryName, pending); pending.catch(() => this.evidence.delete(plan.registryName)); }
+    return pending;
+  }
+
+  /** Refuses what August will not install before it downloads anything: no sandbox, or no registry signature. */
+  private requireInstallable(plan: InstallPlan, evidence: ArtifactEvidence): void {
+    const containment = this.o.containment?.();
+    if (containment && !containment.ok) throw new ArtifactError(`"${plan.registryName}" is community code and needs a sandbox: ${containment.reason}`);
+    if (evidence.signature !== "npm-registry-ecdsa") throw new ArtifactError(`"${plan.registryName}@${plan.version}" is not signed by the package registry, so August will not install it`);
+  }
+
+  /** The config entry for a plan. A package becomes an artifact pin only after the install has verified it. */
+  private async entryFor(plan: InstallPlan): Promise<McpServerConfig> {
+    const { package: pkg, ...rest } = plan.server;
+    if (!pkg) return rest as McpServerConfig;
+    const evidence = await this.evidenceFor(plan);
+    this.requireInstallable(plan, evidence);
+    const pin = await this.o.artifacts!.install(evidence, plan.server.id);
+    return { ...rest, artifact: pin } as McpServerConfig;
   }
 
   private async find(query: string): Promise<ToolResult> {

@@ -2,7 +2,19 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+/** Secrets August itself uses (model key, bot token) and secrets the owner set for their own tools. */
 export const SECRET_NAME = /^[A-Z_][A-Z0-9_]*$/;
+/**
+ * A secret that belongs to one capability: `<capability id>.<NAME>`. Ids cannot contain a dot, so the
+ * pair is unambiguous, and a capability can only ever be handed names in its own namespace.
+ */
+export const SCOPED_SECRET_NAME = /^[A-Za-z0-9_-]+\.[A-Z_][A-Z0-9_]*$/;
+
+export function scopedSecretName(capability: string, name: string): string {
+  const scoped = `${capability}.${name}`;
+  if (!SCOPED_SECRET_NAME.test(scoped)) throw new SecretError(`invalid secret "${name}" for "${capability}"`);
+  return scoped;
+}
 const SERVICE = "august";
 
 export class SecretError extends Error {
@@ -29,7 +41,7 @@ export const defaultRunner: Runner = (cmd, args, input) => {
 };
 
 function checkName(name: string): void {
-  if (!SECRET_NAME.test(name)) throw new SecretError(`secret names look like OPENAI_API_KEY (got "${name}")`);
+  if (!SECRET_NAME.test(name) && !SCOPED_SECRET_NAME.test(name)) throw new SecretError(`secret names look like OPENAI_API_KEY (got "${name}")`);
 }
 
 /**

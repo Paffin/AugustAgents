@@ -14,16 +14,17 @@ import {
   type LlmProvider,
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
-import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, type SessionKey } from "@august/core";
-import { RegistryClient, type InstallPlan } from "@august/discovery";
-import { McpHost, detectSandbox, sandboxHome, sandboxSpec, type SandboxKind } from "@august/mcp";
+import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, makeSessionKey, type SessionKey } from "@august/core";
+import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
+import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
 import { PolicyEngine } from "@august/policy";
 import { BuiltinExecutor, builtinManifest, clockManifest } from "./builtins.ts";
 import { ConfigError, loadConfig, resolveLlmPricing, writeConfig, type AugustConfig, type McpServerConfig } from "./config.ts";
 import { JsonlDecisionLog } from "./decision-log.ts";
-import { MetaExecutor, metaManifest } from "./meta.ts";
+import { MetaExecutor, metaManifest, type ArtifactService } from "./meta.ts";
 import { targetsFor, type TargetRoots } from "./targets.ts";
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
+import { SecretBroker, type DeliveryContext, type EgressMode } from "./broker.ts";
 
 export interface AppDeps {
   env: Record<string, string | undefined>;
@@ -43,7 +44,7 @@ export interface AppDeps {
 
 export interface StartReport {
   started: Array<{ id: string; isolation: string }>;
-  failed: Array<{ id: string; error: string }>;
+  failed: Array<{ id: string; error: string; /** Server stderr, for the owner only. */ diagnostics?: string }>;
 }
 
 export interface HandleOptions { idempotencyKey?: string; budget?: RunBudgetRequest }
@@ -143,40 +144,93 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const sandbox = deps.sandboxKind ?? detectSandbox();
   const registryClient = new RegistryClient(config.registryUrl, deps.fetch);
   const configured = [...config.mcp];
-  const checkpointSecretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret].filter((name): name is string => Boolean(name)));
-  const registerCheckpointSecrets = (entry: McpServerConfig) => { for (const name of [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})]) checkpointSecretNames.add(name); };
+  const broker = new SecretBroker(secrets, deps.env);
+  // Everything that must never appear in a checkpoint: August's own keys by name, and each capability's own secrets.
+  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret].filter((name): name is string => Boolean(name)));
+  const capabilitySecrets = new Map<string, { trust: DeliveryContext["trust"]; names: Set<string> }>();
+  const registerCheckpointSecrets = (entry: McpServerConfig) => {
+    const names = [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})];
+    capabilitySecrets.set(entry.id, { trust: entry.trust ?? "community", names: new Set(names) });
+  };
+  const secretValues = (): string[] => [
+    ...[...ownSecretNames].map((name) => resolveSecret(name, secrets, deps.env)),
+    ...[...capabilitySecrets].flatMap(([capability, c]) => broker.redactionValues({ capability, trust: c.trust, artifactVerified: true, sandboxed: true, egress: "none" }, [...c.names])),
+  ].filter((v): v is string => typeof v === "string" && v.length > 0);
   configured.forEach(registerCheckpointSecrets);
+  const proxies: EgressProxy[] = [];
+  const egressSession = makeSessionKey({ workspace: config.workspace, channel: "system", user: "egress" });
 
   let mcp!: McpHost;
-  const startServer = async (entry: McpServerConfig): Promise<string> => {
+  const capabilityDir = (id: string) => join(config.dataDir, "capabilities", id);
+  const npmRegistry = config.npmRegistryUrl ?? "https://registry.npmjs.org";
+  const artifacts: ArtifactService = {
+    resolve: (ref) => resolveNpm(ref, { fetch: deps.fetch, registryUrl: npmRegistry }),
+    install: (evidence, id) => installNpm(evidence, capabilityDir(id), { bun: process.execPath, registryUrl: config.npmRegistryUrl, cacheDir: join(config.dataDir, "capabilities", ".package-cache"), nodeAvailable: Boolean(Bun.which("node")) }),
+  };
+
+  /** The sandbox and network posture of a server. A community server is always sandboxed and gets no network unless it lists hosts. */
+  const postureOf = (entry: McpServerConfig) => {
     const trust = entry.trust ?? "community";
+    const community = trust === "community";
+    // Only the owner, naming this server, can switch its sandbox off; a global "off" or "auto" never weakens a community server.
+    const mode = entry.sandbox === "off" ? "off" : community ? "required" : entry.sandbox ?? config.sandbox;
+    const network: "none" | "open" | "allowlist" = entry.egress?.length ? "allowlist" : (entry.network ?? !community) ? "open" : "none";
+    return { trust, community, mode, network } as const;
+  };
+  const deliveryFor = (entry: McpServerConfig, sandboxed: boolean, egress: EgressMode): DeliveryContext => ({ capability: entry.id, trust: entry.trust ?? "community", artifactVerified: Boolean(entry.artifact), sandboxed, egress });
+
+  const startServer = async (entry: McpServerConfig): Promise<string> => {
+    const { trust, mode, network } = postureOf(entry);
+    const policy = { sensitivity: entry.sensitivity, targetArgs: entry.targetArgs };
     if (entry.url) {
+      // Our own process holds the credential and sends it to exactly this https host: nothing local can read it.
+      const ctx: DeliveryContext = { capability: entry.id, trust, artifactVerified: true, sandboxed: true, egress: "allowlist" };
       const headers: Record<string, string> = {};
-      for (const [header, name] of Object.entries(entry.headersFrom ?? {})) {
-        const value = resolveSecret(name, secrets, deps.env);
-        if (value === undefined) throw new Error(`secret ${name} is not set (august secret set ${name})`);
-        headers[header] = value;
-      }
-      await mcp.add({ id: entry.id, url: entry.url, headers }, trust, { sensitivity: entry.sensitivity, targetArgs: entry.targetArgs });
+      const names = Object.values(entry.headersFrom ?? {});
+      const values = broker.deliver(ctx, names);
+      for (const [header, name] of Object.entries(entry.headersFrom ?? {})) headers[header] = values[name]!;
+      await mcp.add({ id: entry.id, url: entry.url, headers }, trust, policy);
       return "remote";
     }
-    const env: Record<string, string> = { ...entry.env };
-    for (const name of entry.envFrom ?? []) {
-      const value = resolveSecret(name, secrets, deps.env);
-      if (value === undefined) throw new Error(`${name} is not set (august secret set ${name})`);
-      env[name] = value;
+    const readOnlyPaths: string[] = [];
+    let base = { id: entry.id, command: entry.command!, args: entry.args, env: { ...entry.env } };
+    if (entry.artifact) {
+      // What runs is exactly what was approved: the installed tree is hashed again and must equal the pin.
+      const dir = capabilityDir(entry.id);
+      if (!verifyInstalled(entry.artifact, dir)) throw new Error(`"${entry.id}" changed on disk since it was installed and will not start; reinstall it`);
+      const runtime = entry.artifact.entry.runtime === "node" ? Bun.which("node") : process.execPath;
+      if (!runtime) throw new Error(`"${entry.id}" needs node, which is not installed`);
+      base = { id: entry.id, command: runtime, args: [join(dir, entry.artifact.entry.file), ...(entry.args ?? [])], env: { ...entry.env } };
+      // The package and the runtime that runs it stay readable even when they live under the hidden home.
+      readOnlyPaths.push(dir, runtime);
     }
-    const wrapped = sandboxSpec(
-      { id: entry.id, command: entry.command!, args: entry.args, env },
-      {
-        mode: entry.sandbox ?? config.sandbox,
-        network: entry.network ?? true,
-        home: sandboxHome(config.dataDir, entry.id),
-        realHome: home,
-        kind: sandbox,
-      },
-    );
-    await mcp.add(wrapped.spec, trust, { sensitivity: entry.sensitivity, targetArgs: entry.targetArgs });
+    let access: NetworkAccess = network === "open" ? "open" : "none";
+    if (network === "allowlist") {
+      const rules = parseEgress(entry.egress!);
+      const onDecision = (decision: unknown) => journal.append({ kind: "egress.decision", session: egressSession, data: decision });
+      if (sandbox === "bwrap") {
+        const socket = join(config.dataDir, "sandbox", `${entry.id}.egress.sock`);
+        const bridgeScript = join(config.dataDir, "sandbox", `${entry.id}.bridge.js`);
+        mkdirSync(dirname(socket), { recursive: true, mode: 0o700 });
+        writeFileSync(bridgeScript, EGRESS_BRIDGE_JS, { mode: 0o600 });
+        const proxy = await EgressProxy.listenUnix(socket, { capability: entry.id, rules, onDecision });
+        proxies.push(proxy);
+        access = { kind: "unix", socket, runtime: process.execPath, bridgeScript };
+      } else if (sandbox === "sandbox-exec") {
+        const proxy = await EgressProxy.listenTcp({ capability: entry.id, rules, onDecision });
+        proxies.push(proxy);
+        access = { kind: "tcp", port: (proxy.address as { port: number }).port, token: proxy.token! };
+      } else {
+        throw new Error(`"${entry.id}" lists egress hosts, but no sandbox here can enforce them`);
+      }
+    }
+    const options = { mode, network: access, home: sandboxHome(config.dataDir, entry.id), realHome: home, kind: sandbox, readOnlyPaths } as const;
+    // First decide what the server may be handed, from the sandbox it will really get; only then read any secret.
+    const posture = sandboxSpec(base, options);
+    const names = entry.envFrom ?? [];
+    const env = { ...base.env, ...broker.deliver(deliveryFor(entry, posture.isolation !== "none", posture.egress), names) };
+    const wrapped = sandboxSpec({ ...base, env }, options);
+    await mcp.add(wrapped.spec, trust, policy);
     return wrapped.isolation;
   };
 
@@ -187,15 +241,17 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     fetch: deps.fetch,
     takenIds: () => new Set([...configured.map((s) => s.id), ...registry.list().map((c) => c.manifest.id)]),
     fallback: new BuiltinExecutor(config.root),
+    artifacts,
+    containment: () => (sandbox === "none" ? { ok: false, reason: "no working sandbox was found (on Linux install bubblewrap)" } : { ok: true }),
     addServer: async (entry: McpServerConfig, plan: InstallPlan) => {
       configured.push(entry); registerCheckpointSecrets(entry);
       if (deps.configPath) {
         const current = loadConfig(deps.configPath);
         writeConfig(deps.configPath, { ...current, mcp: [...current.mcp, entry] });
       }
-      const missing = [...plan.missing, ...plan.secrets.map((s) => s.name).filter((n) => resolveSecret(n, secrets, deps.env) === undefined)];
+      const missing = [...plan.missing, ...broker.missing(deliveryFor(entry, true, "none"), [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})])];
       if (missing.length) {
-        return `Saved "${entry.id}", but it needs ${missing.join(", ")} first. The person can run: ${missing.map((n) => `august secret set ${n}`).join("; ")}. Then restart August.`;
+        return `Saved "${entry.id}", but it needs ${missing.join(", ")} first. The person can run: ${missing.map((n) => `august secret set --for ${entry.id} ${n}`).join("; ")}. Then restart August.`;
       }
       const isolation = await startServer(entry);
       const tools = registry.get(entry.id)?.manifest.tools.map((t) => t.name) ?? [];
@@ -246,7 +302,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     }
   };
 
-  const redactCheckpoint = (text: string) => [...checkpointSecretNames].reduce((value, name) => { const secret = resolveSecret(name, secrets, deps.env); return secret ? value.replaceAll(secret, "[redacted secret]") : value; }, text);
+  const redactCheckpoint = (text: string) => secretValues().reduce((value, secret) => value.replaceAll(secret, "[redacted secret]"), text);
 
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
@@ -330,13 +386,14 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
         try {
           report.started.push({ id: entry.id, isolation: await startServer(entry) });
         } catch (error) {
-          report.failed.push({ id: entry.id, error: (error as Error).message });
+          report.failed.push({ id: entry.id, error: (error as Error).message, ...((error as { diagnostics?: string }).diagnostics ? { diagnostics: (error as { diagnostics: string }).diagnostics } : {}) });
         }
       }
       return report;
     },
     close() {
       mcp.closeAll();
+      for (const proxy of proxies) void proxy.close();
       runs.close();
       saveStats();
     },
