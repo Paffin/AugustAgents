@@ -186,7 +186,7 @@ python sidecar/laya_server.py            # http://127.0.0.1:7788
 
 **Текущий статус — прототип:** агентный цикл, политики и мандаты, MCP/skills discovery, опциональная песочница, секреты, web/Telegram, installer, Laya-sidecar, red-team набор и Phase A durable session/run runtime присутствуют в коде. Это не означает полное token/cost budget enforcement, outcome-verified learning, гарантированную containment-модель или production readiness; актуальные границы и доказательства ведутся в [Agentic Foundation](docs/agentic/WAYFINDING.md).
 
-**Локальный baseline 2026-09-29:** typecheck и 331 тест проходят, полный `bun run check` занимает 3.07 с на проверенной macOS-машине; два отдельных CLI-процесса подтвердили restart-контекст на локальном Qwen. Это локальное доказательство, не CI/кроссплатформенная сертификация.
+**Локальный baseline 2026-09-29:** typecheck и 331 тест проходят, полный `bun run check` занимает 3.04 с на проверенной macOS-машине; два отдельных CLI-процесса подтвердили restart-контекст на локальном Qwen. Это локальное доказательство, не CI/кроссплатформенная сертификация.
 
 **Следующий milestone:** завершить `OUT-002` реальным provider token usage/pricing и token/monetary budgets; только затем переходить к provenance/approval safety. Порядок зафиксирован в [Agentic Roadmap](docs/agentic/ROADMAP.md).
 

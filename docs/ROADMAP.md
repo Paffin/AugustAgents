@@ -24,7 +24,7 @@
 - [x] Red-team набор инъекций
 - [x] Durable runtime Phase A: SQLite/WAL messages/runs/checkpoints, restart context, idempotency, pause/cancel/resume/retry и fail-closed ambiguous recovery
 
-**Локальная часть Гейта 1 закрыта, сам релизный гейт ещё открыт.** На baseline 2026-09-29 (Bun 1.4.2, совместимый lockfile проверен также Bun 1.1.39) typecheck проходит, `bun test` даёт 331 pass / 0 fail, `bun run check` занимает 3.07 с, а два отдельных CLI-процесса подтвердили durable restart-контекст через локальный Qwen. `OUT-002` всё ещё требует реального token/cost accounting. До релиза также нужны чистая macOS-машина, первый подтверждённый CI run и перечисленные ниже живые platform checks. Точная evidence-запись и порядок outcomes находятся в [Agentic Foundation](agentic/WAYFINDING.md) и [Agentic Roadmap](agentic/ROADMAP.md).
+**Локальная часть Гейта 1 закрыта, сам релизный гейт ещё открыт.** На baseline 2026-09-29 (Bun 1.4.2, совместимый lockfile проверен также Bun 1.1.39) typecheck проходит, `bun test` даёт 331 pass / 0 fail, `bun run check` занимает 3.04 с, а два отдельных CLI-процесса подтвердили durable restart-контекст через локальный Qwen. `OUT-002` всё ещё требует реального token/cost accounting. До релиза также нужны чистая macOS-машина, первый подтверждённый CI run и перечисленные ниже живые platform checks. Точная evidence-запись и порядок outcomes находятся в [Agentic Foundation](agentic/WAYFINDING.md) и [Agentic Roadmap](agentic/ROADMAP.md).
 
 Что осталось проверить руками до релиза:
 

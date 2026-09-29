@@ -2,7 +2,7 @@
 
 **Artifact Type:** Agentic Foundation
 **Status:** Ready
-**Revision:** sha256:d6f1e6e7f017f8046d669fea5aac2af0a06c1a7c49b1ac4ddf92f45525cf050f
+**Revision:** sha256:0c7000314530cb7a64873ab0e146027a6b4e85cc46a86b824a266cb51f5797c9
 **Approved Revision:** none
 **Approved At:** none
 

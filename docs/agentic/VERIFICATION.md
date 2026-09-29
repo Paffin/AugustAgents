@@ -112,15 +112,15 @@ only configuration intent.
   Full inspectable local evidence is linked from ignored
   `docs/superpowers/progress/OUT-001-evidence.md`.
 - 2026-09-29, branch `codex/out-002-durable-runtime`, implementation HEAD
-  `b20afdf`, macOS, Bun `1.4.2`: `/usr/bin/time -p bun run check` exits 0 with
-  331 tests, 0 failures, 960 expectations across 17 files in 3.07 s.
+  `affc38c`, macOS, Bun `1.4.2`: `/usr/bin/time -p bun run check` exits 0 with
+  331 tests, 0 failures, 962 expectations across 17 files in 3.04 s.
 - Two separate real CLI processes shared one exact temporary HOME and the
   loaded local no-key model `unsloth/Qwen3.8-Flash-Next-GGUF`: the first stored
   `NEPTUNE-7429`; after process exit, the second answered with that exact word.
   The temp config had no `apiKeyEnv`, no secrets file existed, and runtime bytes
   contained no `sk-` or `Bearer ` marker.
 - With the app stopped and WAL at zero bytes, the exact `runtime.db` copy matched
-  SHA-256 `c3cde05f41349cc10601f964218d00001a33a00b9b8bba600e63059846d3c7e2`.
+  SHA-256 `92814d3c7a91da90dd1ce5fc45010b22a86df50b8910640f7bda375de1cd5bf9`.
   Separate read-only `DurableRuntimeStore` opens reported schema 1, 4 messages,
   and 2 runs for both primary and backup; immutable backup open created no WAL
   or shared-memory sidecars. Task-owned temp directories were moved to Trash
@@ -132,6 +132,9 @@ only configuration intent.
   `tainted-context` while a clean session retains its mandate. Repair scan
   `54865ba1-f93b-48a9-9287-64b21ef37111` covered all three repair source files
   with zero findings and complete coverage.
+- Final Codex Security diff scan `7c689f46-08ce-4d95-82ca-aa1331351432`
+  covered all six changed source files in exact range `96bdde9..affc38c` after
+  the final cancellation-race repair; coverage is complete with zero findings.
 - OUT-002 Phase A does not verify provider token/cost accounting, production
   recovery, schema migration, multi-process coordination, or release readiness.
 - No current CI run, clean-platform matrix, real Laya weights, live Linux
