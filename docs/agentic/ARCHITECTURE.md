@@ -2,16 +2,19 @@
 
 ## Technology Stack
 
-- Bun/TypeScript workspace packages for runtime, policy, capabilities, channels,
-  gateway, MCP, discovery, ladder, and app composition.
+- Bun >=1.1.39 and TypeScript workspace packages for runtime, policy,
+  capabilities, channels, gateway, MCP, discovery, ladder, and app composition.
+  Bun 1.1.39 is the first release with text `bun.lock`; current development is
+  observed on Bun 1.4.2. Sources: https://bun.sh/docs/pm/lockfile and
+  https://bun.sh/guides/install/yarnlock, verified 2026-09-29.
 - Python HTTP sidecar for Laya on loopback.
 - Local filesystem and journal persistence; current storage contracts are
   package-specific and incomplete.
 
 ## Constraints
 
-- Preserve current packages and public interfaces unless an Approved bounded
-  successor authorizes change.
+- Preserve current packages and public interfaces unless a policy-accepted Ready
+  or preserved Approved bounded successor authorizes change.
 - Runtime policy, provenance, and durable state must not depend on model
   obedience.
 - Official protocol SDKs stay behind adapters and cannot leak transport types
@@ -99,6 +102,10 @@ compatibility requires the five shared evidence items and a cleanup milestone.
 The maintained MCP SDK may support legacy peers inside the adapter when real
 consumer evidence justifies it; handwritten protocol logic is not a product
 differentiator.
+
+The build runtime floor is Bun 1.1.39 because it is the first release supporting
+the committed text lockfile contract. No consumer evidence justifies a dual
+binary/text lock compatibility path for earlier 1.1.x releases.
 
 ## Data Durability
 

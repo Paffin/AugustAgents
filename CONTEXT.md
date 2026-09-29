@@ -14,9 +14,9 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-Convert the 2026-09-29 audit of `main` at commit `aa8bf43` into ordered,
-review-gated roadmap outcomes. Restore a reproducible green baseline before
-changing runtime architecture.
+Execute the ordered audit-derived roadmap under Autonomous lifecycle review.
+Restore a reproducible green baseline in `OUT-001` before changing runtime
+architecture.
 
 ## Active Risks
 
@@ -30,8 +30,9 @@ changing runtime architecture.
 
 ## Roadmap Position
 
-Foundation creation is in review. `OUT-001` is the first implementation outcome
-after this Foundation is Approved.
+The Foundation is being reconciled to Autonomous policy. `OUT-001` is the
+selected first implementation outcome after exact internal review and Ready
+progression.
 
 ## Reading Links
 
@@ -40,4 +41,3 @@ after this Foundation is Approved.
 - Security: `docs/agentic/SECURITY.md`
 - Ordered tasks: `docs/agentic/ROADMAP.md`
 - Verification evidence: `docs/agentic/VERIFICATION.md`
-

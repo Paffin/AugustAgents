@@ -10,7 +10,7 @@
 **Dependencies:** none
 **Readiness:** Ready for Brainstorming
 **State:** Ready
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-001 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-001 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 **Execution Binding:** `docs/superpowers/progress/OUT-001.md` is the ignored current-selection owner. Before Planning it must bind the exact accepted Foundation, Design Spec, and Application Receipt; before implementation it must also bind the compatible exact accepted Implementation Plan. Missing, stale, or ambiguous bindings block progression.
 
 ### OUT-002: Durable session and run engine
@@ -21,7 +21,7 @@
 **Dependencies:** OUT-001
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-002 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-002 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-003: Content provenance and replay-safe approvals
 
@@ -31,7 +31,7 @@
 **Dependencies:** OUT-001
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-003 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-003 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-004: Maintained MCP protocol adapter
 
@@ -41,7 +41,7 @@
 **Dependencies:** OUT-001, OUT-003
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-004 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-004 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-005: Capability supply chain and execution containment
 
@@ -51,7 +51,7 @@
 **Dependencies:** OUT-003, OUT-004
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-005 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-005 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-006: Outcome-verified learning and segmented calibration
 
@@ -61,7 +61,7 @@
 **Dependencies:** OUT-002, OUT-003
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-006 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-006 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-007: Runtime-integrated distillation engine
 
@@ -71,7 +71,7 @@
 **Dependencies:** OUT-002, OUT-006
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-007 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-007 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-008: Provenance-aware memory engine
 
@@ -81,7 +81,7 @@
 **Dependencies:** OUT-002, OUT-003
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-008 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-008 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-009: Tamper-evident audit and encrypted secret fallback
 
@@ -91,7 +91,7 @@
 **Dependencies:** OUT-002, OUT-005
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-009 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-009 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
 
 ### OUT-010: Cross-platform production release gate
 
@@ -101,5 +101,4 @@
 **Dependencies:** OUT-002, OUT-003, OUT-004, OUT-005, OUT-006, OUT-007, OUT-008, OUT-009
 **Readiness:** Blocked
 **State:** Proposed
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-010 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact Approved Agentic Foundation revision shown there at phase entry.
-
+**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-010 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.

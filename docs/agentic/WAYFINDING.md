@@ -1,10 +1,10 @@
 # AugustAgents Wayfinding
 
 **Artifact Type:** Agentic Foundation
-**Status:** Approved
-**Revision:** sha256:bdb433163a20721f3a627ae057639abe63f28298deb7e48414ca8b11d1ac0107
-**Approved Revision:** sha256:bdb433163a20721f3a627ae057639abe63f28298deb7e48414ca8b11d1ac0107
-**Approved At:** 2026-09-29T11:59:45.551Z
+**Status:** Ready
+**Revision:** sha256:daa1906bd244f399577483b734d8c0b5983cae36173b4717518409efa76668d4
+**Approved Revision:** none
+**Approved At:** none
 
 ## Foundation Files
 
@@ -42,9 +42,10 @@ claims, and makes `OUT-001` ready for feature-level design.
 
 ## Frontier
 
-- User approval or requested revision of this exact Foundation package.
-- After approval, bounded design of `OUT-001` without widening into later
-  runtime or security outcomes.
+- Complete exact internal review and Autonomous Ready progression of this
+  Foundation revision.
+- Continue bounded `OUT-001` implementation without widening into later runtime
+  or security outcomes.
 
 ## Fog
 
@@ -64,7 +65,7 @@ claims, and makes `OUT-001` ready for feature-level design.
 
 ## Decision Pointers
 
-- Workflow and phase policy: [DEC-0001](DECISIONS.md#dec-0001-review-gated-project-documents), [DEC-0002](DECISIONS.md#dec-0002-same-session-phase-mode).
+- Workflow and phase policy: [DEC-0011](DECISIONS.md#dec-0011-autonomous-document-progression), [DEC-0002](DECISIONS.md#dec-0002-same-session-phase-mode). Superseded history remains at [DEC-0001](DECISIONS.md#dec-0001-review-gated-project-documents).
 - Incremental architecture strategy: [DEC-0003](DECISIONS.md#dec-0003-preserve-and-evolve-the-current-codebase).
 - Learning truth and provenance: [DEC-0004](DECISIONS.md#dec-0004-verified-outcome-is-the-learning-label), [DEC-0005](DECISIONS.md#dec-0005-provenance-belongs-to-content-parts).
 - Runtime and protocol direction: [DEC-0006](DECISIONS.md#dec-0006-durable-runengine-is-the-runtime-center), [DEC-0007](DECISIONS.md#dec-0007-official-sdk-behind-an-august-mcp-adapter).

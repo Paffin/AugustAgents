@@ -11,8 +11,9 @@ This file routes work to the smallest authoritative document set.
 1. Read this file and `CONTEXT.md`.
 2. Read `docs/agentic/WAYFINDING.md` for Foundation state and navigation.
 3. Read only the task-relevant owners under `docs/agentic/`.
-4. For implementation, read the exact Approved Design Spec and Approved
-   Implementation Plan selected for the roadmap outcome.
+4. For implementation, read the exact policy-accepted Ready or preserved
+   Approved Design Spec and compatible Implementation Plan selected for the
+   roadmap outcome.
 
 ## Ownership
 
@@ -30,12 +31,13 @@ This file routes work to the smallest authoritative document set.
 
 ## Local Contracts
 
-- Existing source, tests, and user work are preserved unless an Approved
-  successor explicitly authorizes replacement or retirement.
+- Existing source, tests, and user work are preserved unless a policy-accepted
+  Ready or preserved Approved successor explicitly authorizes replacement or
+  retirement.
 - Accepted Foundation, Design Spec, and Implementation Plan revisions are
   immutable. Revisions use distinct successors.
 - Current truth has one owner; public documents link to it or are reconciled in
-  the same approved change.
+  the same policy-accepted change.
 - Generated `docs/superpowers/` artifacts remain local and unstaged unless the
   user explicitly requests publication.
 
@@ -54,12 +56,14 @@ This file routes work to the smallest authoritative document set.
 ## Workflow Policy
 
 **Workflow Policy Version:** 2
-**Approval Policy:** Review-gated
+**Approval Policy:** Autonomous
 
-The user explicitly opted into document approval on 2026-09-29. Draft never
-progresses. Foundation, Design Specs, Implementation Plans, and consequential
-public-document change sets must be shown in readable form and Approved at the
-exact revision before downstream work consumes them.
+The user explicitly revoked document-by-document approval stops on 2026-09-29
+and instructed the agent to continue development. Draft never progresses.
+Foundation, Design Specs, Implementation Plans, and consequential public-document
+change sets require exact internal review and Ready or preserved Approved state
+before downstream use. Ask only for consequential goal/constraint changes,
+missing required access/input, or actions outside existing authority.
 
 ## Phase Mode
 
@@ -70,11 +74,12 @@ fresh-session handoff exists.
 
 ## Permissions
 
-- Before Foundation approval, read-only discovery, Draft authoring, local
-  baseline checks, and internally reviewed corrections to this Foundation and
-  its lifecycle metadata are allowed.
-- Code and test changes require the exact Approved Foundation plus the selected
-  outcome's exact Approved Design Spec and exact Approved Implementation Plan.
+- Before Foundation policy acceptance, read-only discovery, Draft authoring,
+  local baseline checks, and internally reviewed corrections to this Foundation
+  and its lifecycle metadata are allowed.
+- Code and test changes require the exact policy-accepted Ready or preserved
+  Approved Foundation plus the selected outcome's exact policy-accepted Design
+  Spec and compatible Implementation Plan.
   That accepted scope authorizes local implementation, tests, commits, and a
   verified merge into local `main`.
 - Push, deployment, release publication, external messages, and external system

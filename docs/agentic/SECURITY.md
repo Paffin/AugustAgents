@@ -82,7 +82,9 @@ restart, tainted learning, and local database tampering.
 
 ## Security Verification
 
-- Every security fix begins with a failing exploit/invariant test.
+- Every security fix includes a reproducing exploit/invariant regression test
+  and relevant red-team coverage; under the selected no-TDD workflow those tests
+  may be authored after implementation.
 - Red-team coverage includes compromised-model assumptions in Russian and
   English.
 - Capability tests cover pre-start exfiltration, not only tool-call behavior.

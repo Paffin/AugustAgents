@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2f5d50"></a>
-  <img alt="Runtime: Bun" src="https://img.shields.io/badge/runtime-Bun%201.1%2B-f4c56b">
+  <img alt="Runtime: Bun" src="https://img.shields.io/badge/runtime-Bun%201.1.39%2B-f4c56b">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-2f5d50">
   <img alt="Status: MVP" src="https://img.shields.io/badge/status-MVP-e0864a">
 </p>

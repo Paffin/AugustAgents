@@ -56,9 +56,10 @@ primitives but lacks durable state and outcome-grounded learning.
 
 ## Release Boundaries
 
-- Foundation gate: no implementation before the exact Foundation is Approved.
+- Foundation gate: no implementation before the exact Foundation is
+  policy-accepted as Ready or preserved Approved.
 - Outcome gate: no implementation before the exact outcome Design Spec and Plan
-  are Approved.
+  are policy-accepted as Ready or preserved Approved.
 - Prototype gate: no README or release claim may say a capability is delivered
   without current runtime evidence.
 - Production gate: production readiness is unavailable until `OUT-010` closes

@@ -8,7 +8,9 @@ frontend journeys, restart/recovery, platform isolation, or release evidence.
 
 ## Test Strategy
 
-- Start behavior changes with a meaningful failing public-interface test.
+- Behavior changes require meaningful public-interface regression tests; under
+  the user-selected no-TDD workflow they may be authored after implementation,
+  while existing reproducible failure evidence remains part of diagnosis.
 - Maintain unit tests for deterministic contracts and integration tests for
   package composition.
 - Exercise security invariants with compromised-model and hostile-capability
@@ -32,7 +34,8 @@ frontend journeys, restart/recovery, platform isolation, or release evidence.
   boundary exists.
 - **External compatibility contract:** MCP protocol/version support with current
   consumer evidence, support window, removal condition, and sunset. Retire only
-  through an Approved successor that preserves supported consumers.
+  through a policy-accepted Ready or preserved Approved successor that preserves
+  supported consumers.
 - **Temporary migration test:** persisted-schema upgrade/rollback bound to one
   migration, removal milestone, accountable owner, and cleanup of production
   paths, fixtures, tests, docs, and formats.
@@ -42,7 +45,7 @@ frontend journeys, restart/recovery, platform isolation, or release evidence.
 ## Required Commands
 
 - Dependency restore: `bun install --frozen-lockfile` after `OUT-001` creates
-  and approves the lockfile.
+  and policy-accepts the lockfile contract.
 - Type checking: `bun run typecheck`.
 - Full suite: `bun test`.
 - Combined gate: `bun run check`.

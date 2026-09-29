@@ -21,8 +21,8 @@ This directory contains the authoritative Agentic Foundation for AugustAgents.
 - Current truth is changed only in its owning document.
 - Decision ledger entries are append-only; changed decisions append a
   superseding entry and update the current index.
-- Every managed edit follows Draft, refresh, complete review, user approval,
-  approve, and exact Review-gated validation.
+- Every managed edit follows Draft, refresh, complete internal review, Ready,
+  and exact Autonomous validation; preserved Approved history remains valid.
 - Optional documents require justification in `WAYFINDING.md` and the manifest.
 
 ## Work Guidance
@@ -42,4 +42,3 @@ canonical revision or approval metadata. Run all checks in
 ## Child DOX Index
 
 No child instruction boundaries exist below this directory.
-

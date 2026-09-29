@@ -4,7 +4,7 @@
 
 | Area | Current decision | Current-truth owner | Supersedes |
 | --- | --- | --- | --- |
-| Workflow approval | DEC-0001 | root `AGENTS.md` / Workflow Policy | none |
+| Workflow approval | DEC-0011 | root `AGENTS.md` / Workflow Policy | DEC-0001 |
 | Phase continuity | DEC-0002 | root `AGENTS.md` / Phase Mode | none |
 | Change strategy | DEC-0003 | `ARCHITECTURE.md` / Constraints | none |
 | Learning truth | DEC-0004 | `PRODUCT.md` / Product Rules | none |
@@ -13,6 +13,7 @@
 | MCP protocol boundary | DEC-0007 | `ARCHITECTURE.md` / Adapters | none |
 | Release claims | DEC-0008 | `PROJECT-BLUEPRINT.md` / Release Boundaries | none |
 | OUT-001 execution selection | DEC-0009 | `ROADMAP.md` / OUT-001 Execution Binding | none |
+| Bun runtime floor | DEC-0010 | `ARCHITECTURE.md` / Technology Stack | none |
 
 ## Immutable Decision Ledger
 
@@ -123,3 +124,27 @@
 **Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
 **Roadmap Outcomes:** OUT-001
 **Supersedes:** none
+
+### DEC-0010: Bun 1.1.39 is the minimum runtime
+
+**Area:** Bun runtime floor
+**Decision:** AugustAgents requires Bun 1.1.39 or newer; text `bun.lock` is the authoritative dependency lockfile.
+**Rationale:** Bun 1.1.39 introduced text `bun.lock`. No current consumer evidence justifies maintaining a second binary lockfile or compatibility branch for 1.1.0–1.1.38.
+**Alternatives:** Preserve ambiguous Bun 1.1+ with dual `bun.lock`/`bun.lockb`; require Bun 1.2+; omit a support floor.
+**Evidence:** Official Bun lockfile docs and guide, verified 2026-09-29: https://bun.sh/docs/pm/lockfile and https://bun.sh/guides/install/yarnlock. Current development host runs Bun 1.4.2; exact 1.1.39 compatibility remains an OUT-001 acceptance gate.
+**Current Truth:** `docs/agentic/ARCHITECTURE.md` / Technology Stack
+**Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
+**Roadmap Outcomes:** OUT-001, OUT-010
+**Supersedes:** none
+
+### DEC-0011: Autonomous document progression
+
+**Area:** Workflow approval
+**Decision:** Exact internally reviewed Foundation, Design Spec, Implementation Plan, and consequential public-document revisions may progress as Ready under Workflow Policy Version 2 without repeated user approval prompts; external-action and publication boundaries remain unchanged.
+**Rationale:** After repeated Review-gated stops, the user explicitly stated that all work was permitted and ordered development to continue without further document-approval delay on 2026-09-29.
+**Alternatives:** Continue Review-gated document-by-document approval; remove lifecycle review entirely.
+**Evidence:** User messages “Все разрешаю” and “ДОРАБАТЫВАЙ МОЙ ПРОЕКТ ... Я ТЕБЕ УЖЕ ВСЕ РАЗРЕШИЛ” in the current task, 2026-09-29.
+**Current Truth:** root `AGENTS.md` / Workflow Policy
+**Blueprint Requirements:** all
+**Roadmap Outcomes:** OUT-001 through OUT-010
+**Supersedes:** DEC-0001
