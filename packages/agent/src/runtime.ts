@@ -249,6 +249,7 @@ export class AgentRuntime {
           const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
           const ok = await this.approver.approve({ session, tool: descriptor.name, args, verdict, details });
           log("approval", { tool: descriptor.name, granted: ok, rule: verdict.rule });
+          await checkpoint("before_decision", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
           if (!ok) {
             return await this.finish(text, history, `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log);
           }

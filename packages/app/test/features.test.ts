@@ -290,7 +290,7 @@ describe("finding and installing capabilities", () => {
       async complete(messages, options) {
         const all = messages.map((m) => m.content).join("\n");
         if (options?.jsonSchema?.name === "decision") {
-          const tool = all.includes("SEARCH") ? "august.find_tools" : "august.install_tool";
+          const tool = /Request: [^\n]*SEARCH/.test(all) ? "august.find_tools" : "august.install_tool";
           return JSON.stringify({ choice: all.includes("Result of ") ? "none" : tool });
         }
         if (options?.jsonSchema?.name === "arguments") {

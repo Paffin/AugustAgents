@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { AgentRuntime, denyAll, type AgentReply, type Approver } from "@august/agent";
+import { AgentRuntime, denyAll, type AgentCheckpointState, type AgentReply, type Approver } from "@august/agent";
 import {
   DecisionCascade,
   HeuristicEngine,
@@ -13,7 +13,7 @@ import {
   type LlmProvider,
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
-import { EventJournal, type SessionKey } from "@august/core";
+import { DurableRuntimeStore, type DurableRun, type RunBudget, type RunState, EventJournal, type SessionKey } from "@august/core";
 import { RegistryClient, type InstallPlan } from "@august/discovery";
 import { McpHost, detectSandbox, sandboxHome, sandboxSpec, type SandboxKind } from "@august/mcp";
 import { PolicyEngine } from "@august/policy";
@@ -42,6 +42,10 @@ export interface StartReport {
   failed: Array<{ id: string; error: string }>;
 }
 
+export interface HandleOptions { idempotencyKey?: string; budget?: Partial<RunBudget> }
+export interface DurableAgentReply extends AgentReply { runId: string; replayed: boolean }
+export interface RunListOptions { session?: SessionKey; states?: RunState[]; limit?: number }
+
 export interface App {
   config: AugustConfig;
   agent: AgentRuntime;
@@ -51,10 +55,18 @@ export interface App {
   policy: PolicyEngine;
   mcp: McpHost;
   meta: MetaExecutor;
+  runs: DurableRuntimeStore;
   secrets: SecretStore;
   sandbox: SandboxKind;
   /** Handle one message and save the decision statistics. */
-  handle(session: SessionKey, text: string, approver?: Approver): Promise<AgentReply>;
+  handle(session: SessionKey, text: string, approver?: Approver, options?: HandleOptions): Promise<DurableAgentReply>;
+  getRun(id: string): DurableRun | undefined;
+  listRuns(options?: RunListOptions): DurableRun[];
+  pauseRun(id: string): Promise<DurableRun>;
+  cancelRun(id: string): Promise<DurableRun>;
+  resumeRun(id: string, approver?: Approver): Promise<DurableAgentReply>;
+  retryRun(id: string, options?: HandleOptions, approver?: Approver): Promise<DurableAgentReply>;
+  resolveRun(id: string, resolution: "abandon" | "confirm_not_executed"): DurableRun;
   /** Start the MCP servers from the config. One failing server never stops the others. */
   startServers(): Promise<StartReport>;
   close(): void;
@@ -184,6 +196,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   mcp = new McpHost(registry, { fallback: meta });
 
   const journal = new EventJournal(join(config.dataDir, "journal.db"));
+  const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"));
   const policy = new PolicyEngine();
   const registryHost = new URL(config.registryUrl).host;
   // Searching the public registry is routine; a standing mandate covers it (never from a tainted context).
@@ -218,6 +231,51 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     }
   };
 
+  type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
+  const active = new Map<string, Active>();
+  const execute = async (run: DurableRun, perMessage?: Approver, priorMessages?: string[]): Promise<DurableAgentReply> => {
+    if (run.state === "recovering" && (!run.checkpoint?.safeToResume || run.checkpoint.phase === "tool_started")) throw new Error("run needs owner resolution before resume");
+    const controller = new AbortController(); let finish!: () => void;
+    const entry: Active = { controller, done: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
+    active.set(run.id, entry); if (perMessage) approver.bySession.set(run.session, perMessage);
+    try {
+      run = runs.transition(run.id, "running");
+      const checkpoint = run.checkpoint as (AgentCheckpointState & typeof run.checkpoint) | undefined;
+      if (checkpoint && (!checkpoint.taint || !checkpoint.loop || checkpoint.steps === undefined || checkpoint.externalEffects === undefined)) throw new Error("run checkpoint is missing safety state");
+      let reply = await agent.handle(run.session, run.request, {
+        priorMessages, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
+        maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects,
+        onEvent: (event) => {
+          if (event.type !== "checkpoint") return;
+          runs.checkpoint(run.id, event);
+          const current = runs.getRun(run.id)!;
+          if (event.phase === "waiting_approval" && current.state === "running") runs.transition(run.id, "waiting_approval");
+          else if (event.phase === "tool_started") { if (current.state === "waiting_approval") runs.transition(run.id, "running"); if (runs.getRun(run.id)!.state === "running") runs.transition(run.id, "waiting_external"); }
+          else if (event.phase === "tool_finished" && current.state === "waiting_external") runs.transition(run.id, "running");
+          else if (event.phase === "before_decision" && current.state === "waiting_approval") runs.transition(run.id, "running");
+        },
+      });
+      const current = runs.getRun(run.id)!;
+      if (entry.desired && !reply.stopReason) reply = { ...reply, reply: `Stopped: ${entry.desired}.`, stopReason: "cancelled" };
+      if (reply.stopReason) {
+        const target = entry.desired ?? (reply.stopReason === "cancelled" ? "cancelled" : "failed");
+        run = current.state === target ? current : runs.transition(run.id, target, { error: reply.stopReason, steps: reply.steps });
+      } else {
+        runs.transition(run.id, "verifying", { steps: reply.steps });
+        runs.appendMessage(run.session, "assistant", reply.reply);
+        run = runs.transition(run.id, "completed", { reply: reply.reply });
+      }
+      return { ...reply, runId: run.id, replayed: false };
+    } catch (error) {
+      const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, "failed", { error: (error as Error).message });
+      throw error;
+    } finally { approver.bySession.delete(run.session); active.delete(run.id); entry.finish(); saveStats(); }
+  };
+  const stop = async (id: string, desired: "paused" | "cancelled"): Promise<DurableRun> => {
+    const entry = active.get(id); if (!entry) { const run = runs.getRun(id); if (!run) throw new Error(`unknown run ${id}`); return runs.transition(id, desired); }
+    entry.desired = desired; entry.controller.abort(); await entry.done; return runs.getRun(id)!;
+  };
+
   return {
     config,
     agent,
@@ -227,17 +285,22 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     policy,
     mcp,
     meta,
+    runs,
     secrets,
     sandbox,
-    async handle(session, text, perMessage) {
-      if (perMessage) approver.bySession.set(session, perMessage);
-      try {
-        return await agent.handle(session, text);
-      } finally {
-        approver.bySession.delete(session);
-        saveStats();
-      }
+    async handle(session, text, perMessage, options = {}) {
+      const started = runs.startRun({ session, request: text, ...options });
+      if (started.replayed) { if (started.run.reply === undefined) throw new Error("completed run has no reply"); return { reply: started.run.reply, steps: started.run.steps, tainted: (started.run.checkpoint?.taint as { tainted?: boolean } | undefined)?.tainted === true, runId: started.run.id, replayed: true }; }
+      const prior = runs.stateView(session); runs.appendMessage(session, "user", text);
+      return execute(started.run, perMessage, prior);
     },
+    getRun: (id) => runs.getRun(id),
+    listRuns: (options = {}) => runs.listRuns(options.session, options.limit).filter((run) => !options.states || options.states.includes(run.state)),
+    pauseRun: (id) => stop(id, "paused"),
+    cancelRun: (id) => stop(id, "cancelled"),
+    resumeRun: (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage); },
+    retryRun: (id, options = {}, perMessage) => execute(runs.retryRun(id, options).run, perMessage, runs.stateView(runs.getRun(id)!.session)),
+    resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };
       for (const entry of config.mcp) {
@@ -251,6 +314,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     },
     close() {
       mcp.closeAll();
+      runs.close();
       saveStats();
     },
   };

@@ -8,7 +8,7 @@ export type RunState = "created" | "running" | "waiting_approval" | "waiting_ext
 
 export interface ConversationMessage { session: SessionKey; seq: number; role: MessageRole; content: string; createdAt: number }
 export interface RunBudget { maxSteps: number; maxWallMs: number; maxExternalEffects: number; maxTokens?: number; maxCostMicros?: number }
-export interface RunCheckpoint { phase: "before_decision" | "waiting_approval" | "tool_started" | "tool_finished"; safeToResume: boolean; history: string[]; taint?: unknown; loop?: unknown; lastTool?: string; argsHash?: string }
+export interface RunCheckpoint { phase: "before_decision" | "waiting_approval" | "tool_started" | "tool_finished"; safeToResume: boolean; history: string[]; taint?: unknown; loop?: unknown; steps?: number; externalEffects?: number; lastTool?: string; argsHash?: string }
 export interface DurableRun {
   id: string; session: SessionKey; state: RunState; request: string; requestFingerprint: string;
   idempotencyKey?: string; reply?: string; error?: string; budget: RunBudget;
@@ -111,7 +111,7 @@ export class DurableRuntimeStore {
       .run(to, patch.reply ?? null, patch.error ?? null, patch.steps ?? null, patch.externalEffects ?? null, patch.now ?? Date.now(), id);
     return this.getRun(id)!;
   }
-  checkpoint(id: string, value: RunCheckpoint, now = Date.now()): DurableRun { const json = JSON.stringify(value); if (json.length > 65_536) throw new Error("checkpoint is too large"); this.db.query("UPDATE runs SET checkpoint_json=?,updated_at=? WHERE id=?").run(json, now, id); return this.getRun(id)!; }
+  checkpoint(id: string, value: RunCheckpoint, now = Date.now()): DurableRun { const json = JSON.stringify(value); if (json.length > 65_536) throw new Error("checkpoint is too large"); this.db.query("UPDATE runs SET checkpoint_json=?,steps=COALESCE(?,steps),external_effects=COALESCE(?,external_effects),updated_at=? WHERE id=?").run(json, value.steps ?? null, value.externalEffects ?? null, now, id); const run = this.getRun(id); if (!run) throw new Error(`unknown run ${id}`); return run; }
   retryRun(id: string, options: { idempotencyKey?: string; budget?: Partial<RunBudget>; now?: number } = {}): { run: DurableRun; replayed: boolean } { const old = this.getRun(id); if (!old || !["failed", "cancelled"].includes(old.state)) throw new Error("only failed or cancelled runs can retry"); if (options.idempotencyKey && options.idempotencyKey === old.idempotencyKey) throw new IdempotencyConflictError(old.id); return this.startRun({ session: old.session, request: old.request, idempotencyKey: options.idempotencyKey, budget: options.budget ?? old.budget, retryOf: old.id, now: options.now }); }
   resolveRun(id: string, resolution: "abandon" | "confirm_not_executed"): DurableRun { const run = this.getRun(id); if (!run || run.state !== "recovering") throw new Error("run is not recovering"); if (resolution === "abandon") return this.transition(id, "failed", { error: "owner abandoned ambiguous run" }); const cp = run.checkpoint; if (!cp || cp.phase !== "tool_started") throw new Error("run has no ambiguous tool checkpoint"); this.checkpoint(id, { ...cp, phase: "before_decision", safeToResume: true }); return this.transition(id, "paused"); }
   close(): void { this.db.close(); }

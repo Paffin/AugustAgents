@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmProvider } from "@august/brain";
+import type { ChatMessage, LlmProvider } from "@august/brain";
+import { IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
 import {
   BuiltinExecutor,
   ConfigError,
@@ -238,6 +239,63 @@ describe("createApp", () => {
     const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" } });
     expect(app.cascade.shadowMode).toBe(true);
     expect(app.registry.enabledTools().map((t) => t.name).sort()).toEqual(["august.find_tools", "august.install_skill", "august.install_tool", "clock.now", "fs.list", "fs.read"]);
+    app.close();
+  });
+
+  const runtimeSession = makeSessionKey({ workspace: "home", channel: "test", user: "runtime" });
+  function contextualLlm(final: (messages: readonly ChatMessage[]) => string | Promise<string>): LlmProvider {
+    return { name: "contextual", complete: async (messages, options) => options?.jsonSchema?.name === "decision" ? JSON.stringify({ choice: "none" }) : options?.jsonSchema?.name === "arguments" ? "{}" : final(messages) };
+  }
+
+  test("Product behavior: a second App process receives durable conversation context", async () => {
+    const home = tmp(); const cfg = defaultConfig(home);
+    let app = createApp(cfg, { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "Запомнил NEPTUNE-7429") });
+    await app.handle(runtimeSession, "Запомни NEPTUNE-7429"); app.close();
+    app = createApp(cfg, { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm((messages) => messages.at(-1)!.content.includes("NEPTUNE-7429") ? "NEPTUNE-7429" : "не помню") });
+    expect((await app.handle(runtimeSession, "Какое кодовое слово?")).reply).toBe("NEPTUNE-7429");
+    expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    app.close();
+  });
+
+  test("Safety/reliability invariant: App idempotency blocks active/conflicting duplicates and replays completed replies", async () => {
+    const home = tmp(); let release!: (value: string) => void; let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<string>((resolve) => { release = resolve; });
+    let calls = 0;
+    const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => { calls++; entered(); return blocked; }) });
+    const pending = app.handle(runtimeSession, "once", undefined, { idempotencyKey: "request-1" }); await started;
+    expect(app.handle(runtimeSession, "once", undefined, { idempotencyKey: "request-1" })).rejects.toBeInstanceOf(RunInProgressError);
+    expect(app.handle(runtimeSession, "different", undefined, { idempotencyKey: "request-1" })).rejects.toBeInstanceOf(IdempotencyConflictError);
+    release("done"); const first = await pending; const callsBeforeReplay = calls;
+    const replay = await app.handle(runtimeSession, "once", undefined, { idempotencyKey: "request-1" });
+    expect(replay).toMatchObject({ reply: "done", runId: first.runId, replayed: true }); expect(calls).toBe(callsBeforeReplay);
+    app.close();
+  });
+
+  test("Safety/reliability invariant: cooperative pause waits for a model step and resumes the same run", async () => {
+    const home = tmp(); let release!: (value: string) => void; let entered!: () => void; let calls = 0;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<string>((resolve) => { release = resolve; });
+    const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => (++calls === 1 ? (entered(), blocked) : "resumed")) });
+    const pending = app.handle(runtimeSession, "pause me"); await started;
+    const id = app.listRuns({ session: runtimeSession })[0]!.id; const pausing = app.pauseRun(id); release("late answer");
+    expect((await pausing).state).toBe("paused"); expect((await pending).stopReason).toBe("cancelled");
+    expect((await app.resumeRun(id)).reply).toBe("resumed"); expect(app.getRun(id)?.state).toBe("completed");
+    app.close();
+  });
+
+  test("Safety/reliability invariant: recovery resumes safe checkpoints and blocks ambiguous effects", async () => {
+    const home = tmp(); const cfg = defaultConfig(home); const deps = { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "recovered") };
+    let app = createApp(cfg, deps); const safe = app.runs.startRun({ session: runtimeSession, request: "safe" }).run;
+    app.runs.transition(safe.id, "running"); app.runs.checkpoint(safe.id, { phase: "before_decision", safeToResume: true, history: [], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 }); app.close();
+    app = createApp(cfg, deps); expect(app.getRun(safe.id)?.state).toBe("recovering"); expect((await app.resumeRun(safe.id)).reply).toBe("recovered");
+    const ambiguous = app.runs.startRun({ session: runtimeSession, request: "send" }).run; app.runs.transition(ambiguous.id, "running");
+    app.runs.checkpoint(ambiguous.id, { phase: "tool_started", safeToResume: false, history: [], taint: { tainted: false, sources: [] }, loop: { steps: 1, repeats: [] }, steps: 0, externalEffects: 1 }); app.close();
+    app = createApp(cfg, deps); expect(app.resumeRun(ambiguous.id)).rejects.toThrow(/owner resolution/);
+    expect(app.resolveRun(ambiguous.id, "confirm_not_executed").state).toBe("paused"); expect((await app.resumeRun(ambiguous.id)).reply).toBe("recovered");
+    const cancelled = app.runs.startRun({ session: runtimeSession, request: "retry" }).run; expect((await app.cancelRun(cancelled.id)).state).toBe("cancelled");
+    const retried = await app.retryRun(cancelled.id, { idempotencyKey: "retry-1" }); expect(app.getRun(retried.runId)?.retryOf).toBe(cancelled.id);
+    app.close();
   });
 });
 
