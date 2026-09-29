@@ -167,7 +167,7 @@ describe("dataset export and reporting", () => {
     record(s, "bad", { decisions: [decision(0)], executions: [execution(0, { isError: true })] }); s.addEvidence("bad", 0, ev("checker", "failure"));
     record(s, "dirty", { decisions: [decision(0, { tainted: true, taintSources: ["web.fetch"] })], executions: [execution(0)] }); s.addEvidence("dirty", 0, ev("checker", "success"));
     record(s, "open", { decisions: [decision(0)], executions: [execution(0)] });
-    expect(s.exclusionSummary()).toEqual({ examples: 2, "tainted-context": 1, "not-executed": 0, unresolved: 1, "conflicting-evidence": 0, "ambiguous-credit": 0 });
+    expect(s.exclusionSummary()).toEqual({ examples: 2, "tainted-context": 1, "not-executed": 0, unresolved: 1, "conflicting-evidence": 0, "ambiguous-credit": 0, "compiled-plan": 0 });
     const path = join(dir, "train.jsonl");
     expect(s.exportJsonl(path)).toBe(2);
     expect(statSync(path).mode & 0o777).toBe(0o600);

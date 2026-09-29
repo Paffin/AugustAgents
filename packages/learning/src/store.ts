@@ -161,7 +161,7 @@ export class LearningStore {
   /** Counts by reason, so the owner can see why data is not being used. */
   exclusionSummary(): Record<ExclusionReason, number> & { examples: number } {
     const { examples, excluded } = this.examples();
-    const summary = { examples: examples.length, "tainted-context": 0, "not-executed": 0, unresolved: 0, "conflicting-evidence": 0, "ambiguous-credit": 0 };
+    const summary = { examples: examples.length, "tainted-context": 0, "not-executed": 0, unresolved: 0, "conflicting-evidence": 0, "ambiguous-credit": 0, "compiled-plan": 0 };
     for (const e of excluded) summary[e.reason] += 1;
     return summary;
   }

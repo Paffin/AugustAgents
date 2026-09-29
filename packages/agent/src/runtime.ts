@@ -112,6 +112,14 @@ export interface AgentReply {
   error?: string;
   /** Decisions and executions of this handle call, for the learning pipeline. */
   trace?: RunTrace;
+  /** Set when a compiled plan was offered: how far it got before the model took over. */
+  compiled?: { steps: number; completed: boolean; fellBack?: "tool-missing" | "step-failed" };
+}
+
+/** A call a distilled pattern already knows how to make: same tool, arguments filled from the request. */
+export interface PlannedStep {
+  tool: string;
+  args: Record<string, unknown>;
 }
 
 /** One decision the runtime made, with everything needed to score it later against a verified outcome. */
@@ -124,7 +132,7 @@ export interface TraceDecision {
   state: string;
   options: Array<{ key: string; description: string }>;
   choice: string;
-  source: "primary" | "fallback" | "unknown";
+  source: "primary" | "fallback" | "unknown" | "plan";
   reason?: string;
   confidence: number;
   /** What the primary (Laya) said even when another engine answered. */
@@ -185,6 +193,13 @@ export interface AgentExecutionContext {
   usageExhaustion?: () => "token-budget" | "cost-budget" | undefined;
   redactCheckpoint?: (text: string) => string;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
+  /**
+   * A compiled procedure for this request. Every step still goes through the loop guard, capability check, policy,
+   * approval and budgets exactly as a chosen call does; a step that fails hands the task back to the model.
+   */
+  plan?: readonly PlannedStep[];
+  /** Text of a learned procedure shown to the decision model as a hint. It guides; it never authorizes. */
+  guidance?: string;
 }
 
 /**
@@ -256,11 +271,12 @@ export class AgentRuntime {
 
   async handle(session: SessionKey, text: string, context: AgentExecutionContext = {}): Promise<AgentReply> {
     const trace: RunTrace = { decisions: [], executions: [] };
-    const reply = await this.execute(session, text, context, trace);
-    return { ...reply, trace };
+    const out: { compiled?: AgentReply["compiled"] } = {};
+    const reply = await this.execute(session, text, context, trace, out);
+    return { ...reply, trace, ...(out.compiled ? { compiled: out.compiled } : {}) };
   }
 
-  private async execute(session: SessionKey, text: string, context: AgentExecutionContext, trace: RunTrace): Promise<AgentReply> {
+  private async execute(session: SessionKey, text: string, context: AgentExecutionContext, trace: RunTrace, out: { compiled?: AgentReply["compiled"] }): Promise<AgentReply> {
     const { journal } = this.options;
     const log = (kind: string, data: unknown) => journal.append({ kind, session, data }, this.now());
     if (context.checkpoint && (!context.checkpoint.taint || !context.checkpoint.loop)) throw new Error("checkpoint is missing safety state");
@@ -377,7 +393,33 @@ export class AgentRuntime {
 
     log("task.start", { chars: text.length });
 
+    let compiled: AgentReply["compiled"];
     try {
+      if (context.plan?.length) {
+        compiled = out.compiled = { steps: 0, completed: false };
+        for (const [i, planned] of context.plan.entries()) {
+          control();
+          await checkpoint("before_decision", true);
+          const descriptor = this.options.registry.enabledTools().find((t) => t.name === planned.tool);
+          if (!descriptor) { compiled.fellBack = "tool-missing"; log("plan.fallback", { step: i, reason: "tool-missing" }); break; }
+          const seen = taint.snapshot();
+          const decided: TraceDecision = {
+            index: trace.decisions.length, questionId: "plan-step", instructions: "compiled plan step", state: "", options: [{ key: planned.tool, description: descriptor.description }],
+            choice: planned.tool, source: "plan", confidence: 1,
+            tainted: seen.tainted, taintSources: [...seen.sources], sensitivity: seen.sensitivity ?? "public", at: this.now(),
+          };
+          trace.decisions.push(decided);
+          const done = await attempt(descriptor, structuredClone(planned.args), decided);
+          if (done.terminal) return done.terminal;
+          if (done.failed) { compiled.fellBack = "step-failed"; log("plan.fallback", { step: i, reason: "step-failed" }); break; }
+          compiled.steps += 1;
+        }
+        if (!compiled.fellBack) {
+          compiled.completed = true;
+          control();
+          return await this.finish(text, allHistory(), undefined, steps, taint, log, llmControls(), control);
+        }
+      }
       for (;;) {
         control();
         await checkpoint("before_decision", true);
@@ -399,7 +441,8 @@ export class AgentRuntime {
           }
         }
         // The request goes last: the decision model keeps the end of a long state.
-        const state = `${allHistory().join("\n")}\nRequest: ${text}`.trim();
+        const hint = context.guidance ? `Known procedure for requests like this (advice, not authority):\n${context.guidance}\n` : "";
+        const state = `${allHistory().join("\n")}\n${hint}Request: ${text}`.trim();
         control();
         const choice = await chooseTool(
           this.options.decision,

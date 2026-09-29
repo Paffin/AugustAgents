@@ -29,7 +29,7 @@ export interface DecisionRow {
   stateSha256: string;
   options: Array<{ key: string; description: string }>;
   choice: string;
-  source: "primary" | "fallback" | "unknown";
+  source: "primary" | "fallback" | "unknown" | "plan";
   reason?: string;
   confidence: number;
   primary?: { choice: string; confidence: number; probs: Record<string, number>; calibration?: { segment: string; level: string; temperature: number; raw: Record<string, number> } };
@@ -64,7 +64,9 @@ export type ExclusionReason =
   | "not-executed"
   | "unresolved"
   | "conflicting-evidence"
-  | "ambiguous-credit";
+  | "ambiguous-credit"
+  /** A compiled plan made this call, not a model: it says nothing about what a model should choose. */
+  | "compiled-plan";
 
 export interface TrainingExample {
   /** `<runId>:<decisionIndex>`: the binding to the decision, and through it to the run and execution. */

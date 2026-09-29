@@ -546,3 +546,54 @@ describe("run trace", () => {
     expect(t.decisions[0]).toMatchObject({ source: "unknown", tainted: true, taintSources: ["web.fetch"], sensitivity: "personal" });
   });
 });
+
+// Suite category: Product behavior (a compiled plan skips the model's choices) and Safety/security invariant (a plan gets no more authority than a chosen call).
+describe("compiled plan", () => {
+  const never: DecisionEngine = { decide: async () => { throw new Error("the plan must not ask the decision model"); } };
+
+  test("runs its steps without decision or argument calls, records them as plan decisions, and answers from the results", async () => {
+    const ex = executor({ "notes.search": "3 notes" });
+    const llm = fakeLlm({}, "found 3 notes");
+    const { agent } = build({ decision: never, llm, executor: ex });
+    const r = await agent.handle(session, "search notes for x", { plan: [{ tool: "notes.search", args: { q: "x" } }] });
+    expect(ex.calls).toEqual([{ tool: "notes.search", args: { q: "x" } }]);
+    expect(r.reply).toBe("found 3 notes");
+    expect(r.compiled).toEqual({ steps: 1, completed: true });
+    expect(llm.prompts).toHaveLength(1);
+    expect(r.trace!.decisions[0]).toMatchObject({ source: "plan", choice: "notes.search" });
+    expect(r.trace!.executions[0]).toMatchObject({ tool: "notes.search", args: { q: "x" }, policy: { decision: "allow" } });
+  });
+
+  test("a plan step is still gated by policy: a send is refused when the approver says no, and nothing runs", async () => {
+    const ex = executor();
+    const { agent } = build({ decision: never, llm: fakeLlm({}), executor: ex, approver: { approve: async () => false } });
+    const r = await agent.handle(session, "send mail", { plan: [{ tool: "mail.send", args: { to: "a@b.c", body: "x" } }] });
+    expect(ex.calls).toEqual([]);
+    expect(r.reply).toContain("was not approved");
+  });
+
+  test("a failing step hands the task to the model, which sees the results so far", async () => {
+    const ex = executor({ "notes.search": "THROW" });
+    const { agent } = build({ decision: picks("none"), llm: fakeLlm({}, "handled"), executor: ex });
+    const r = await agent.handle(session, "search notes for x", { plan: [{ tool: "notes.search", args: { q: "x" } }] });
+    expect(r.compiled).toEqual({ steps: 0, completed: false, fellBack: "step-failed" });
+    expect(r.trace!.decisions.map((d) => d.source)).toEqual(["plan", "unknown"]);
+    expect(r.reply).toBe("handled");
+  });
+
+  test("a step whose tool is gone falls back to the model without running anything", async () => {
+    const ex = executor();
+    const { agent } = build({ decision: picks("none"), llm: fakeLlm({}, "handled"), executor: ex });
+    const r = await agent.handle(session, "x", { plan: [{ tool: "gone.tool", args: {} }] });
+    expect(r.compiled).toMatchObject({ completed: false, fellBack: "tool-missing" });
+    expect(ex.calls).toEqual([]);
+  });
+
+  test("guidance reaches the decision as advice", async () => {
+    const decision = picks("none");
+    const { agent } = build({ decision, llm: fakeLlm({}), executor: executor() });
+    await agent.handle(session, "search notes", { guidance: "1. notes.search" });
+    expect(decision.asked[0]).toContain("advice, not authority");
+    expect(decision.asked[0]).toContain("1. notes.search");
+  });
+});

@@ -24,6 +24,7 @@ export function deriveExamples(run: RunRows, now: () => number = Date.now): Exam
   for (const d of run.decisions) {
     const id = `${run.runId}:${d.index}`;
     const skip = (reason: ExclusionReason): void => void excluded.push({ id, reason });
+    if (d.source === "plan") { skip("compiled-plan"); continue; }
     if (d.tainted || d.state === null) { skip("tainted-context"); continue; }
     const exec = run.executions.find((e) => e.decisionIndex === d.index);
     if (d.choice !== "none" && !exec) { skip("not-executed"); continue; }
