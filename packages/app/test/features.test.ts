@@ -187,38 +187,6 @@ describe("secret, mcp, laya, calibrate, doctor commands", () => {
     expect(existsSync(dir)).toBe(false); expect(loadConfig(path).mcp).toEqual([]);
   });
 
-  test("laya status/activate follow the shadow statistics", async () => {
-    const home = tmp();
-    const { io, out } = makeIo(home);
-    await main(["init"], io);
-    const path = defaultConfigPath(home);
-    const cfg = loadConfig(path);
-    expect((await main(["laya", "activate"], io)).code).toBe(1);
-    writeConfig(path, { ...cfg, laya: { url: "http://127.0.0.1:7788" } });
-    expect((await main(["laya", "activate"], io)).code).toBe(1);
-    writeFileSync(join(cfg.dataDir, "cascade.json"), JSON.stringify({ shadowSamples: 250, shadowAgreements: 240 }));
-    await main(["laya", "status"], io);
-    expect(out.join("\n")).toContain("Ready to activate");
-    expect((await main(["laya", "activate"], io)).code).toBe(0);
-    expect(loadConfig(path).laya?.shadow).toBe(false);
-  });
-
-  test("calibrate fits a temperature from the decision log", async () => {
-    const home = tmp();
-    const { io, out } = makeIo(home);
-    await main(["init"], io);
-    const path = defaultConfigPath(home);
-    const cfg = loadConfig(path);
-    expect((await main(["calibrate"], io)).code).toBe(1);
-    const options = [{ key: "a", description: "" }, { key: "none", description: "" }];
-    const lines = Array.from({ length: 80 }, (_, i) => JSON.stringify({ options, primaryProbs: [0.99, 0.01], fallbackChoice: i < 48 ? "a" : "none" }));
-    writeFileSync(join(cfg.dataDir, "decisions.jsonl"), `${lines.join("\n")}\nnot json\n`);
-    writeConfig(path, { ...cfg, laya: { url: "http://127.0.0.1:7788" } });
-    expect((await main(["calibrate"], io)).code).toBe(0);
-    expect(loadConfig(path).laya!.temperature!).toBeGreaterThan(1);
-    expect(out.join("\n")).toContain("Samples: 80");
-  });
-
   test("doctor reports missing keys and secrets, and passes when fixed", async () => {
     const home = tmp();
     const { io, out } = makeIo(home);
@@ -546,7 +514,7 @@ describe("august serve", () => {
       expect((await (await fetch(`${base}/v1/pending?channel=web&user=local`, { headers: auth })).json() as any).approval.id).toBe(pending.id);
       const ok = await answer({ approvalId: pending.id, nonce: pending.nonce });
       expect(ok.status).toBe(200);
-      expect(await (await reply).json()).toEqual({ reply: "installed" });
+      expect(await (await reply).json()).toEqual({ reply: "installed", runId: expect.any(String) });
       // Replaying the same answer after it was used is refused as gone.
       expect((await answer({ approvalId: pending.id, nonce: pending.nonce })).status).toBe(410);
     } finally {

@@ -32,6 +32,7 @@
         "@august/core": "workspace:*",
         "@august/discovery": "workspace:*",
         "@august/gateway": "workspace:*",
+        "@august/learning": "workspace:*",
         "@august/mcp": "workspace:*",
         "@august/policy": "workspace:*",
       },
@@ -86,6 +87,15 @@
         "@august/policy": "workspace:*",
       },
     },
+    "packages/learning": {
+      "name": "@august/learning",
+      "version": "0.1.0",
+      "dependencies": {
+        "@august/agent": "workspace:*",
+        "@august/brain": "workspace:*",
+        "@august/policy": "workspace:*",
+      },
+    },
     "packages/mcp": {
       "name": "@august/mcp",
       "version": "0.1.0",
@@ -120,6 +130,8 @@
     "@august/gateway": ["@august/gateway@workspace:packages/gateway"],
 
     "@august/ladder": ["@august/ladder@workspace:packages/ladder"],
+
+    "@august/learning": ["@august/learning@workspace:packages/learning"],
 
     "@august/mcp": ["@august/mcp@workspace:packages/mcp"],
 

@@ -1,5 +1,5 @@
 import { tokenize } from "@august/capabilities";
-import { temperatureScale } from "./calibration.ts";
+import { optionBucket, scriptOf, segmentId, temperatureFor, temperatureScale, type CalibrationTable, type SegmentKey } from "./calibration.ts";
 import type { LlmUsageObserver } from "./usage.ts";
 
 /** Laya reads `choice` questions best with at most this many options. */
@@ -33,6 +33,8 @@ export interface DecisionResult {
   choice: string;
   probs: Record<string, number>;
   confidence: number;
+  /** Which calibration was applied: the segment it belongs to and how specific the fit was. Absent for engines that do not calibrate. */
+  calibration?: { segment: string; level: string; temperature: number; /** Normalized probabilities before temperature scaling: what calibration is fitted on. */ raw: Record<string, number> };
 }
 
 export interface DecisionEngine {
@@ -125,8 +127,12 @@ export interface LayaPrediction {
 export type LayaPredictFn = (request: LayaPredictRequest) => Promise<LayaPrediction>;
 
 export interface LayaEngineOptions {
-  /** Fitted with fitTemperature() on held-out data; 1 means uncalibrated. */
+  /** One temperature for everything, used only where the table has nothing for the segment; 1 means uncalibrated. */
   temperature?: number;
+  /** Segmented temperatures fitted from verified outcomes. Wins over `temperature` wherever it has a fit. */
+  calibration?: CalibrationTable;
+  /** Identity of the model weights. A calibration belongs to one engine; a new model starts uncalibrated. Default "laya". */
+  engine?: string;
   maxStateChars?: number;
   /** Confidence reported for inexact (one-hot) answers. Default 0.5: below the usual threshold, so the LLM decides. */
   inexactConfidence?: number;
@@ -137,11 +143,25 @@ export class LayaEngine implements DecisionEngine {
   private readonly temperature: number;
   private readonly maxStateChars: number;
   private readonly inexactConfidence: number;
+  private readonly engine: string;
+  private table: CalibrationTable | undefined;
 
   constructor(private readonly predict: LayaPredictFn, options: LayaEngineOptions = {}) {
     this.temperature = options.temperature ?? 1;
+    this.engine = options.engine ?? "laya";
+    this.table = options.calibration;
     this.maxStateChars = options.maxStateChars ?? DEFAULT_STATE_CHARS;
     this.inexactConfidence = options.inexactConfidence ?? 0.5;
+  }
+
+  /** Swap in a newly fitted table without restarting. */
+  setCalibration(table: CalibrationTable | undefined): void {
+    this.table = table;
+  }
+
+  /** The segment a decision belongs to, for calibration and for recording. */
+  segmentOf(input: DecisionInput, question: DecisionQuestion): SegmentKey {
+    return { question: question.id, options: optionBucket(question.options.length), script: scriptOf(input.state), engine: this.engine };
   }
 
   async decide(input: DecisionInput, question: DecisionQuestion): Promise<DecisionResult> {
@@ -157,11 +177,17 @@ export class LayaEngine implements DecisionEngine {
     });
     const total = ordered.reduce((a, b) => a + b, 0);
     if (total <= 0) throw new DecisionError("Laya returned all-zero probabilities");
-    const scaled = temperatureScale(ordered.map((p) => p / total), this.temperature);
+    const segment = this.segmentOf(input, question);
+    const fitted = temperatureFor(this.table, segment);
+    const temperature = fitted.level === "none" ? this.temperature : fitted.temperature;
+    const normalized = ordered.map((p) => p / total);
+    const scaled = temperatureScale(normalized, temperature);
+    const rawProbs: Record<string, number> = {};
+    keys.forEach((k, i) => (rawProbs[k] = normalized[i] ?? 0));
     const probs: Record<string, number> = {};
     keys.forEach((k, i) => (probs[k] = scaled[i] ?? 0));
     const top = argmax(probs, keys);
-    return { choice: top.key, probs, confidence: raw.exact === false ? this.inexactConfidence : top.p };
+    return { choice: top.key, probs, confidence: raw.exact === false ? this.inexactConfidence : top.p, calibration: { segment: segmentId(segment), level: fitted.level === "none" ? (this.temperature === 1 ? "none" : "global") : fitted.level, temperature, raw: rawProbs } };
   }
 }
 

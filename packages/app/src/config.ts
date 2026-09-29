@@ -45,8 +45,10 @@ export interface LayaConfig {
   temperature?: number;
   /** Calibrated confidence Laya needs to decide without the LLM. Default 0.7. */
   threshold?: number;
-  /** Default true: the LLM decides and Laya is measured. "august laya activate" turns it off. */
+  /** Default true: the LLM decides and Laya is measured. "august laya activate" turns it off, and only on verified outcomes. */
   shadow?: boolean;
+  /** Identity of the model weights, e.g. "laya-multilingual-2026-09". A calibration belongs to one engine; change it when the weights change. Default "laya". */
+  engine?: string;
 }
 
 export interface ChannelsConfig {
@@ -240,7 +242,8 @@ function parseLaya(v: unknown): LayaConfig | undefined {
   if (l.temperature !== undefined && !(typeof l.temperature === "number" && l.temperature > 0)) throw new ConfigError("laya.temperature must be positive");
   if (l.threshold !== undefined && !(typeof l.threshold === "number" && l.threshold > 0 && l.threshold <= 1)) throw new ConfigError("laya.threshold must be in (0, 1]");
   if (l.shadow !== undefined && typeof l.shadow !== "boolean") throw new ConfigError("laya.shadow must be true or false");
-  return { url: l.url, temperature: l.temperature, threshold: l.threshold, shadow: l.shadow };
+  if (l.engine !== undefined && !(typeof l.engine === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(l.engine))) throw new ConfigError("laya.engine must be a short identifier like laya-2026-09");
+  return { url: l.url, temperature: l.temperature, threshold: l.threshold, shadow: l.shadow, ...(l.engine === undefined ? {} : { engine: l.engine }) };
 }
 
 function parseChannels(v: unknown): ChannelsConfig {

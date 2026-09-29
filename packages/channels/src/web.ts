@@ -20,6 +20,8 @@ export const WEB_HTML = `<!doctype html>
   .ask h2 { margin:0 0 4px; font-size:1rem; }
   .ask button { margin:8px 8px 0 0; padding:8px 16px; border-radius:8px; border:1px solid var(--fg); background:var(--bg); color:var(--fg); cursor:pointer; font:inherit; }
   .muted { color:var(--muted); font-size:13px; }
+  .judge { margin-top:8px; font-size:13px; color:var(--muted); }
+  .judge button { margin-right:8px; padding:4px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; font:inherit; font-size:13px; }
   form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); max-width:760px; width:100%; margin:0 auto; }
   input { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--fg); background:var(--card); color:var(--fg); font:inherit; }
   button[type=submit] { padding:10px 16px; border-radius:10px; border:none; background:var(--accent); color:var(--on-accent); font:inherit; cursor:pointer; }
@@ -83,6 +85,20 @@ export const WEB_JS = `(() => {
     shown = { id: approval.id, card };
     card.focus();
   }
+  // The owner's verdict on an answer is an outcome nobody else can supply; it is what August learns from.
+  function judge(card, runId) {
+    const bar = document.createElement("div"); bar.className = "judge"; bar.setAttribute("role", "group"); bar.setAttribute("aria-label", "Was this answer right?");
+    for (const [label, verdict, aria] of [["Good answer", "success", "Mark this answer as good"], ["Not right", "failure", "Mark this answer as not right"]]) {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.setAttribute("aria-label", aria);
+      b.onclick = async () => {
+        bar.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+        const r = await fetch("/v1/feedback", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, runId, verdict }) }).catch(() => null);
+        bar.textContent = r && r.ok ? "Thank you." : "Could not record that.";
+      };
+      bar.appendChild(b);
+    }
+    card.appendChild(bar);
+  }
   form.onsubmit = async (e) => {
     e.preventDefault();
     const text = input.value.trim(); if (!text || !token) return;
@@ -92,7 +108,8 @@ export const WEB_JS = `(() => {
     try {
       const r = await fetch("/v1/message", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, text }) });
       const body = await r.json().catch(() => ({}));
-      wait.remove(); add(r.ok ? body.reply : "Error: " + (body.error || r.status));
+      wait.remove(); const shownReply = add(r.ok ? body.reply : "Error: " + (body.error || r.status));
+      if (r.ok && body.runId) judge(shownReply, body.runId);
     } catch { wait.remove(); add("The agent is not reachable."); }
     finally { clearInterval(timer); if (shown) { resolved(shown.card); shown = null; } }
   };

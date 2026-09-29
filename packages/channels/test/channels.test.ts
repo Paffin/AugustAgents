@@ -246,6 +246,31 @@ describe("TelegramChannel", () => {
     expect(decided).toBe(true);
   });
 
+  test("answers carry judgement buttons bound to the run; only the person the run belongs to can press them, once", async () => {
+    const approvals = new PendingApprovals(); const judged: Array<[string, string, string]> = [];
+    const { f, calls } = fakeTelegram([[msg(1, 42, "hello")]]);
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42, 7], fetch: f, approvals, handle: async () => ({ reply: "hi there", runId: "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a" }),
+      feedback: (session, runId, verdict) => { if (judged.some((j) => j[1] === runId && j[0] === session)) throw new Error("owner already gave a verdict"); if (session !== "home:telegram:42") throw new Error("no such run for this session"); judged.push([session, runId, verdict]); } });
+    await tg.poll(); await tick();
+    const reply = calls.filter((c) => c.method === "sendMessage").at(-1)!.body;
+    const row = reply.reply_markup.inline_keyboard[0] as Array<{ text: string; callback_data: string }>;
+    expect(row.map((b) => b.text)).toEqual(["👍", "👎"]);
+    for (const b of row) expect(Buffer.byteLength(b.callback_data)).toBeLessThanOrEqual(64);
+    const fb = (id: number, from: number, data: string) => ({ update_id: id, callback_query: { id: `c${id}`, from: { id: from }, data, message: { message_id: 5, chat: { id: from } } } });
+    await tg.dispatchForTest(fb(2, 7, row[0]!.callback_data)); await tg.dispatchForTest(fb(3, 99, row[0]!.callback_data));
+    await tg.dispatchForTest(fb(4, 42, "fb:bad data!:g")); await tg.dispatchForTest(fb(5, 42, row[1]!.callback_data)); await tg.dispatchForTest(fb(6, 42, row[0]!.callback_data)); await tick();
+    expect(judged).toEqual([["home:telegram:42", "0b0a3c1e-6f3a-4a0e-9d6a-1f2e3d4c5b6a", "failure"]]);
+    expect(calls.filter((c) => c.method === "answerCallbackQuery").map((c) => c.body.text)).toEqual(["Nothing to judge", "Nothing to approve", "Thank you", "You already judged this answer"]);
+    expect(calls.some((c) => c.method === "editMessageReplyMarkup")).toBe(true);
+  });
+
+  test("without a feedback sink no judgement buttons are offered", async () => {
+    const { f, calls } = fakeTelegram([[msg(1, 42, "hello")]]);
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals: new PendingApprovals(), handle: async () => ({ reply: "hi", runId: "run-1" }) });
+    await tg.poll(); await tick();
+    expect(calls.filter((c) => c.method === "sendMessage").at(-1)!.body.reply_markup).toBeUndefined();
+  });
+
   test("API errors never include the token", async () => {
     const f = (async () => { throw new Error(`connect to api.telegram.org/bot${TOKEN}`); }) as unknown as typeof fetch;
     const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals: new PendingApprovals(), handle: async () => ({ reply: "" }) });
@@ -296,6 +321,13 @@ describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
   test("the answer carries the displayed approval id and nonce, not a bare allow", () => {
     expect(WEB_JS).toContain("approvalId: approval.id");
     expect(WEB_JS).toContain("nonce: approval.nonce");
+  });
+
+  test("the page offers the owner a keyboard-operable, labelled judgement of each answer and posts it with the run id", () => {
+    expect(WEB_JS).toContain('"/v1/feedback"');
+    expect(WEB_JS).toContain("Was this answer right?");
+    expect(WEB_JS).toContain("Mark this answer as good"); expect(WEB_JS).toContain("Mark this answer as not right");
+    expect(WEB_JS).toContain("runId"); expect(WEB_JS).toContain("body.runId");
   });
 
   test("the script is valid JavaScript", () => {

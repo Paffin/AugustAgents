@@ -173,7 +173,7 @@ describe("AgentRuntime", () => {
     const ex = executor();
     const { agent } = build({ decision: picks("none"), llm: fakeLlm({}, "hello!"), executor: ex });
     const r = await agent.handle(session, "hi");
-    expect(r).toEqual({ reply: "hello!", steps: 0, tainted: false });
+    expect(r).toMatchObject({ reply: "hello!", steps: 0, tainted: false });
     expect(ex.calls).toHaveLength(0);
   });
 
@@ -496,5 +496,53 @@ describe("provenance, bound approvals and target-aware writes", () => {
     await agent.handle(session, "search notes then write note");
     expect(asked.map((a) => a.verdict.rule)).toEqual(["tainted-write"]);
     expect(ex.calls.map((c) => c.tool)).toEqual(["notes.search"]);
+  });
+});
+
+// Suite category: Product behavior (traces feed the learning pipeline) and Safety/security invariant (taint at decision time is recorded, never inferred later).
+describe("run trace", () => {
+  const cascadeLike = (choices: string[]): DecisionEngine => {
+    let i = 0;
+    return { async decide(_input, q) { const choice = choices[Math.min(i++, choices.length - 1)]!; const probs = Object.fromEntries(q.options.map((o) => [o.key, o.key === choice ? 1 : 0])); return { choice, probs, confidence: 1, source: "fallback", reason: "shadow", primary: { choice: "none", confidence: 0.6, probs: { none: 0.6, [q.options[0]!.key]: 0.4 }, calibration: { segment: "engine=laya|q=tool-choice", level: "exact", temperature: 1.5 } } } as never; } };
+  };
+
+  test("every decision records its state, options, choice, source, Laya's view and taint; every call records its policy, result hash and trust", async () => {
+    const ex = executor({ "notes.search": "3 notes found" });
+    const { agent } = build({ decision: cascadeLike(["notes.search", "none"]), llm: fakeLlm({ "notes.search": { q: "x" } }, "done"), executor: ex });
+    const reply = await agent.handle(session, "search notes for x");
+    const t = reply.trace!;
+    expect(t.decisions).toHaveLength(2);
+    expect(t.decisions[0]).toMatchObject({ index: 0, questionId: "tool-choice", choice: "notes.search", source: "fallback", reason: "shadow", confidence: 1, tainted: false, taintSources: [], sensitivity: "public", primary: { choice: "none", confidence: 0.6, calibration: { level: "exact" } } });
+    expect(t.decisions[0]!.state).toContain("Request: search notes for x");
+    expect(t.decisions[0]!.options.map((o) => o.key)).toContain("notes.search"); expect(t.decisions[0]!.options.at(-1)!.key).toBe("none");
+    expect(t.executions).toHaveLength(1);
+    expect(t.executions[0]).toMatchObject({ decisionIndex: 0, tool: "notes.search", args: { q: "x" }, policy: { decision: "allow" }, isError: false, result: "3 notes found", resultChars: 13, trust: ["trusted"], effects: ["read"] });
+    expect(t.executions[0]!.resultHash).toMatch(/^[0-9a-f]{12}$/); expect(t.executions[0]!.finishedAt).toBeGreaterThanOrEqual(t.executions[0]!.startedAt);
+    // The second decision saw the first result and chose to answer: no execution follows it.
+    expect(t.decisions[1]).toMatchObject({ index: 1, choice: "none" });
+  });
+
+  test("taint at decision time is recorded as it was: a decision made after reading untrusted content is marked, the earlier one is not", async () => {
+    const ex = executor({ "web.fetch": "page text" });
+    const { agent } = build({ decision: cascadeLike(["web.fetch", "notes.search", "none"]), llm: fakeLlm({ "web.fetch": { url: "https://x.test" }, "notes.search": { q: "y" } }, "ok"), executor: ex, approver: { approve: async () => true } });
+    const t = (await agent.handle(session, "fetch a page then search notes")).trace!;
+    expect(t.decisions.map((d) => d.tainted)).toEqual([false, true, true]);
+    expect(t.decisions[1]!.taintSources).toEqual(["web.fetch"]);
+    expect(t.executions[0]).toMatchObject({ tool: "web.fetch", approved: true, trust: ["untrusted"], policy: { decision: "ask" } });
+  });
+
+  test("a blocked or refused call has a decision but no execution; a failed call is recorded as an error", async () => {
+    const refused = build({ decision: cascadeLike(["mail.send"]), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: executor(), approver: { approve: async () => false } });
+    const r = (await refused.agent.handle(session, "send mail")).trace!;
+    expect(r.decisions).toHaveLength(1); expect(r.executions).toEqual([]);
+    const failing = build({ decision: cascadeLike(["notes.search", "none"]), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor({ "notes.search": "THROW" }) });
+    const f = (await failing.agent.handle(session, "search notes")).trace!;
+    expect(f.executions[0]).toMatchObject({ isError: true }); expect(f.executions[0]!.result).toContain("tool failed");
+  });
+
+  test("a plain engine without source information is recorded as unknown, and prior taint counts", async () => {
+    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor() });
+    const t = (await agent.handle(session, "search notes", { priorTaint: { tainted: true, sources: ["web.fetch"], sensitivity: "personal" } })).trace!;
+    expect(t.decisions[0]).toMatchObject({ source: "unknown", tainted: true, taintSources: ["web.fetch"], sensitivity: "personal" });
   });
 });

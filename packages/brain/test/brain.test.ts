@@ -17,6 +17,7 @@ import {
   chooseTool,
   clipState,
   expectedCalibrationError,
+  type ActivationEvidence,
   fillArguments,
   fitTemperature,
   temperatureScale,
@@ -455,22 +456,34 @@ describe("DecisionCascade", () => {
     expect(cascade.stats()).toMatchObject({ shadowSamples: 1, shadowAgreements: 1, agreementRate: 1 });
   });
 
-  test("activation needs enough samples and agreement", async () => {
+  const evidence = (over: Partial<ActivationEvidence> = {}): ActivationEvidence => ({ source: "verified-outcomes", ready: true, questions: ["tool-choice"], samples: 250, evaluatedAt: 1, reasons: [], ...over });
+
+  test("Safety/security invariant: agreement with the LLM, however high, never activates; only verified-outcome evidence or an explicit force does", async () => {
     const cascade = new DecisionCascade({ primary: fixed("a", 0.99), fallback: fixed("a", 1), shadow: true });
-    for (let i = 0; i < 10; i++) await cascade.decide(input, question);
-    expect(cascade.shouldActivate(10, 0.9)).toBe(true);
-    expect(cascade.shouldActivate(200, 0.9)).toBe(false);
-    expect(() => cascade.activate()).toThrow(DecisionError);
-    cascade.activate(true);
+    for (let i = 0; i < 300; i++) await cascade.decide(input, question);
+    expect(cascade.stats()).toMatchObject({ shadowSamples: 300, agreementRate: 1 });
+    expect(() => cascade.activate()).toThrow(/not enough verified outcomes/);
+    expect(() => cascade.activate(evidence({ ready: false, reasons: ["only 12 verified examples (need 200)"] }))).toThrow(/only 12 verified examples/);
+    expect(() => cascade.activate(evidence({ questions: [] }))).toThrow(DecisionError);
+    expect(() => cascade.activate({ ...evidence(), source: "llm-agreement" as never })).toThrow(DecisionError);
+    expect(cascade.shadowMode).toBe(true);
+    cascade.activate(evidence());
     expect(cascade.shadowMode).toBe(false);
     expect((await cascade.decide(input, question)).source).toBe("primary");
   });
 
-  test("disagreement keeps the primary from activating", async () => {
+  test("an explicit owner force still works and is the only way around missing evidence", () => {
+    const cascade = new DecisionCascade({ primary: fixed("a", 0.99), fallback: fixed("a", 1), shadow: true });
+    cascade.activate(undefined, true);
+    expect(cascade.shadowMode).toBe(false);
+  });
+
+  test("the decision carries what the primary said even when the fallback answered, so it can be scored against the outcome", async () => {
     const cascade = new DecisionCascade({ primary: fixed("a", 0.99), fallback: fixed("b", 1), shadow: true });
-    for (let i = 0; i < 10; i++) await cascade.decide(input, question);
-    expect(cascade.stats().agreementRate).toBe(0);
-    expect(cascade.shouldActivate(10, 0.9)).toBe(false);
+    const r = await cascade.decide(input, question);
+    expect(r).toMatchObject({ choice: "b", source: "fallback", primary: { choice: "a", confidence: 0.99 } });
+    const alone = await new DecisionCascade({ primary: { decide: async () => { throw new Error("down"); } }, fallback: fixed("b", 1), shadow: true }).decide(input, question);
+    expect(alone.primary).toBeUndefined();
   });
 });
 

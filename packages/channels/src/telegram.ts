@@ -8,7 +8,9 @@ export interface TelegramOptions {
   workspace: string;
   /** Only these Telegram user ids are served; everyone else gets no answer at all. */
   allowedUsers: readonly number[];
-  handle(session: SessionKey, text: string, approver: Approver): Promise<{ reply: string }>;
+  handle(session: SessionKey, text: string, approver: Approver): Promise<{ reply: string; runId?: string }>;
+  /** Records the owner's judgement of an answer. Throws when it is not theirs or was already judged. */
+  feedback?(session: SessionKey, runId: string, verdict: "success" | "failure"): void;
   approvals: PendingApprovals;
   fetch?: typeof fetch;
   queue?: LaneQueue;
@@ -73,7 +75,7 @@ export class TelegramChannel {
   }
 
   /** Sends the text; returns the id of the last message. Buttons carry the approval's id and nonce, so only that request can be answered with them. */
-  async send(chatId: number, text: string, approval?: Pick<ApprovalView, "id" | "nonce">): Promise<number | undefined> {
+  async send(chatId: number, text: string, approval?: Pick<ApprovalView, "id" | "nonce">, judge?: string): Promise<number | undefined> {
     const parts = splitMessage(text);
     let last: number | undefined;
     for (let i = 0; i < parts.length; i++) {
@@ -83,7 +85,9 @@ export class TelegramChannel {
         text: parts[i],
         ...(approval && isLast
           ? { reply_markup: { inline_keyboard: [[{ text: "✅ Allow", callback_data: `ap:${approval.id}:${approval.nonce}:y` }, { text: "❌ Deny", callback_data: `ap:${approval.id}:${approval.nonce}:n` }]] } }
-          : {}),
+          : judge && isLast
+            ? { reply_markup: { inline_keyboard: [[{ text: "👍", callback_data: `fb:${judge}:g` }, { text: "👎", callback_data: `fb:${judge}:b` }]] } }
+            : {}),
       });
       last = sent?.message_id;
     }
@@ -117,6 +121,15 @@ export class TelegramChannel {
       const cq = u.callback_query;
       if (!this.allowed.has(cq.from.id)) return;
       const session = this.session(cq.from.id);
+      const judged = /^fb:([A-Za-z0-9_~-]{1,64}):([gb])$/.exec(cq.data ?? "");
+      if (judged && this.o.feedback) {
+        let text = "Thank you";
+        try { this.o.feedback(session, judged[1]!, judged[2] === "g" ? "success" : "failure"); }
+        catch (error) { text = /already/.test((error as Error).message) ? "You already judged this answer" : "Nothing to judge"; }
+        await this.api("answerCallbackQuery", { callback_query_id: cq.id, text });
+        if (text === "Thank you" && cq.message?.message_id !== undefined) await this.api("editMessageReplyMarkup", { chat_id: cq.message.chat.id, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
+        return;
+      }
       const parsed = /^ap:([A-Za-z0-9_-]{1,32}):([A-Za-z0-9_-]{1,64}):([yn])$/.exec(cq.data ?? "");
       const result = parsed
         ? this.o.approvals.resolve({ session, approvalId: parsed[1]!, nonce: parsed[2]!, allow: parsed[3] === "y", resolver: { channel: "telegram", identity: String(cq.from.id) } })
@@ -147,8 +160,8 @@ export class TelegramChannel {
     }
     const approver = this.o.approvals.approverFor((text, view) => this.send(chatId, text, view));
     try {
-      const { reply } = await this.queue.enqueue(session, () => this.o.handle(session, m.text!, approver));
-      await this.send(chatId, reply);
+      const { reply, runId } = await this.queue.enqueue(session, () => this.o.handle(session, m.text!, approver));
+      await this.send(chatId, reply, undefined, this.o.feedback ? runId : undefined);
     } catch (error) {
       await this.send(chatId, error instanceof QueueOverflowError ? "Too many messages at once, please wait." : "Something went wrong.");
     }

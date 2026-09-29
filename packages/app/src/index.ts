@@ -7,3 +7,4 @@ export * from "./bootstrap.ts";
 export * from "./cli.ts";
 export * from "./targets.ts";
 export * from "./broker.ts";
+export * from "./verifiers.ts";

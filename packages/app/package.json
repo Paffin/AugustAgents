@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "august": "./src/bin.ts" },
+  "bin": {
+    "august": "./src/bin.ts"
+  },
   "dependencies": {
     "@august/agent": "workspace:*",
     "@august/brain": "workspace:*",
@@ -13,7 +15,10 @@
     "@august/discovery": "workspace:*",
     "@august/gateway": "workspace:*",
     "@august/mcp": "workspace:*",
-    "@august/policy": "workspace:*"
+    "@august/policy": "workspace:*",
+    "@august/learning": "workspace:*"
   },
-  "exports": { ".": "./src/index.ts" }
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }

@@ -6,9 +6,7 @@ import {
   InMemoryDecisionLog,
   LayaEngine,
   LayaTransportError,
-  fitTemperature,
   layaHttpTransport,
-  samplesFromLog,
   type DecisionQuestion,
 } from "../src/index.ts";
 
@@ -60,7 +58,7 @@ describe("LayaEngine with inexact answers", () => {
   });
 });
 
-describe("calibration from the decision log", () => {
+describe("the decision log (shadow evidence, not labels)", () => {
   test("the log keeps primary probabilities in option order", async () => {
     const log = new InMemoryDecisionLog();
     const primary = new LayaEngine(async () => ({ probs: { "fs.read": 0.6, none: 0.4 } }));
@@ -69,23 +67,12 @@ describe("calibration from the decision log", () => {
     expect(log.entries[0]!.primaryProbs).toEqual([0.6, 0.4]);
   });
 
-  test("samplesFromLog skips entries without probs or with an unknown label", () => {
-    const opts = question.options;
-    const s = samplesFromLog([
-      { options: opts, primaryProbs: [0.9, 0.1], fallbackChoice: "none" },
-      { options: opts, fallbackChoice: "none" },
-      { options: opts, primaryProbs: [0.9, 0.1], fallbackChoice: "ghost" },
-    ]);
-    expect(s).toEqual([{ probs: [0.9, 0.1], correct: 1 }]);
-    expect(fitTemperature(s)).toBeGreaterThan(1);
-  });
-
   test("cascade stats can be restored", () => {
     const c = new DecisionCascade({ primary: { decide: async () => ({ choice: "a", probs: {}, confidence: 1 }) }, fallback: { decide: async () => ({ choice: "a", probs: {}, confidence: 1 }) } });
     c.restore({ shadowSamples: 300, shadowAgreements: 290, total: -5 as number });
     expect(c.stats().shadowSamples).toBe(300);
     expect(c.stats().total).toBe(0);
-    expect(c.shouldActivate()).toBe(true);
+    expect(c.stats().agreementRate).toBeCloseTo(290 / 300);
   });
 });
 
