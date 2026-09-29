@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="460" viewBox="0 0 1280 460" role="img" aria-labelledby="title desc">
+  <title id="title">AugustAgents — агент следующего поколения</title>
+  <desc id="desc">Цель проекта — превращать опыт в проверенные действия: от LLM к навыку, workflow и рефлексу. Прототип.</desc>
+  <defs>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd27a"/>
+      <stop offset="1" stop-color="#f07a79"/>
+    </linearGradient>
+    <clipPath id="horizon"><rect x="0" y="0" width="160" height="110"/></clipPath>
+  </defs>
+  <rect width="1280" height="460" rx="20" fill="#192541"/>
+  <path d="M970 0H1280V460H790Z" fill="#233553"/>
+  <path d="M1140 0H1280V460H960Z" fill="#2c4360"/>
+  <g transform="translate(66 48)">
+    <circle cx="80" cy="110" r="42" fill="url(#sun)" clip-path="url(#horizon)"/>
+    <path d="M22 146L80 14L138 146M42 110H118" fill="none" stroke="#f9fbff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="260" y="118" fill="#ffffff" font-size="68" font-weight="700" letter-spacing="-2">AugustAgents</text>
+    <text x="263" y="159" fill="#d9e4f3" font-size="23">Агент следующего поколения</text>
+    <rect x="1033" y="58" width="174" height="40" rx="20" fill="#ffd27a"/>
+    <text x="1120" y="85" text-anchor="middle" fill="#192541" font-size="19" font-weight="700">Прототип</text>
+    <text x="68" y="252" fill="#ffffff" font-size="38" font-weight="600">Превращаем опыт</text>
+    <text x="68" y="299" fill="#ffffff" font-size="38" font-weight="600">в проверенные действия.</text>
+    <text x="70" y="347" fill="#d9e4f3" font-size="20">Цель проекта: меньше повторной работы, больше доказательств.</text>
+    <text x="70" y="412" fill="#d9e4f3" font-size="18">Ваши данные и модели. Полномочия определяете вы.</text>
+    <g font-size="19" font-weight="600" fill="#192541">
+      <rect x="825" y="181" width="134" height="43" rx="7" fill="#ffd27a"/>
+      <text x="892" y="209" text-anchor="middle">LLM</text>
+      <rect x="870" y="238" width="151" height="43" rx="7" fill="#ffe2a5"/>
+      <text x="945" y="266" text-anchor="middle">Навык</text>
+      <rect x="925" y="295" width="166" height="43" rx="7" fill="#fff0d1"/>
+      <text x="1008" y="323" text-anchor="middle">Workflow</text>
+      <rect x="983" y="352" width="168" height="43" rx="7" fill="#f9fbff"/>
+      <text x="1067" y="380" text-anchor="middle">Рефлекс</text>
+    </g>
+    <g fill="none" stroke="#d9e4f3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M986 201H1037V243M1029 235L1037 243L1045 235"/>
+      <path d="M1048 259H1098V300M1090 292L1098 300L1106 292"/>
+      <path d="M1117 316H1167V357M1159 349L1167 357L1175 349"/>
+    </g>
+  </g>
+</svg>
