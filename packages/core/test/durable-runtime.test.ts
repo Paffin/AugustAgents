@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,6 @@ import {
   IdempotencyConflictError,
   InvalidRunTransitionError,
   RunInProgressError,
-  UnsupportedBudgetError,
   makeSessionKey,
 } from "../src/index.ts";
 
@@ -30,7 +30,7 @@ describe("DurableRuntimeStore", () => {
     store.close();
     store = new DurableRuntimeStore(path);
     expect(store.messages(session).map((m) => [m.seq, m.role, m.content])).toEqual([[1, "user", "first"], [2, "assistant", "second"]]);
-    expect(store.getRun(persistedRun.id)?.budget).toMatchObject({ maxTokens: "unavailable", maxCostMicros: "unavailable" });
+    expect(store.getRun(persistedRun.id)?.budget).toEqual({ maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8 });
     store.close();
   });
 
@@ -138,13 +138,29 @@ describe("DurableRuntimeStore", () => {
     store.close();
   });
 
-  test("Safety/reliability invariant: unsupported usage budgets fail before run creation", () => {
+  test("Product behavior: token and monetary limits persist with the run and carry into a retry", () => {
     const store = new DurableRuntimeStore();
-    expect(() => store.startRun({ session, request: "x", budget: { maxTokens: 100 } })).toThrow(UnsupportedBudgetError);
-    expect(() => store.startRun({ session, request: "x", budget: { maxCostMicros: 10 } })).toThrow(UnsupportedBudgetError);
+    const { run } = store.startRun({ session, request: "limited", idempotencyKey: "a", budget: { maxTokens: 500, maxCostMicros: 2_000 } });
+    expect(run.budget).toEqual({ maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8, maxTokens: 500, maxCostMicros: 2_000 });
+    store.transition(run.id, "running"); store.finishRun(run.id, "failed", "stopped", { error: "token-budget" });
+    expect(store.retryRun(run.id, { idempotencyKey: "b" }).run.budget).toMatchObject({ maxTokens: 500, maxCostMicros: 2_000 });
+    store.close();
+  });
+
+  test("Safety/reliability invariant: invalid usage limits fail before run creation and legacy rows stay readable", () => {
+    const path = tempDb(); const store = new DurableRuntimeStore(path);
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => store.startRun({ session, request: "x", budget: { maxTokens: bad } })).toThrow(/positive integer/);
+      expect(() => store.startRun({ session, request: "x", budget: { maxCostMicros: bad } })).toThrow(/positive integer/);
+    }
     expect(store.listRuns()).toHaveLength(0);
-    const { run } = store.startRun({ session, request: "supported" }); expect(run.budget).toMatchObject({ maxTokens: "unavailable", maxCostMicros: "unavailable" });
+    const { run } = store.startRun({ session, request: "legacy" }); expect(store.getRun(run.id)!.budget.maxTokens).toBeUndefined();
+    const legacyFingerprint = createHash("sha256").update(JSON.stringify(["legacy", { maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8, maxTokens: "unavailable", maxCostMicros: "unavailable" }])).digest("hex");
+    expect(run.requestFingerprint).toBe(legacyFingerprint);
     expect(() => store.checkpoint(run.id, { phase: "before_decision", safeToResume: true, history: ["я".repeat(40_000)] })).toThrow(/too large/);
     store.close();
+    // Rows written before usage limits existed spell an absent limit "unavailable"; they still open, and their idempotency fingerprint is unchanged.
+    const db = new Database(path); db.run(`UPDATE runs SET budget_json='{"maxSteps":12,"maxWallMs":300000,"maxExternalEffects":8,"maxTokens":"unavailable","maxCostMicros":"unavailable"}'`); db.close();
+    const reopened = new DurableRuntimeStore(path); expect(reopened.getRun(run.id)!.budget.maxCostMicros).toBeUndefined(); reopened.close();
   });
 });

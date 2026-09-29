@@ -1,4 +1,5 @@
 import { validateArgs, type JsonSchema } from "./schema.ts";
+import { priceUsage, type Pricing, type TokenUsage } from "./usage.ts";
 import {
   DecisionError,
   validateQuestion,
@@ -16,6 +17,8 @@ export interface ChatMessage {
 export interface CompleteOptions {
   jsonSchema?: { name: string; schema: JsonSchema };
   maxTokens?: number;
+  /** Called with the usage the provider reported for the winning response. */
+  onUsage?: (usage: TokenUsage) => void;
 }
 
 export interface LlmProvider {
@@ -37,6 +40,8 @@ export interface OpenAiCompatibleOptions {
   name?: string;
   timeoutMs?: number;
   retries?: number;
+  /** Rates for this endpoint; without them usage is reported in tokens only. */
+  pricing?: Pricing;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -100,10 +105,23 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       const retryable = response.status === 429 || response.status >= 500;
       throw new LlmError(`${this.name}: HTTP ${response.status}`, retryable);
     }
-    const json = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
+    const json = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
     const content = json.choices?.[0]?.message?.content;
     if (typeof content !== "string" || content.length === 0) {
       throw new LlmError(`${this.name}: response had no text`, false);
+    }
+    const inputTokens = json.usage?.prompt_tokens;
+    const outputTokens = json.usage?.completion_tokens;
+    // Only what the provider states is counted; a missing or malformed figure is "not reported", never a guess.
+    if (opts.onUsage && Number.isSafeInteger(inputTokens) && (inputTokens as number) >= 0 && Number.isSafeInteger(outputTokens) && (outputTokens as number) >= 0) {
+      const pricing = this.options.pricing;
+      opts.onUsage({
+        provider: this.name,
+        model: this.options.model,
+        inputTokens: inputTokens as number,
+        outputTokens: outputTokens as number,
+        ...(pricing ? { costMicros: priceUsage(pricing, inputTokens as number, outputTokens as number), currency: pricing.currency } : {}),
+      });
     }
     return content;
   }

@@ -12,7 +12,11 @@ export interface AugustConfig {
     model: string;
     /** Name of the environment variable that holds the key. The key itself is never written to disk. */
     apiKeyEnv?: string;
+    /** Rates for this endpoint. Required for a monetary run budget; without it only tokens are accounted. */
+    pricing?: { currency: string; inputMicrosPerMillionTokens: number; outputMicrosPerMillionTokens: number };
   };
+  /** Default limits for every run; a per-call budget overrides them. Costs are millionths of `llm.pricing.currency`. */
+  runBudget?: { maxTokens?: number; maxCostMicros?: number };
   gateway: { port: number; token: string };
   /** Where the event journal and the decision log live. */
   dataDir: string;
@@ -137,6 +141,8 @@ export function parseConfig(value: unknown): AugustConfig {
   const token = str(c.gateway?.token, "gateway.token");
   if (token.length < 16) throw new ConfigError("gateway.token must be at least 16 characters");
 
+  const pricing = parsePricing(c.llm?.pricing);
+  const runBudget = parseRunBudget(c.runBudget, pricing !== undefined);
   const mcp = parseMcp(c.mcp);
   const sandbox = parseSandbox(c.sandbox ?? "auto", "sandbox");
   const skillsDir = c.skillsDir === undefined ? join(dirname(dataDir), "skills") : str(c.skillsDir, "skillsDir");
@@ -151,9 +157,35 @@ export function parseConfig(value: unknown): AugustConfig {
     registryUrl,
     laya: parseLaya(c.laya),
     channels: parseChannels(c.channels),
-    llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv },
+    llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, ...(pricing ? { pricing } : {}) },
+    ...(runBudget ? { runBudget } : {}),
     gateway: { port: port as number, token },
   };
+}
+
+function parsePricing(v: unknown): AugustConfig["llm"]["pricing"] {
+  if (v === undefined) return undefined;
+  const p = v as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") throw new ConfigError("llm.pricing must be an object");
+  if (typeof p.currency !== "string" || !/^[A-Z]{3,5}$/.test(p.currency)) throw new ConfigError("llm.pricing.currency must be a code like USD");
+  for (const k of ["inputMicrosPerMillionTokens", "outputMicrosPerMillionTokens"] as const) {
+    if (!Number.isSafeInteger(p[k]) || (p[k] as number) < 0) throw new ConfigError(`llm.pricing.${k} must be a non-negative integer`);
+  }
+  return { currency: p.currency, inputMicrosPerMillionTokens: p.inputMicrosPerMillionTokens as number, outputMicrosPerMillionTokens: p.outputMicrosPerMillionTokens as number };
+}
+
+function parseRunBudget(v: unknown, priced: boolean): AugustConfig["runBudget"] {
+  if (v === undefined) return undefined;
+  const b = v as Record<string, unknown> | null;
+  if (!b || typeof b !== "object") throw new ConfigError("runBudget must be an object");
+  const out: NonNullable<AugustConfig["runBudget"]> = {};
+  for (const k of ["maxTokens", "maxCostMicros"] as const) {
+    if (b[k] === undefined) continue;
+    if (!Number.isSafeInteger(b[k]) || (b[k] as number) < 1) throw new ConfigError(`runBudget.${k} must be a positive integer`);
+    out[k] = b[k] as number;
+  }
+  if (out.maxCostMicros !== undefined && !priced) throw new ConfigError("runBudget.maxCostMicros needs llm.pricing");
+  return out;
 }
 
 function parseSandbox(v: unknown, where: string): SandboxMode {

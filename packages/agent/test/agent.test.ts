@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventJournal, makeSessionKey } from "@august/core";
 import { CapabilityRegistry, type ToolDescriptor } from "@august/capabilities";
-import type { ChatMessage, DecisionEngine, LlmProvider } from "@august/brain";
+import { BudgetExceededError, UsageUnavailableError, type ChatMessage, type DecisionEngine, type LlmProvider } from "@august/brain";
 import { LoopGuard, PolicyEngine } from "@august/policy";
 import { AgentCheckpointError, AgentRuntime, type AgentRunEvent, type ApprovalRequest, type ToolExecutor } from "../src/index.ts";
 
@@ -344,6 +344,17 @@ describe("AgentRuntime", () => {
   test("a failing expander does not break the task", async () => {
     const { agent } = build({ decision: picks("none"), llm: fakeLlm({}, "ok"), executor: executor(), expandQuery: async () => Promise.reject(new Error("x")) });
     expect((await agent.handle(session, "привет")).reply).toBe("ok");
+  });
+
+  test("Safety/reliability invariant: usage limits stop the run from every model call site, including the expander and the final answer", async () => {
+    const stops = async (build_: Parameters<typeof build>[0], request = "привет") => build(build_).agent.handle(session, request);
+    const over = new BudgetExceededError("tokens", 120, 100);
+    // The expander's own failures are tolerated, a budget stop is not.
+    expect(await stops({ decision: picks("none"), llm: fakeLlm({}, "ok"), executor: executor(), expandQuery: async () => { throw over; } })).toMatchObject({ stopReason: "token-budget", reply: "Stopped: token-budget." });
+    expect(await stops({ decision: picks("none"), llm: { name: "l", complete: async () => { throw new BudgetExceededError("cost", 9, 5); } }, executor: executor() })).toMatchObject({ stopReason: "cost-budget" });
+    expect(await stops({ decision: picks("none"), llm: { name: "l", complete: async () => { throw new UsageUnavailableError("usage"); } }, executor: executor() })).toMatchObject({ stopReason: "usage-unreported" });
+    const ex = executor(); const noTool = await stops({ decision: { decide: async () => { throw new BudgetExceededError("tokens", 1, 1); } }, llm: fakeLlm({}, "x"), executor: ex }, "search local notes");
+    expect(noTool.stopReason).toBe("token-budget"); expect(ex.calls).toHaveLength(0);
   });
 
   test("the approver sees what the executor says the call will do", async () => {

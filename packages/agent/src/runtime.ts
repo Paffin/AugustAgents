@@ -6,6 +6,8 @@ import {
   type ToolDescriptor,
 } from "@august/capabilities";
 import {
+  BudgetExceededError,
+  UsageUnavailableError,
   chooseTool,
   fillArguments,
   type DecisionEngine,
@@ -77,7 +79,7 @@ export interface AgentReply {
   reply: string;
   steps: number;
   tainted: boolean;
-  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget";
+  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget" | "usage-unreported";
   error?: string;
 }
 
@@ -105,6 +107,12 @@ export interface AgentExecutionContext {
 
 class RunControlError extends Error {
   constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>) { super(reason); this.name = "RunControlError"; }
+}
+/** Usage limits stop the run wherever the model call happened, including inside decision engines that otherwise fall back. */
+function budgetStop(error: unknown): NonNullable<AgentReply["stopReason"]> | undefined {
+  if (error instanceof BudgetExceededError) return error.dimension === "tokens" ? "token-budget" : "cost-budget";
+  if (error instanceof UsageUnavailableError) return "usage-unreported";
+  return undefined;
 }
 export class AgentCheckpointError extends Error { constructor(cause: unknown) { super(`checkpoint observer failed: ${(cause as Error).message}`); this.name = "AgentCheckpointError"; } }
 
@@ -186,7 +194,8 @@ export class AgentRuntime {
             const words = expansion;
             shortlist = index.search(`${text}\n${words}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
             log("shortlist.expanded", { before, after: shortlist.length });
-          } catch {
+          } catch (error) {
+            if (budgetStop(error)) throw error;
             log("shortlist.expand-failed", {});
           }
         }
@@ -300,8 +309,10 @@ export class AgentRuntime {
         );
         await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
       }
-    } catch (error) {
-      if (error instanceof AgentCheckpointError) throw error;
+    } catch (caught) {
+      if (caught instanceof AgentCheckpointError) throw caught;
+      const stopped = budgetStop(caught);
+      const error = stopped ? new RunControlError(stopped) : caught;
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });

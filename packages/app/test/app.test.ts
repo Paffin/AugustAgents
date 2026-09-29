@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
 import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
-import { IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
+import { IdempotencyConflictError, RunInProgressError, UnsupportedBudgetError, makeSessionKey } from "@august/core";
 import { LoopGuard } from "@august/policy";
 import {
   BuiltinExecutor,
@@ -257,6 +257,106 @@ describe("createApp", () => {
     expect((await app.handle(runtimeSession, "Какое кодовое слово?")).reply).toBe("NEPTUNE-7429");
     expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
     app.close();
+  });
+
+  // Real OpenAiCompatibleProvider over a fake /chat/completions endpoint that reports usage the way providers do.
+  function usageEndpoint(perCall: { prompt: number; completion: number } | undefined, seenBodies: Array<Record<string, unknown>> = []) {
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      if (!String(input).endsWith("/chat/completions")) return new Response("not found", { status: 404 });
+      const body = JSON.parse(String(init!.body)) as { response_format?: { json_schema?: { name?: string } } } & Record<string, unknown>; seenBodies.push(body);
+      const name = body.response_format?.json_schema?.name;
+      const content = name === "decision" ? JSON.stringify({ choice: "none" }) : name === "arguments" ? "{}" : "готово";
+      return new Response(JSON.stringify({ choices: [{ message: { content } }], ...(perCall ? { usage: { prompt_tokens: perCall.prompt, completion_tokens: perCall.completion } } : {}) }));
+    }) as unknown as typeof fetch;
+  }
+  const meteredConfig = (home: string, extra: Record<string, unknown> = {}) => parseConfig({ ...defaultConfig(home), llm: { baseUrl: "http://127.0.0.1:9/v1", model: "local-m", pricing: { currency: "USD", inputMicrosPerMillionTokens: 1_000_000, outputMicrosPerMillionTokens: 2_000_000 } }, ...extra });
+
+  test("Product behavior: provider-reported usage and price are recorded per run and survive restart", async () => {
+    const home = tmp(); const cfg = meteredConfig(home);
+    let app = createApp(cfg, { env: {}, fetch: usageEndpoint({ prompt: 100, completion: 10 }) });
+    const reply = await app.handle(runtimeSession, "привет"); const { totals, entries } = app.runUsage(reply.runId);
+    expect(reply.error).toBeUndefined(); expect(totals.calls).toBeGreaterThanOrEqual(2);
+    expect(totals).toMatchObject({ inputTokens: 100 * totals.calls, outputTokens: 10 * totals.calls, costMicros: 120 * totals.calls, unreportedCalls: 0 });
+    expect(entries.every((e) => e.provider === "local-m" && e.currency === "USD" && e.costMicros === 120)).toBe(true);
+    app.close(); app = createApp(cfg, { env: {}, fetch: usageEndpoint(undefined) });
+    expect(app.runUsage(reply.runId).totals).toEqual(totals);
+    expect(readFileSync(join(cfg.dataDir, "usage.db")).includes("sk-")).toBe(false);
+    app.close();
+  });
+
+  test("Safety/reliability invariant: a token budget stops the run durably and a retry starts from its own zero", async () => {
+    const home = tmp(); const cfg = meteredConfig(home); const bodies: Array<Record<string, unknown>> = [];
+    const app = createApp(cfg, { env: {}, fetch: usageEndpoint({ prompt: 400, completion: 100 }, bodies) });
+    const stopped = await app.handle(runtimeSession, "дорого", undefined, { idempotencyKey: "k1", budget: { maxTokens: 700 } });
+    expect(stopped).toMatchObject({ stopReason: "token-budget" });
+    const run = app.getRun(stopped.runId)!; expect(run).toMatchObject({ state: "failed", error: "token-budget" }); expect(run.budget.maxTokens).toBe(700);
+    const usage = app.runUsage(stopped.runId).totals; expect(usage.calls).toBe(2); expect(usage.inputTokens + usage.outputTokens).toBe(1000);
+    const callsBefore = bodies.length;
+    const retried = await app.retryRun(stopped.runId, { idempotencyKey: "k2", budget: { maxTokens: 700 } });
+    expect(retried.runId).not.toBe(stopped.runId); expect(app.runUsage(stopped.runId).totals.calls).toBe(2); expect(bodies.length).toBeGreaterThan(callsBefore);
+    app.close();
+  });
+
+  test("Safety/reliability invariant: a monetary budget stops the run and cannot be set without configured pricing", async () => {
+    const home = tmp(); const app = createApp(meteredConfig(home), { env: {}, fetch: usageEndpoint({ prompt: 1000, completion: 500 }) });
+    // 1000 in + 500 out = 1000 + 1000 = 2000 micros per call.
+    const stopped = await app.handle(runtimeSession, "деньги", undefined, { budget: { maxCostMicros: 2500 } });
+    expect(stopped.stopReason).toBe("cost-budget"); expect(app.getRun(stopped.runId)).toMatchObject({ state: "failed", error: "cost-budget" });
+    expect(app.runUsage(stopped.runId).totals.costMicros).toBe(4000);
+    app.close();
+    const unpriced = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, fetch: usageEndpoint({ prompt: 1, completion: 1 }) });
+    await expect(unpriced.handle(runtimeSession, "x", undefined, { budget: { maxCostMicros: 10 } })).rejects.toBeInstanceOf(UnsupportedBudgetError);
+    expect(unpriced.listRuns()).toHaveLength(0); unpriced.close();
+  });
+
+  test("Safety/reliability invariant: a provider that reports no usage fails a budgeted run closed and is counted when unbudgeted", async () => {
+    const home = tmp(); const app = createApp(meteredConfig(home), { env: {}, fetch: usageEndpoint(undefined) });
+    const budgeted = await app.handle(runtimeSession, "a", undefined, { budget: { maxTokens: 10_000 } });
+    expect(budgeted.stopReason).toBe("usage-unreported"); expect(app.getRun(budgeted.runId)!.state).toBe("failed");
+    const free = await app.handle(runtimeSession, "b"); expect(free.error).toBeUndefined();
+    expect(app.runUsage(free.runId).totals).toMatchObject({ inputTokens: 0, costMicros: 0 }); expect(app.runUsage(free.runId).totals.unreportedCalls).toBeGreaterThanOrEqual(2);
+    app.close();
+  });
+
+  test("Product behavior: config runBudget applies to every run unless the call overrides it", async () => {
+    const home = tmp(); const app = createApp(meteredConfig(home, { runBudget: { maxTokens: 300 } }), { env: {}, fetch: usageEndpoint({ prompt: 200, completion: 50 }) });
+    expect((await app.handle(runtimeSession, "a")).stopReason).toBe("token-budget");
+    const overridden = await app.handle(runtimeSession, "b", undefined, { budget: { maxTokens: 100_000 } }); expect(overridden.stopReason).toBeUndefined();
+    app.close();
+  });
+
+  test("Safety/reliability invariant: the completion is clamped to the tokens a run has left", async () => {
+    const bodies: Array<Record<string, unknown>> = []; const app = createApp(meteredConfig(tmp()), { env: {}, fetch: usageEndpoint({ prompt: 500, completion: 0 }, bodies) });
+    const stopped = await app.handle(runtimeSession, "мало", undefined, { budget: { maxTokens: 520 } });
+    expect(stopped.stopReason).toBe("token-budget"); expect(bodies).toHaveLength(2); expect(bodies[1]!.max_tokens).toBe(20);
+    app.close();
+  });
+
+  test("Safety/reliability invariant: a paused run resumes against the tokens it already used", async () => {
+    const cfg = meteredConfig(tmp()); const calls: number[] = []; let gate!: () => void; const held = new Promise<void>((resolve) => { gate = resolve; }); let second!: () => void; const secondCall = new Promise<void>((resolve) => { second = resolve; });
+    const inner = usageEndpoint({ prompt: 300, completion: 0 });
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => { calls.push(calls.length + 1); if (calls.length === 2) { second(); await held; } return inner(input, init); }) as unknown as typeof fetch;
+    const app = createApp(cfg, { env: {}, fetch: fetchFn });
+    const running = app.handle(runtimeSession, "долго", undefined, { budget: { maxTokens: 700 } }); await secondCall;
+    const pausing = app.pauseRun((app.listRuns({ states: ["running", "waiting_external"] })[0]!).id); gate();
+    const paused = await pausing; await running; expect(paused.state).toBe("paused"); expect(app.runUsage(paused.id).totals).toMatchObject({ calls: 2, inputTokens: 600 });
+    const resumed = await app.resumeRun(paused.id);
+    // 600 tokens were already spent, so the very next call crosses 700. A fresh meter would have allowed three more calls.
+    expect(resumed.stopReason).toBe("token-budget"); expect(app.runUsage(paused.id).totals).toMatchObject({ calls: 3, inputTokens: 900 });
+    app.close();
+  });
+
+  test("config: pricing and runBudget are validated", () => {
+    const base = defaultConfig("/home/u");
+    const bad = (patch: Record<string, unknown>) => () => parseConfig({ ...base, ...patch });
+    const pricing = { currency: "USD", inputMicrosPerMillionTokens: 1, outputMicrosPerMillionTokens: 2 };
+    expect(parseConfig({ ...base, llm: { ...base.llm, pricing }, runBudget: { maxTokens: 5, maxCostMicros: 9 } })).toMatchObject({ llm: { pricing }, runBudget: { maxTokens: 5, maxCostMicros: 9 } });
+    expect(bad({ llm: { ...base.llm, pricing: { ...pricing, currency: "usd" } } })).toThrow(ConfigError);
+    expect(bad({ llm: { ...base.llm, pricing: { ...pricing, inputMicrosPerMillionTokens: -1 } } })).toThrow(ConfigError);
+    expect(bad({ llm: { ...base.llm, pricing: { ...pricing, outputMicrosPerMillionTokens: 1.5 } } })).toThrow(ConfigError);
+    expect(bad({ runBudget: { maxTokens: 0 } })).toThrow(/positive integer/);
+    expect(bad({ runBudget: { maxCostMicros: 5 } })).toThrow(/needs llm.pricing/);
+    expect(parseConfig(base)).not.toHaveProperty("runBudget");
   });
 
   test("Safety/reliability invariant: App idempotency blocks active/conflicting duplicates and replays completed replies", async () => {

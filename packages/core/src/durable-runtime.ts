@@ -7,7 +7,7 @@ export type MessageRole = "user" | "assistant";
 export type RunState = "created" | "running" | "waiting_approval" | "waiting_external" | "paused" | "recovering" | "verifying" | "completed" | "failed" | "cancelled";
 
 export interface ConversationMessage { session: SessionKey; seq: number; role: MessageRole; content: string; createdAt: number }
-export interface RunBudget { maxSteps: number; maxWallMs: number; maxExternalEffects: number; maxTokens: "unavailable"; maxCostMicros: "unavailable" }
+export interface RunBudget { maxSteps: number; maxWallMs: number; maxExternalEffects: number; maxTokens?: number; maxCostMicros?: number }
 export interface RunBudgetRequest { maxSteps?: number; maxWallMs?: number; maxExternalEffects?: number; maxTokens?: number; maxCostMicros?: number }
 export interface RunCheckpoint { phase: "before_decision" | "waiting_approval" | "tool_started" | "tool_finished"; safeToResume: boolean; history: string[]; taint?: unknown; loop?: unknown; steps?: number; externalEffects?: number; lastTool?: string; argsHash?: string }
 export interface DurableRun {
@@ -22,9 +22,9 @@ export interface DurableRuntimeStoreOptions { readOnly?: boolean }
 export class IdempotencyConflictError extends Error { constructor(public readonly runId: string) { super(`idempotency key belongs to another request (${runId})`); this.name = "IdempotencyConflictError"; } }
 export class RunInProgressError extends Error { constructor(public readonly runId: string, public readonly state: RunState) { super(`run ${runId} is already ${state}`); this.name = "RunInProgressError"; } }
 export class InvalidRunTransitionError extends Error { constructor(from: RunState, to: RunState) { super(`invalid run transition ${from} -> ${to}`); this.name = "InvalidRunTransitionError"; } }
-export class UnsupportedBudgetError extends Error { constructor(dimension: string) { super(`${dimension} budget requires provider usage accounting`); this.name = "UnsupportedBudgetError"; } }
+export class UnsupportedBudgetError extends Error { constructor(dimension: string, reason = "requires provider usage accounting") { super(`${dimension} budget ${reason}`); this.name = "UnsupportedBudgetError"; } }
 
-const DEFAULT_BUDGET: RunBudget = { maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8, maxTokens: "unavailable", maxCostMicros: "unavailable" };
+const DEFAULT_BUDGET: RunBudget = { maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8 };
 const TERMINAL = new Set<RunState>(["completed", "failed", "cancelled"]);
 const TRANSITIONS: Record<RunState, ReadonlySet<RunState>> = {
   created: new Set(["running", "recovering", "cancelled"]),
@@ -37,14 +37,19 @@ const TRANSITIONS: Record<RunState, ReadonlySet<RunState>> = {
   completed: new Set(), failed: new Set(), cancelled: new Set(),
 };
 
+function positiveSafeInteger(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) > 0; }
 function normalizeBudget(partial: RunBudgetRequest = {}): RunBudget {
-  if (partial.maxTokens !== undefined) throw new UnsupportedBudgetError("token");
-  if (partial.maxCostMicros !== undefined) throw new UnsupportedBudgetError("monetary");
-  const b: RunBudget = { maxSteps: partial.maxSteps ?? DEFAULT_BUDGET.maxSteps, maxWallMs: partial.maxWallMs ?? DEFAULT_BUDGET.maxWallMs, maxExternalEffects: partial.maxExternalEffects ?? DEFAULT_BUDGET.maxExternalEffects, maxTokens: "unavailable", maxCostMicros: "unavailable" };
+  const b: RunBudget = { maxSteps: partial.maxSteps ?? DEFAULT_BUDGET.maxSteps, maxWallMs: partial.maxWallMs ?? DEFAULT_BUDGET.maxWallMs, maxExternalEffects: partial.maxExternalEffects ?? DEFAULT_BUDGET.maxExternalEffects };
   for (const name of ["maxSteps", "maxWallMs", "maxExternalEffects"] as const) if (!Number.isInteger(b[name]) || b[name] <= 0) throw new Error(`${name} must be a positive integer`);
+  for (const name of ["maxTokens", "maxCostMicros"] as const) {
+    if (partial[name] === undefined) continue;
+    if (!positiveSafeInteger(partial[name])) throw new Error(`${name} must be a positive integer`);
+    b[name] = partial[name];
+  }
   return b;
 }
-function fingerprint(request: string, budget: RunBudget): string { return createHash("sha256").update(JSON.stringify([request, budget])).digest("hex"); }
+// Absent usage limits keep their historical "unavailable" spelling so idempotency keys stored before usage budgets existed still match.
+function fingerprint(request: string, budget: RunBudget): string { return createHash("sha256").update(JSON.stringify([request, { ...budget, maxTokens: budget.maxTokens ?? "unavailable", maxCostMicros: budget.maxCostMicros ?? "unavailable" }])).digest("hex"); }
 
 /**
  * Read-only opens load a private in-memory image of the file: the SQLite URI
@@ -132,12 +137,18 @@ export class DurableRuntimeStore {
   }
   checkpoint(id: string, value: RunCheckpoint, now = Date.now()): DurableRun { const json = JSON.stringify(value); if (Buffer.byteLength(json, "utf8") > 65_536) throw new Error("checkpoint is too large"); this.db.query("UPDATE runs SET checkpoint_json=?,steps=COALESCE(?,steps),external_effects=COALESCE(?,external_effects),updated_at=? WHERE id=?").run(json, value.steps ?? null, value.externalEffects ?? null, now, id); const run = this.getRun(id); if (!run) throw new Error(`unknown run ${id}`); return run; }
   finishRun(id: string, to: "completed" | "failed" | "cancelled" | "paused", reply: string, patch: { error?: string; steps?: number; externalEffects?: number; now?: number } = {}): DurableRun { return this.db.transaction(() => { let run = this.getRun(id); if (!run) throw new Error(`unknown run ${id}`); if (to === "completed" && run.state !== "verifying") { if (!TRANSITIONS[run.state].has("verifying")) throw new InvalidRunTransitionError(run.state, "verifying"); this.db.query("UPDATE runs SET state='verifying' WHERE id=?").run(id); run = { ...run, state: "verifying" }; } if (!TRANSITIONS[run.state].has(to)) throw new InvalidRunTransitionError(run.state, to); const seq = (this.db.query("SELECT COALESCE(MAX(seq),0)+1 seq FROM messages WHERE session=?").get(run.session) as { seq: number }).seq; this.db.query("INSERT INTO messages VALUES (?,?,?,?,?)").run(run.session, seq, "assistant", reply, patch.now ?? Date.now()); this.db.query("UPDATE runs SET state=?,reply=?,error=COALESCE(?,error),steps=COALESCE(?,steps),external_effects=COALESCE(?,external_effects),updated_at=? WHERE id=?").run(to, reply, patch.error ?? null, patch.steps ?? null, patch.externalEffects ?? null, patch.now ?? Date.now(), id); return this.getRun(id)!; }).immediate(); }
-  retryRun(id: string, options: { idempotencyKey?: string; budget?: RunBudgetRequest; now?: number } = {}): { run: DurableRun; replayed: boolean } { const old = this.getRun(id); if (!old || !["failed", "cancelled"].includes(old.state)) throw new Error("only failed or cancelled runs can retry"); if (!options.idempotencyKey) throw new Error("retry requires a new idempotency key"); const used = this.db.query("SELECT id FROM runs WHERE session=? AND idempotency_key=?").get(old.session, options.idempotencyKey) as { id: string } | null; if (used) throw new IdempotencyConflictError(used.id); return this.startRun({ session: old.session, request: old.request, idempotencyKey: options.idempotencyKey, budget: options.budget ?? { maxSteps: old.budget.maxSteps, maxWallMs: old.budget.maxWallMs, maxExternalEffects: old.budget.maxExternalEffects }, retryOf: old.id, now: options.now }); }
+  retryRun(id: string, options: { idempotencyKey?: string; budget?: RunBudgetRequest; now?: number } = {}): { run: DurableRun; replayed: boolean } { const old = this.getRun(id); if (!old || !["failed", "cancelled"].includes(old.state)) throw new Error("only failed or cancelled runs can retry"); if (!options.idempotencyKey) throw new Error("retry requires a new idempotency key"); const used = this.db.query("SELECT id FROM runs WHERE session=? AND idempotency_key=?").get(old.session, options.idempotencyKey) as { id: string } | null; if (used) throw new IdempotencyConflictError(used.id); return this.startRun({ session: old.session, request: old.request, idempotencyKey: options.idempotencyKey, budget: options.budget ?? { ...old.budget }, retryOf: old.id, now: options.now }); }
   resolveRun(id: string, resolution: "abandon" | "confirm_not_executed"): DurableRun { const run = this.getRun(id); if (!run || run.state !== "recovering") throw new Error("run is not recovering"); if (resolution === "abandon") return this.transition(id, "failed", { error: "owner abandoned ambiguous run" }); const cp = run.checkpoint; if (!cp || cp.phase !== "tool_started") throw new Error("run has no ambiguous tool checkpoint"); this.checkpoint(id, { ...cp, phase: "before_decision", safeToResume: true }); return this.transition(id, "paused"); }
   close(): void { this.db.close(); }
 }
 
 interface MessageRow { session: string; seq: number; role: MessageRole; content: string; created_at: number }
 interface RunRow { id: string; session: string; state: RunState; request: string; request_fingerprint: string; idempotency_key: string | null; reply: string | null; error: string | null; budget_json: string; steps: number; external_effects: number; checkpoint_json: string | null; retry_of: string | null; created_at: number; updated_at: number }
-function parseBudget(json: string): RunBudget { const b = JSON.parse(json) as Partial<RunBudget>; if (![b.maxSteps, b.maxWallMs, b.maxExternalEffects].every((value) => Number.isInteger(value) && (value as number) > 0) || b.maxTokens !== "unavailable" || b.maxCostMicros !== "unavailable") throw new Error("invalid persisted run budget"); return b as RunBudget; }
+function parseBudget(json: string): RunBudget {
+  const b = JSON.parse(json) as Record<string, unknown>;
+  if (![b.maxSteps, b.maxWallMs, b.maxExternalEffects].every((value) => Number.isInteger(value) && (value as number) > 0)) throw new Error("invalid persisted run budget");
+  const limit = (value: unknown): number | undefined => { if (value === undefined || value === "unavailable") return undefined; if (!positiveSafeInteger(value)) throw new Error("invalid persisted run budget"); return value; };
+  const maxTokens = limit(b.maxTokens), maxCostMicros = limit(b.maxCostMicros);
+  return { maxSteps: b.maxSteps as number, maxWallMs: b.maxWallMs as number, maxExternalEffects: b.maxExternalEffects as number, ...(maxTokens === undefined ? {} : { maxTokens }), ...(maxCostMicros === undefined ? {} : { maxCostMicros }) };
+}
 function toRun(r: RunRow): DurableRun { return { id:r.id, session:r.session as SessionKey, state:r.state, request:r.request, requestFingerprint:r.request_fingerprint, idempotencyKey:r.idempotency_key ?? undefined, reply:r.reply ?? undefined, error:r.error ?? undefined, budget:parseBudget(r.budget_json), steps:r.steps, externalEffects:r.external_effects, checkpoint:r.checkpoint_json ? JSON.parse(r.checkpoint_json) as RunCheckpoint : undefined, retryOf:r.retry_of ?? undefined, createdAt:r.created_at, updatedAt:r.updated_at }; }

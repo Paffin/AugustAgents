@@ -7,13 +7,16 @@ import {
   LayaEngine,
   LlmChoiceEngine,
   LlmQueryExpander,
+  MeteredProvider,
   OpenAiCompatibleProvider,
+  RunMeter,
+  withUsageMeter,
   layaHttpTransport,
   type DecisionEngine,
   type LlmProvider,
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
-import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, type SessionKey } from "@august/core";
+import { DurableRuntimeStore, RunUsageLedger, UnsupportedBudgetError, type LedgerEntry, type RunUsageTotals, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, type SessionKey } from "@august/core";
 import { RegistryClient, type InstallPlan } from "@august/discovery";
 import { McpHost, detectSandbox, sandboxHome, sandboxSpec, type SandboxKind } from "@august/mcp";
 import { PolicyEngine } from "@august/policy";
@@ -61,6 +64,8 @@ export interface App {
   /** Handle one message and save the decision statistics. */
   handle(session: SessionKey, text: string, approver?: Approver, options?: HandleOptions): Promise<DurableAgentReply>;
   getRun(id: string): DurableRun | undefined;
+  /** What the provider reported for this run, per call and in total. */
+  runUsage(id: string): { totals: RunUsageTotals; entries: LedgerEntry[] };
   listRuns(options?: RunListOptions): DurableRun[];
   pauseRun(id: string): Promise<DurableRun>;
   cancelRun(id: string): Promise<DurableRun>;
@@ -82,7 +87,7 @@ export function createLlm(config: AugustConfig, deps: Pick<AppDeps, "env" | "fet
   if (keyName && !apiKey && !isLocal(config.llm.baseUrl)) {
     throw new ConfigError(`no API key: run "august secret set ${keyName}" (or export ${keyName})`);
   }
-  return new OpenAiCompatibleProvider({ baseUrl: config.llm.baseUrl, model: config.llm.model, apiKey, fetch: deps.fetch });
+  return new OpenAiCompatibleProvider({ baseUrl: config.llm.baseUrl, model: config.llm.model, apiKey, fetch: deps.fetch, pricing: config.llm.pricing });
 }
 
 function readStats(path: string): Record<string, number> {
@@ -112,7 +117,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const home = deps.home ?? process.env.HOME ?? dirname(config.root);
 
   const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir));
-  const llm = deps.llm ?? createLlm(config, deps, secrets);
+  const llm = new MeteredProvider(deps.llm ?? createLlm(config, deps, secrets));
 
   // Laya decides when a sidecar is configured; until then a heuristic stands in.
   // Either way the cascade starts in shadow mode and earns its way out.
@@ -200,6 +205,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
 
   const journal = new EventJournal(join(config.dataDir, "journal.db"));
   const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"));
+  const usage = new RunUsageLedger(join(config.dataDir, "usage.db"));
   const policy = new PolicyEngine();
   const registryHost = new URL(config.registryUrl).host;
   // Searching the public registry is routine; a standing mandate covers it (never from a tainted context).
@@ -236,6 +242,11 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
 
   const redactCheckpoint = (text: string) => [...checkpointSecretNames].reduce((value, name) => { const secret = resolveSecret(name, secrets, deps.env); return secret ? value.replaceAll(secret, "[redacted secret]") : value; }, text);
 
+  const withDefaultBudget = (budget: RunBudgetRequest = {}): RunBudgetRequest => {
+    const merged = { ...config.runBudget, ...budget };
+    if (merged.maxCostMicros !== undefined && !config.llm.pricing) throw new UnsupportedBudgetError("monetary", "needs llm.pricing");
+    return merged;
+  };
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
   const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
@@ -248,7 +259,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       run = runs.transition(run.id, "running");
       const checkpoint = run.checkpoint as (AgentCheckpointState & typeof run.checkpoint) | undefined;
       if (checkpoint && (!checkpoint.taint || !checkpoint.loop || checkpoint.steps === undefined || checkpoint.externalEffects === undefined)) throw new Error("run checkpoint is missing safety state");
-      let reply = await agent.handle(run.session, run.request, {
+      const meter = new RunMeter({ limits: { maxTokens: run.budget.maxTokens, maxCostMicros: run.budget.maxCostMicros }, totals: usage.totals(run.id), persist: (u) => usage.append(run.id, u), persistUnreported: (provider) => usage.appendUnreported(run.id, provider) });
+      let reply = await withUsageMeter(meter, () => agent.handle(run.session, run.request, {
         priorMessages, priorTaint: { tainted: priorTaintSources.length > 0, sources: priorTaintSources }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onEvent: (event) => {
@@ -260,7 +272,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
           else if (event.phase === "tool_finished" && current.state === "waiting_external") runs.transition(run.id, "running");
           else if (event.phase === "before_decision" && current.state === "waiting_approval") runs.transition(run.id, "running");
         },
-      });
+      }));
       const current = runs.getRun(run.id)!;
       if (entry.desired) reply = { ...reply, reply: `Stopped: ${entry.desired}.`, stopReason: "cancelled" };
       if (reply.stopReason) {
@@ -295,17 +307,18 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     secrets,
     sandbox,
     async handle(session, text, perMessage, options = {}) {
-      const started = runs.startRun({ session, request: text, ...options });
+      const started = runs.startRun({ session, request: text, budget: withDefaultBudget(options.budget), ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) });
       if (started.replayed) { if (started.run.reply === undefined) throw new Error("completed run has no reply"); return { reply: started.run.reply, steps: started.run.steps, tainted: (started.run.checkpoint?.taint as { tainted?: boolean } | undefined)?.tainted === true, runId: started.run.id, replayed: true }; }
       const prior = runs.stateView(session); const priorTaintSources = runs.taintSources(session); runs.appendMessage(session, "user", text);
       return execute(started.run, perMessage, prior, priorTaintSources);
     },
     getRun: (id) => runs.getRun(id),
+    runUsage: (id) => ({ totals: usage.totals(id), entries: usage.entries(id) }),
     listRuns: (options = {}) => runs.listRuns(options.session, options.limit, options.states),
     pauseRun: (id) => stop(id, "paused"),
     cancelRun: (id) => stop(id, "cancelled"),
     resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run), runs.taintSources(run.session)); },
-    retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run), runs.taintSources(run.session)); },
+    retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, { ...options, budget: options.budget ? withDefaultBudget(options.budget) : undefined }).run; return execute(run, perMessage, priorFor(run), runs.taintSources(run.session)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };
@@ -321,6 +334,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     close() {
       mcp.closeAll();
       runs.close();
+      usage.close();
       saveStats();
     },
   };
