@@ -98,6 +98,7 @@ export interface AgentExecutionContext {
   deadlineAt?: number;
   maxSteps?: number;
   maxExternalEffects?: number;
+  redactCheckpoint?: (text: string) => string;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
 }
 
@@ -112,8 +113,14 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 12);
 }
 
-function boundedCheckpointHistory(history: readonly string[]): string[] {
-  return history.slice(-8).map((item) => `[checkpoint item sha256:${createHash("sha256").update(item).digest("hex")}]`);
+function safeCheckpointItem(item: string, redact?: (text: string) => string): string {
+  if (!redact) return `[checkpoint item sha256:${createHash("sha256").update(item).digest("hex")}]`;
+  return redact(item).replace(/\bsk-[A-Za-z0-9_-]+\b|\bBearer\s+\S+|\b[A-Za-z0-9_+/=-]{32,}\b/g, "[redacted secret]");
+}
+function boundedCheckpointHistory(history: readonly string[], redact?: (text: string) => string): string[] {
+  const selected: string[] = []; let left = 16_000;
+  for (const item of history.slice(-8).map((value) => safeCheckpointItem(value, redact)).reverse()) { const separator = selected.length ? 1 : 0; if (item.length + separator <= left) { selected.push(item); left -= item.length + separator; continue; } if (!selected.length && left > 28) selected.push(`[earlier content truncated]${item.slice(-(left - 27))}`); break; }
+  return selected.reverse();
 }
 
 /**
@@ -141,9 +148,9 @@ export class AgentRuntime {
     if (context.checkpoint) guard.restore(context.checkpoint.loop);
     if (context.maxSteps !== undefined && (!Number.isInteger(context.maxSteps) || context.maxSteps < 1)) throw new Error("invalid maxSteps");
     if (context.maxExternalEffects !== undefined && (!Number.isInteger(context.maxExternalEffects) || context.maxExternalEffects < 0)) throw new Error("invalid maxExternalEffects");
-    if (context.checkpoint && (!Array.isArray(context.checkpoint.history) || context.checkpoint.history.some((line) => typeof line !== "string" || !/^\[checkpoint item sha256:[a-f0-9]{64}\]$/.test(line)) || !Number.isInteger(context.checkpoint.steps) || context.checkpoint.steps < 0 || !Number.isInteger(context.checkpoint.externalEffects) || context.checkpoint.externalEffects < 0)) throw new Error("invalid AgentCheckpointState");
+    if (context.checkpoint && (!Array.isArray(context.checkpoint.history) || context.checkpoint.history.some((line) => typeof line !== "string") || !Number.isInteger(context.checkpoint.steps) || context.checkpoint.steps < 0 || !Number.isInteger(context.checkpoint.externalEffects) || context.checkpoint.externalEffects < 0)) throw new Error("invalid AgentCheckpointState");
     const prior = [...(context.priorMessages ?? [])];
-    const history: string[] = [...(context.checkpoint?.history ?? [])];
+    const history: string[] = boundedCheckpointHistory(context.checkpoint?.history ?? [], context.redactCheckpoint);
     const allHistory = () => [...prior, ...history];
     let steps = context.checkpoint?.steps ?? 0;
     let externalEffects = context.checkpoint?.externalEffects ?? 0;
@@ -154,7 +161,7 @@ export class AgentRuntime {
       if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) throw new RunControlError("deadline");
     };
     const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
-      try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
+      try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history, context.redactCheckpoint), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
       catch (error) { throw new AgentCheckpointError(error); }
     };
 

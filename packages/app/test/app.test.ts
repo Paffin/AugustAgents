@@ -299,10 +299,10 @@ describe("createApp", () => {
   });
 
   test("Safety/reliability invariant: recovery resumes safe checkpoints and blocks ambiguous effects", async () => {
-    const home = tmp(); const cfg = defaultConfig(home); const deps = { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "recovered") };
+    const home = tmp(); const cfg = defaultConfig(home); const prompts: string[] = []; const deps = { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm((messages) => (prompts.push(messages.at(-1)!.content), "recovered")) };
     let app = createApp(cfg, deps); const safe = app.runs.startRun({ session: runtimeSession, request: "safe" }).run;
-    app.runs.transition(safe.id, "running"); app.runs.checkpoint(safe.id, { phase: "before_decision", safeToResume: true, history: [], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 }); app.close();
-    app = createApp(cfg, deps); expect(app.getRun(safe.id)?.state).toBe("recovering"); expect((await app.resumeRun(safe.id)).reply).toBe("recovered");
+    const safeLoop = new LoopGuard(); safeLoop.record("notes.search", { q: "x" }); app.runs.transition(safe.id, "running"); app.runs.checkpoint(safe.id, { phase: "tool_finished", safeToResume: true, history: ["Result of notes.search: meeting at 5"], taint: { tainted: false, sources: [] }, loop: safeLoop.snapshot(), steps: 1, externalEffects: 0 }); app.close();
+    app = createApp(cfg, deps); expect(app.getRun(safe.id)?.state).toBe("recovering"); expect((await app.resumeRun(safe.id)).reply).toBe("recovered"); expect(prompts.some((prompt) => prompt.includes("meeting at 5"))).toBe(true);
     const ambiguous = app.runs.startRun({ session: runtimeSession, request: "send" }).run; app.runs.transition(ambiguous.id, "running"); const loop = new LoopGuard(); loop.record("mail.send", {});
     app.runs.checkpoint(ambiguous.id, { phase: "tool_started", safeToResume: false, history: [], taint: { tainted: false, sources: [] }, loop: loop.snapshot(), steps: 0, externalEffects: 1 }); app.close();
     app = createApp(cfg, deps); expect(app.resumeRun(ambiguous.id)).rejects.toThrow(/owner resolution/);

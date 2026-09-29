@@ -100,6 +100,13 @@ describe("AgentRuntime", () => {
     expect(JSON.stringify(events)).not.toContain("tool-secret-9631");
   });
 
+  test("Safety/reliability invariant: an explicit redactor preserves safe scratch and removes known secrets", async () => {
+    const events: AgentRunEvent[] = []; const secret = "short-known-secret";
+    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor({ "notes.search": `meeting at 5 ${secret}` }) });
+    await agent.handle(session, "search notes", { redactCheckpoint: (text) => text.replaceAll(secret, "[redacted secret]"), onEvent: (event) => void events.push(event) }); const dump = JSON.stringify(events);
+    expect(dump).toContain("meeting at 5"); expect(dump).toContain("[redacted secret]"); expect(dump).not.toContain(secret);
+  });
+
   test("Safety/reliability invariant: cancel, deadline, effect and step budgets stop before another call", async () => {
     const cancelled = new AbortController(); cancelled.abort();
     const ex = executor();
@@ -129,8 +136,8 @@ describe("AgentRuntime", () => {
   test("Safety/reliability invariant: restored prior context and scratch stay separate", async () => {
     const decision = picks("none"); const llm = fakeLlm({}, "ok");
     const { agent } = build({ decision, llm, executor: executor() });
-    const scratch = "[checkpoint item sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]";
-    await agent.handle(session, "search notes", { priorMessages: ["User: durable"], checkpoint: { history: [scratch], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } });
+    const scratch = "safe scratch result";
+    await agent.handle(session, "search notes", { priorMessages: ["User: durable"], checkpoint: { history: [scratch], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 }, redactCheckpoint: (text) => text });
     expect(decision.asked[0]).toContain("durable"); expect(llm.prompts.at(-1)!.at(-1)!.content).toContain(scratch);
   });
 

@@ -231,6 +231,10 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     }
   };
 
+  const secretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret, ...config.mcp.flatMap((entry) => [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})])].filter((name): name is string => Boolean(name)));
+  const checkpointSecrets = [...secretNames].map((name) => resolveSecret(name, secrets, deps.env)).filter((value): value is string => Boolean(value));
+  const redactCheckpoint = (text: string) => checkpointSecrets.reduce((value, secret) => value.replaceAll(secret, "[redacted secret]"), text);
+
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
   const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
@@ -245,7 +249,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       if (checkpoint && (!checkpoint.taint || !checkpoint.loop || checkpoint.steps === undefined || checkpoint.externalEffects === undefined)) throw new Error("run checkpoint is missing safety state");
       let reply = await agent.handle(run.session, run.request, {
         priorMessages, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
-        maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects,
+        maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onEvent: (event) => {
           if (event.type !== "checkpoint") return;
           runs.checkpoint(run.id, event);
