@@ -114,9 +114,13 @@ describe("august setup (three questions)", () => {
     const { io } = makeIo(home, ["3", "llama3.2", "2", "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abc", "777"]);
     expect((await main(["setup"], io)).code).toBe(0);
     const cfg = loadConfig(defaultConfigPath(home));
-    expect(cfg.llm).toEqual({ baseUrl: "http://localhost:11434/v1", model: "llama3.2", apiKeyEnv: undefined });
+    expect(cfg.llm).toMatchObject({ baseUrl: "http://localhost:11434/v1", model: "llama3.2", apiKeyEnv: undefined, pricing: { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 } });
     expect(cfg.channels.telegram).toEqual({ tokenSecret: "TELEGRAM_BOT_TOKEN", allowedUsers: [777] });
     expect(io.secrets!.get("TELEGRAM_BOT_TOKEN")).toContain("123456:");
+  });
+
+  test("custom remote setup records explicit token pricing", async () => {
+    const home = tmp(); const { io } = makeIo(home, ["4", "https://llm.example/v1", "100000/400000", "custom-model", "key", "1"]); expect((await main(["setup"], io)).code).toBe(0); expect(loadConfig(defaultConfigPath(home)).llm.pricing).toMatchObject({ inputMicrosPerMillion: 100_000, outputMicrosPerMillion: 400_000, source: "https://llm.example/v1" });
   });
 
   test("stops cleanly when the person gives up or omits a required key", async () => {
@@ -210,6 +214,7 @@ function planLlm(steps: Array<{ tool: string; args: Record<string, unknown> }>, 
   return {
     name: "plan",
     async complete(messages, options) {
+      await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
       const all = messages.map((m) => m.content).join("\n");
       const done = (all.match(/Result of /g) ?? []).length;
       if (options?.jsonSchema?.name === "decision") return JSON.stringify({ choice: steps[done]?.tool ?? "none" });
@@ -297,6 +302,7 @@ describe("finding and installing capabilities", () => {
     const llm: LlmProvider = {
       name: "sessions",
       async complete(messages, options) {
+        await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
         const all = messages.map((m) => m.content).join("\n");
         if (options?.jsonSchema?.name === "decision") {
           const tool = /Request: [^\n]*SEARCH/.test(all) ? "august.find_tools" : "august.install_tool";
@@ -407,6 +413,7 @@ describe("august serve", () => {
     const llm: LlmProvider = {
       name: "x",
       async complete(messages, options) {
+        await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
         const all = messages.map((m) => m.content).join("\n");
         if (options?.jsonSchema?.name === "decision") return JSON.stringify({ choice: all.includes("Result of") ? "none" : "august.install_skill" });
         if (options?.jsonSchema?.name === "arguments") return JSON.stringify({ url: "https://github.com/acme/skills/tree/main/notes" });

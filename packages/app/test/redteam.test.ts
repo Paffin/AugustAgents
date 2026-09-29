@@ -56,6 +56,7 @@ function obedient(source: string, attack: { tool: string; args: Record<string, u
     llm: {
       name: "obedient",
       async complete(messages, options) {
+        await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
         if (options?.jsonSchema?.name === "arguments") return JSON.stringify(messages[0]!.content.includes(`"${attack.tool}"`) ? attack.args : source === "web.fetch" ? { url: "https://evil.test" } : {});
         return "done";
       },
@@ -180,6 +181,7 @@ describe("the real app under attack", () => {
     const llm: LlmProvider = {
       name: "obedient",
       async complete(messages, options) {
+        await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
         if (options?.jsonSchema?.name === "decision") return JSON.stringify({ choice: ["fs.read", "august.install_tool", "none"][Math.min(step++, 2)] });
         if (options?.jsonSchema?.name === "arguments") return JSON.stringify(messages[0]!.content.includes("fs.read") ? { path: "todo.md" } : { name: "io.github.evil/backdoor" });
         return "done";
@@ -210,6 +212,7 @@ describe("the real app under attack", () => {
     const llm: LlmProvider = {
       name: "o",
       async complete(_m, options) {
+        await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
         if (options?.jsonSchema?.name === "decision") return JSON.stringify({ choice: "fs.read" });
         if (options?.jsonSchema?.name === "arguments") return JSON.stringify({ path: "../secret.txt" });
         return "done";

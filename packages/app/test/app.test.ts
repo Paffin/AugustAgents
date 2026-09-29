@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
 import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
+import { LlmUsageObserverError } from "@august/brain";
 import { IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
 import { LoopGuard } from "@august/policy";
 import {
@@ -51,6 +52,13 @@ describe("config", () => {
 
   test("refuses a workspace name that would break session keys", () => {
     expect(() => parseConfig({ ...good(), workspace: "a:b" })).toThrow(ConfigError);
+  });
+
+  test("Product behavior: pricing is explicit and unknown remote models fail before a run", () => {
+    expect(good().llm.pricing).toMatchObject({ inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000, asOf: "2026-09-29" });
+    expect(() => parseConfig({ ...good(), llm: { ...good().llm, pricing: { inputMicrosPerMillion: -1, outputMicrosPerMillion: 1, source: "x", asOf: "2026-09-29" } } })).toThrow(/pricing/);
+    const home = tmp(); const unknown = { ...defaultConfig(home), llm: { baseUrl: "https://llm.example/v1", model: "custom" } };
+    expect(() => createApp(unknown, { env: {}, llm: { name: "unused", complete: async () => "unused" } })).toThrow(/pricing is missing/);
   });
 
   test("the file is private and round-trips", () => {
@@ -131,6 +139,7 @@ function scriptedLlm(plan: { tool: string; args: Record<string, unknown>; reply:
   return {
     name: "scripted",
     async complete(messages, options) {
+      await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
       const name = options?.jsonSchema?.name;
       // Pick the tool until a result is in the state, then say none.
       if (name === "decision") return JSON.stringify({ choice: messages.some((m) => m.content.includes("Result of")) ? "none" : plan.tool });
@@ -246,7 +255,7 @@ describe("createApp", () => {
 
   const runtimeSession = makeSessionKey({ workspace: "home", channel: "test", user: "runtime" });
   function contextualLlm(final: (messages: readonly ChatMessage[]) => string | Promise<string>): LlmProvider {
-    return { name: "contextual", complete: async (messages, options) => options?.jsonSchema?.name === "decision" ? JSON.stringify({ choice: "none" }) : options?.jsonSchema?.name === "arguments" ? "{}" : final(messages) };
+    return { name: "contextual", complete: async (messages, options) => { await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }); return options?.jsonSchema?.name === "decision" ? JSON.stringify({ choice: "none" }) : options?.jsonSchema?.name === "arguments" ? "{}" : final(messages); } };
   }
 
   test("Product behavior: a second App process receives durable conversation context", async () => {
@@ -277,6 +286,20 @@ describe("createApp", () => {
   test("Safety/reliability invariant: provider failures persist as failed runs", async () => {
     const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: { name: "broken", complete: async () => { throw new Error("offline"); } } });
     const reply = await app.handle(runtimeSession, "hello"); expect(reply.error).toBe("Error"); expect(app.getRun(reply.runId)).toMatchObject({ state: "failed", reply: reply.reply }); expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant"]); app.close();
+  });
+
+  test("Safety/reliability invariant: token and cost exhaustion stop before another model or tool call", async () => {
+    for (const [budget, reason] of [[{ maxTokens: 2 }, "token-budget"], [{ maxTokens: 100, maxCostMicros: 1 }, "cost-budget"]] as const) {
+      const home = tmp(); let calls = 0; const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => (++calls, "unused")) });
+      const result = await app.handle(runtimeSession, reason, undefined, { budget }); const run = app.getRun(result.runId)!;
+      expect(result).toMatchObject({ stopReason: reason, steps: 0 }); expect(calls).toBe(1); expect(run).toMatchObject({ state: "failed", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costMicros: 1 } }); app.close();
+      const reopened = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "unused") }); expect(reopened.getRun(result.runId)?.usage).toEqual(run.usage); reopened.close();
+    }
+  });
+
+  test("Safety/reliability invariant: missing usage fails and accounting persistence errors propagate", async () => {
+    const missing = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, llm: { name: "missing", complete: async () => JSON.stringify({ choice: "none" }) } }); const reply = await missing.handle(runtimeSession, "missing"); expect(reply.error).toBe("LlmUsageError"); expect(missing.getRun(reply.runId)).toMatchObject({ state: "failed", usage: { totalTokens: 0 } }); missing.close();
+    const app = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "unused") }); app.runs.recordUsage = () => { throw new Error("disk full"); }; await expect(app.handle(runtimeSession, "persist")).rejects.toBeInstanceOf(LlmUsageObserverError); expect(app.listRuns({ session: runtimeSession })[0]?.state).toBe("failed"); app.close();
   });
 
   test("Safety/reliability invariant: a failed post-effect checkpoint leaves the run recovering", async () => {

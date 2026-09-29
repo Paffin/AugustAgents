@@ -8,6 +8,7 @@ import {
   LlmChoiceEngine,
   LlmQueryExpander,
   OpenAiCompatibleProvider,
+  UsageRequiredProvider,
   layaHttpTransport,
   type DecisionEngine,
   type LlmProvider,
@@ -18,7 +19,7 @@ import { RegistryClient, type InstallPlan } from "@august/discovery";
 import { McpHost, detectSandbox, sandboxHome, sandboxSpec, type SandboxKind } from "@august/mcp";
 import { PolicyEngine } from "@august/policy";
 import { BuiltinExecutor, builtinManifest, clockManifest } from "./builtins.ts";
-import { ConfigError, loadConfig, writeConfig, type AugustConfig, type McpServerConfig } from "./config.ts";
+import { ConfigError, loadConfig, resolveLlmPricing, writeConfig, type AugustConfig, type McpServerConfig } from "./config.ts";
 import { JsonlDecisionLog } from "./decision-log.ts";
 import { MetaExecutor, metaManifest } from "./meta.ts";
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
@@ -112,7 +113,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const home = deps.home ?? process.env.HOME ?? dirname(config.root);
 
   const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir));
-  const llm = deps.llm ?? createLlm(config, deps, secrets);
+  const pricing = resolveLlmPricing(config);
+  const llm = new UsageRequiredProvider(deps.llm ?? createLlm(config, deps, secrets));
 
   // Laya decides when a sidecar is configured; until then a heuristic stands in.
   // Either way the cascade starts in shadow mode and earns its way out.
@@ -222,7 +224,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     policy,
     journal,
     approver,
-    expandQuery: (t) => expander.expand(t),
+    expandQuery: (t, controls) => expander.expand(t, controls),
     destinationOf: (tool) => (tool === "august.find_tools" ? registryHost : undefined),
   });
 
@@ -244,6 +246,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     const controller = new AbortController(); let finish!: () => void;
     const entry: Active = { controller, done: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
     active.set(run.id, entry); if (perMessage) approver.bySession.set(run.session, perMessage);
+    let usageStop: "token-budget" | "cost-budget" | undefined = run.usage.totalTokens >= run.budget.maxTokens ? "token-budget" : run.usage.costMicros > 0 && run.usage.costMicros >= run.budget.maxCostMicros ? "cost-budget" : undefined;
     try {
       run = runs.transition(run.id, "running");
       const checkpoint = run.checkpoint as (AgentCheckpointState & typeof run.checkpoint) | undefined;
@@ -251,6 +254,9 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       let reply = await agent.handle(run.session, run.request, {
         priorMessages, priorTaint: { tainted: priorTaintSources.length > 0, sources: priorTaintSources }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
+        onUsage: async (usage) => { usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
+        remainingTokens: () => { const current = runs.getRun(run.id)!; return Math.max(1, current.budget.maxTokens - current.usage.totalTokens); },
+        usageExhaustion: () => usageStop,
         onEvent: (event) => {
           if (event.type !== "checkpoint") return;
           runs.checkpoint(run.id, event);
