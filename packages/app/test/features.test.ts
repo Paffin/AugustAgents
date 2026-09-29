@@ -309,6 +309,22 @@ describe("finding and installing capabilities", () => {
 });
 
 describe("august serve", () => {
+  test("a busy port gives a clear message instead of a crash", async () => {
+    const blocker = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+    try {
+      const home = tmp();
+      const { io, out } = makeIo(home, [], { env: { OPENAI_API_KEY: "k" } });
+      await main(["init"], io);
+      const path = defaultConfigPath(home);
+      const cfg = loadConfig(path);
+      writeConfig(path, { ...cfg, gateway: { ...cfg.gateway, port: blocker.port! } });
+      expect((await main(["serve"], io)).code).toBe(1);
+      expect(out.at(-1)).toContain("is busy");
+    } finally {
+      blocker.stop(true);
+    }
+  });
+
   test("serves the chat page and lets the browser approve through /v1/pending and /v1/approve", async () => {
     const home = tmp();
     const llm: LlmProvider = {

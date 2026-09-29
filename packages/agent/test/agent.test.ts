@@ -259,5 +259,14 @@ describe("AgentRuntime", () => {
     await agent.handle(session, "send an email");
     expect(asked[0]!.details).toBe("will send mail to a@b.c");
   });
+
+  test("an unreachable model is explained, without leaking the prompt", async () => {
+    const { LlmError } = await import("@august/brain");
+    const llm: LlmProvider = { name: "m", complete: async () => Promise.reject(new LlmError("m: HTTP 503", true)) };
+    const { agent } = build({ decision: picks("none"), llm, executor: executor() });
+    const r = await agent.handle(session, "secret prompt text");
+    expect(r.reply).toContain("could not reach the language model (m: HTTP 503)");
+    expect(r.reply).not.toContain("secret prompt");
+  });
 });
 

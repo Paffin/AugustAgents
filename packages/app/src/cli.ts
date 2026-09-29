@@ -245,7 +245,9 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
   const approvals = new PendingApprovals();
   const queue = new LaneQueue();
 
-  const inner = startGateway({
+  let inner: RunningGateway;
+  try {
+    inner = startGateway({
     hostname: "127.0.0.1",
     port: config.gateway.port,
     token: config.gateway.token,
@@ -256,6 +258,12 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     // The browser polls /v1/pending, so the prompt itself needs no push.
     onMessage: async ({ session, text }) => ({ reply: (await app.handle(session, text, approvals.approverFor(() => {}))).reply }),
   });
+  } catch (error) {
+    app.close();
+    const busy = (error as NodeJS.ErrnoException).code === "EADDRINUSE" || /in use/i.test((error as Error).message);
+    io.print(busy ? `Port ${config.gateway.port} is busy: is August already running? (change gateway.port in ${configPath})` : `Could not start the gateway: ${(error as Error).message}`);
+    return { code: 1 };
+  }
 
   let telegram: TelegramChannel | undefined;
   if (config.channels.telegram) {

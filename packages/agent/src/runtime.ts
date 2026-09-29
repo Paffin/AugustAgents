@@ -226,8 +226,14 @@ export class AgentRuntime {
         );
       }
     } catch (error) {
-      log("task.error", { name: (error as Error).name });
-      return { reply: "Something went wrong while working on this. Nothing further was done.", steps, tainted: taint.snapshot().tainted };
+      const name = (error as Error).name;
+      log("task.error", { name });
+      // LLM errors name the provider and the HTTP status, never the key or the prompt.
+      const reply =
+        name === "LlmError"
+          ? `I could not reach the language model (${(error as Error).message}). Nothing further was done.`
+          : "Something went wrong while working on this. Nothing further was done.";
+      return { reply, steps, tainted: taint.snapshot().tainted };
     }
   }
 
