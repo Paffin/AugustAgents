@@ -13,7 +13,7 @@ import {
   type LlmProvider,
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
-import { DurableRuntimeStore, type DurableRun, type RunBudget, type RunState, EventJournal, type SessionKey } from "@august/core";
+import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, type SessionKey } from "@august/core";
 import { RegistryClient, type InstallPlan } from "@august/discovery";
 import { McpHost, detectSandbox, sandboxHome, sandboxSpec, type SandboxKind } from "@august/mcp";
 import { PolicyEngine } from "@august/policy";
@@ -42,7 +42,7 @@ export interface StartReport {
   failed: Array<{ id: string; error: string }>;
 }
 
-export interface HandleOptions { idempotencyKey?: string; budget?: Partial<RunBudget> }
+export interface HandleOptions { idempotencyKey?: string; budget?: RunBudgetRequest }
 export interface DurableAgentReply extends AgentReply { runId: string; replayed: boolean }
 export interface RunListOptions { session?: SessionKey; states?: RunState[]; limit?: number }
 
@@ -257,16 +257,14 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
         },
       });
       const current = runs.getRun(run.id)!;
-      if (entry.desired && !reply.stopReason) reply = { ...reply, reply: `Stopped: ${entry.desired}.`, stopReason: "cancelled" };
+      if (entry.desired) reply = { ...reply, reply: `Stopped: ${entry.desired}.`, stopReason: "cancelled" };
       if (reply.stopReason) {
         const target = entry.desired ?? (reply.stopReason === "cancelled" ? "cancelled" : "failed");
-        run = current.state === target ? current : runs.transition(run.id, target, { error: reply.stopReason, steps: reply.steps });
+        run = current.state === target ? current : runs.finishRun(run.id, target, reply.reply, { error: reply.stopReason, steps: reply.steps });
       } else if (reply.error) {
-        runs.appendMessage(run.session, "assistant", reply.reply); run = runs.transition(run.id, "failed", { reply: reply.reply, error: reply.error, steps: reply.steps });
+        run = runs.finishRun(run.id, "failed", reply.reply, { error: reply.error, steps: reply.steps });
       } else {
-        runs.transition(run.id, "verifying", { steps: reply.steps });
-        runs.appendMessage(run.session, "assistant", reply.reply);
-        run = runs.transition(run.id, "completed", { reply: reply.reply });
+        run = runs.finishRun(run.id, "completed", reply.reply, { steps: reply.steps });
       }
       return { ...reply, runId: run.id, replayed: false };
     } catch (error) {
@@ -298,11 +296,11 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       return execute(started.run, perMessage, prior);
     },
     getRun: (id) => runs.getRun(id),
-    listRuns: (options = {}) => runs.listRuns(options.session, options.limit).filter((run) => !options.states || options.states.includes(run.state)),
+    listRuns: (options = {}) => runs.listRuns(options.session, options.limit, options.states),
     pauseRun: (id) => stop(id, "paused"),
     cancelRun: (id) => stop(id, "cancelled"),
-    resumeRun: (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run)); },
-    retryRun: (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run)); },
+    resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run)); },
+    retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };

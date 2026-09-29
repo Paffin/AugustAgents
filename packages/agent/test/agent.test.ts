@@ -85,18 +85,19 @@ describe("AgentRuntime", () => {
 
   test("Product behavior: StateView role labels alone do not invent a tool match", async () => {
     const broken: DecisionEngine = { decide: async () => { throw new Error("decision should not run"); } };
-    const { agent } = build({ decision: broken, llm: fakeLlm({}, "привет"), executor: executor() });
+    const { agent } = build({ decision: broken, llm: fakeLlm({}, "привет"), executor: executor(), expandQuery: async () => "ничего" });
     expect((await agent.handle(session, "как дела?", { priorMessages: ["User: привет", "Assistant: хорошо"] })).reply).toBe("привет");
   });
 
   test("Safety/reliability invariant: observer checkpoints are bounded and name unsafe tool start", async () => {
     const events: AgentRunEvent[] = [];
-    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "checkpoint-secret-7429" } }), executor: executor() });
+    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "checkpoint-secret-7429" } }), executor: executor({ "notes.search": "tool-secret-9631" }) });
     await agent.handle(session, "search notes", { priorMessages: Array.from({ length: 12 }, (_, i) => `${i}-${"x".repeat(3000)}`), onEvent: (event) => void events.push(event) });
     const checkpoints = events.filter((event) => event.type === "checkpoint");
     expect(checkpoints.some((event) => event.phase === "tool_started" && !event.safeToResume && event.lastTool === "notes.search")).toBe(true);
     expect(checkpoints.every((event) => event.history.length <= 8 && event.history.join("").length <= 16_000)).toBe(true);
     expect(JSON.stringify(events)).not.toContain("checkpoint-secret-7429");
+    expect(JSON.stringify(events)).not.toContain("tool-secret-9631");
   });
 
   test("Safety/reliability invariant: cancel, deadline, effect and step budgets stop before another call", async () => {
@@ -128,8 +129,9 @@ describe("AgentRuntime", () => {
   test("Safety/reliability invariant: restored prior context and scratch stay separate", async () => {
     const decision = picks("none"); const llm = fakeLlm({}, "ok");
     const { agent } = build({ decision, llm, executor: executor() });
-    await agent.handle(session, "search notes", { priorMessages: ["User: durable"], checkpoint: { history: ["Result of notes.search: scratch"], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } });
-    expect(decision.asked[0]).toContain("durable"); expect(llm.prompts.at(-1)!.at(-1)!.content).toContain("scratch");
+    const scratch = "[checkpoint item sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]";
+    await agent.handle(session, "search notes", { priorMessages: ["User: durable"], checkpoint: { history: [scratch], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } });
+    expect(decision.asked[0]).toContain("durable"); expect(llm.prompts.at(-1)!.at(-1)!.content).toContain(scratch);
   });
 
   test("Safety/reliability invariant: malformed counters and checkpoint write failures fail closed", async () => {
@@ -148,6 +150,8 @@ describe("AgentRuntime", () => {
     const approvalController = new AbortController(); const approvalEx = executor(); approvalEx.describeCall = async () => (approvalController.abort(), "details"); let approvals = 0;
     const approvalAgent = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: approvalEx, approver: { approve: async () => (++approvals, true) } }).agent;
     expect((await approvalAgent.handle(session, "send an email", { signal: approvalController.signal })).stopReason).toBe("cancelled"); expect(approvals).toBe(0);
+    const expandController = new AbortController(); let expansions = 0; const expanding = build({ decision: picks("none"), llm: fakeLlm({}, "no"), executor: executor(), expandQuery: async () => (++expansions, "search notes") }).agent;
+    const stopped = await expanding.handle(session, "привет", { signal: expandController.signal, onEvent: (event) => { if (event.type === "checkpoint") expandController.abort(); } }); expect(stopped.stopReason).toBe("cancelled"); expect(expansions).toBe(0);
   });
 
   test("answers without a tool when the decision is none", async () => {

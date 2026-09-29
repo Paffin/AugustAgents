@@ -113,16 +113,7 @@ function fingerprint(value: unknown): string {
 }
 
 function boundedCheckpointHistory(history: readonly string[]): string[] {
-  const marker = "[earlier content truncated]\n";
-  const selected: string[] = [];
-  let left = 16_000;
-  for (let i = history.length - 1; i >= 0 && selected.length < 8; i--) {
-    const item = history[i]!;
-    if (item.length <= left) { selected.push(item); left -= item.length; continue; }
-    if (selected.length === 0 && left > marker.length) selected.push(`${marker}${item.slice(-(left - marker.length))}`);
-    break;
-  }
-  return selected.reverse();
+  return history.slice(-8).map((item) => `[checkpoint item sha256:${createHash("sha256").update(item).digest("hex")}]`);
 }
 
 /**
@@ -150,7 +141,7 @@ export class AgentRuntime {
     if (context.checkpoint) guard.restore(context.checkpoint.loop);
     if (context.maxSteps !== undefined && (!Number.isInteger(context.maxSteps) || context.maxSteps < 1)) throw new Error("invalid maxSteps");
     if (context.maxExternalEffects !== undefined && (!Number.isInteger(context.maxExternalEffects) || context.maxExternalEffects < 0)) throw new Error("invalid maxExternalEffects");
-    if (context.checkpoint && (!Array.isArray(context.checkpoint.history) || context.checkpoint.history.some((line) => typeof line !== "string") || !Number.isInteger(context.checkpoint.steps) || context.checkpoint.steps < 0 || !Number.isInteger(context.checkpoint.externalEffects) || context.checkpoint.externalEffects < 0)) throw new Error("invalid AgentCheckpointState");
+    if (context.checkpoint && (!Array.isArray(context.checkpoint.history) || context.checkpoint.history.some((line) => typeof line !== "string" || !/^\[checkpoint item sha256:[a-f0-9]{64}\]$/.test(line)) || !Number.isInteger(context.checkpoint.steps) || context.checkpoint.steps < 0 || !Number.isInteger(context.checkpoint.externalEffects) || context.checkpoint.externalEffects < 0)) throw new Error("invalid AgentCheckpointState");
     const prior = [...(context.priorMessages ?? [])];
     const history: string[] = [...(context.checkpoint?.history ?? [])];
     const allHistory = () => [...prior, ...history];
@@ -178,11 +169,12 @@ export class AgentRuntime {
         let shortlist = index.search(`${text}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
         if (this.options.expandQuery && shortlist.length < (this.options.minShortlist ?? 3) && tools.length > shortlist.length) {
           try {
+            control();
             const before = shortlist.length;
             // Once per task: the request does not change between steps.
             expansion ??= await this.options.expandQuery(text);
             const words = expansion;
-            shortlist = index.search(`${text}\n${words}\n${allHistory().join("\n")}`);
+            shortlist = index.search(`${text}\n${words}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
             log("shortlist.expanded", { before, after: shortlist.length });
           } catch {
             log("shortlist.expand-failed", {});

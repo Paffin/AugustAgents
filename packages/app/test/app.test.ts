@@ -276,7 +276,7 @@ describe("createApp", () => {
 
   test("Safety/reliability invariant: provider failures persist as failed runs", async () => {
     const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: { name: "broken", complete: async () => { throw new Error("offline"); } } });
-    const reply = await app.handle(runtimeSession, "hello"); expect(reply.error).toBe("Error"); expect(app.getRun(reply.runId)?.state).toBe("failed"); app.close();
+    const reply = await app.handle(runtimeSession, "hello"); expect(reply.error).toBe("Error"); expect(app.getRun(reply.runId)).toMatchObject({ state: "failed", reply: reply.reply }); expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant"]); app.close();
   });
 
   test("Safety/reliability invariant: a failed post-effect checkpoint leaves the run recovering", async () => {
@@ -293,7 +293,7 @@ describe("createApp", () => {
     const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => (++calls === 1 ? (entered(), blocked) : "resumed")) });
     const pending = app.handle(runtimeSession, "pause me"); await started;
     const id = app.listRuns({ session: runtimeSession })[0]!.id; const pausing = app.pauseRun(id); release("late answer");
-    expect((await pausing).state).toBe("paused"); expect((await pending).stopReason).toBe("cancelled");
+    expect(await pausing).toMatchObject({ state: "paused", reply: "Stopped: paused." }); expect((await pending).stopReason).toBe("cancelled"); expect(app.runs.messages(runtimeSession).at(-1)?.content).toBe("Stopped: paused.");
     expect((await app.resumeRun(id)).reply).toBe("resumed"); expect(app.getRun(id)?.state).toBe("completed");
     app.close();
   });
@@ -308,8 +308,14 @@ describe("createApp", () => {
     app = createApp(cfg, deps); expect(app.resumeRun(ambiguous.id)).rejects.toThrow(/owner resolution/);
     expect(app.resolveRun(ambiguous.id, "confirm_not_executed").state).toBe("paused"); expect((await app.resumeRun(ambiguous.id)).reply).toBe("recovered");
     const cancelled = app.runs.startRun({ session: runtimeSession, request: "retry" }).run; expect((await app.cancelRun(cancelled.id)).state).toBe("cancelled");
+    await expect(app.retryRun(cancelled.id)).rejects.toThrow(/new idempotency key/);
     const retried = await app.retryRun(cancelled.id, { idempotencyKey: "retry-1" }); expect(app.getRun(retried.runId)?.retryOf).toBe(cancelled.id);
     app.close();
+  });
+
+  test("Product behavior: run state filtering happens before the requested limit", async () => {
+    const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "done") }); const completed = await app.handle(runtimeSession, "complete");
+    const newest = app.runs.startRun({ session: runtimeSession, request: "cancel" }).run; await app.cancelRun(newest.id); expect(app.listRuns({ session: runtimeSession, states: ["completed"], limit: 1 })[0]?.id).toBe(completed.runId); app.close();
   });
 });
 
