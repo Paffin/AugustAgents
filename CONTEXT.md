@@ -14,23 +14,27 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-`OUT-001` has produced a reproducible green baseline, exact install-plan
-binding, and live local-model evidence. Reconcile and integrate that outcome,
-then design the durable session/run engine in `OUT-002`.
+`OUT-001` is integrated. `OUT-002` Phase A now has SQLite/WAL-backed durable
+messages, runs, checkpoints, idempotency, restart context, owner controls, and
+live local-model restart evidence. Close out and integrate Phase A, then add
+provider-reported token usage and pricing before completing `OUT-002`.
 
 ## Active Risks
 
 - Linux/Windows/CI, real Laya weights, live sandbox/egress, signing, updater,
   and recovery evidence remain unverified.
-- Session/run durability, outcome-verified learning, integrated distillation,
-  and memory are not delivered.
+- Token and monetary budget enforcement, outcome-verified learning, integrated
+  distillation, and provenance-aware memory are not delivered.
+- Durable-runtime backup/readback is locally verified only; retained-data
+  migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit
   integrity have known security gaps.
 
 ## Roadmap Position
 
-`OUT-001` is complete pending final branch integration. `OUT-002` is next and
-may enter Brainstorming after the current closeout revision is Ready.
+`OUT-001` is complete. `OUT-002` is In Progress: Phase A is implemented and
+locally verified, but the outcome remains blocked from completion and cannot
+unblock `OUT-003` until its usage/pricing successor is delivered.
 
 ## Reading Links
 

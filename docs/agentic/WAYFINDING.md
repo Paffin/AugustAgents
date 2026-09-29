@@ -2,7 +2,7 @@
 
 **Artifact Type:** Agentic Foundation
 **Status:** Ready
-**Revision:** sha256:dc188962b6929cb3b0b60b7020afd9a645e48fb9e5d40fc4613836f3c654180b
+**Revision:** sha256:b7b2d3030f4e90d15b0923426a5f2ceaf73c3c744695c00cf62ac4ae19558fcb
 **Approved Revision:** none
 **Approved At:** none
 
@@ -23,9 +23,9 @@
 
 ## Destination
 
-A policy-accepted closeout Foundation that records verified OUT-001 behavior,
-keeps remaining release gaps explicit, and makes bounded OUT-002 durable-runtime
-design ready for Brainstorming.
+A policy-accepted OUT-002 Phase A closeout that records verified local durable
+runtime behavior, preserves the provider-usage/pricing completion blocker, and
+keeps all remaining release gaps explicit.
 
 ## Readiness Checklist
 
@@ -42,10 +42,10 @@ design ready for Brainstorming.
 
 ## Frontier
 
-- Complete exact internal review and Autonomous Ready progression of the
-  OUT-001 closeout revision.
-- Begin bounded OUT-002 Brainstorming without widening into later security,
-  learning, memory, or release outcomes.
+- Complete exact implementation/final/security review and local fast-forward
+  integration of OUT-002 Phase A.
+- Design the bounded OUT-002 provider-usage/pricing successor without widening
+  into later provenance, learning, memory, or release outcomes.
 
 ## Fog
 

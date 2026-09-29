@@ -8,7 +8,7 @@
   observed on Bun 1.4.2. Sources: https://bun.sh/docs/pm/lockfile and
   https://bun.sh/guides/install/yarnlock, verified 2026-09-29.
 - Python HTTP sidecar for Laya on loopback.
-- Bun SQLite `runtime.db` with WAL is the selected OUT-002 adapter for durable
+- Bun SQLite `runtime.db` with WAL is the current OUT-002 Phase A adapter for durable
   conversation and run state behind logical StateStore and RunStore interfaces.
 - Local filesystem and journal persistence; current storage contracts are
   package-specific and incomplete.
@@ -25,10 +25,10 @@
 
 ## Modules
 
-### Observed at `aa8bf43`
+### Current state, evolved from `aa8bf43`
 
-- `core`: currently lane queue, session-key helpers, and hash journal; target
-  owner for durable session/run/checkpoint interfaces.
+- `core`: lane queue, session-key helpers, hash journal, and the schema-v1
+  `DurableRuntimeStore` for messages, runs, checkpoints, and idempotency.
 - `agent`: orchestration of decision, arguments, policy, approval, execution,
   result, and response.
 - `brain`: typed decision engines, Laya/LLM cascade, calibration, and providers.
@@ -43,7 +43,7 @@
 
 ## Interfaces
 
-### Target contract — not delivered at `aa8bf43`
+### Current Phase A and target contracts
 
 - `StateStore`: logical interface to append/read session messages and produce
   bounded StateViews.
@@ -52,6 +52,10 @@
 - `DurableRuntimeStore`: one cohesive SQLite adapter implementing both logical
   interfaces so conversation/run transactions stay local without collapsing
   their public responsibilities.
+- `AgentExecutionContext`: optional prior StateView, bounded scratch checkpoint,
+  cooperative signal/deadline/effect/step budgets, and checkpoint observer.
+- `App` run controls: inspect/list/pause/cancel/resume/retry/resolve plus optional
+  idempotency keys while preserving existing `handle` callers.
 - `OutcomeVerifier`: verify an observed outcome without trusting the acting
   model.
 - `TrainingSink`: accept only verified, untainted examples.
@@ -63,9 +67,11 @@
 
 ## Seams
 
-### Target contract — not delivered at `aa8bf43`
+### Current Phase A and target contracts
 
 - Persistent storage sits behind `StateStore`, `RunStore`, and `MemoryStore`.
+- TaintState and LoopGuard snapshots remain in `policy`; only opaque argument
+  digests enter checkpoints, and malformed restore state fails closed.
 - Protocol/version behavior sits behind `McpAdapter`.
 - OS isolation sits behind sandbox, egress, credential, and audit adapters.
 - Owner channels sit behind approval and message interfaces.
@@ -86,7 +92,15 @@
 
 ## Data Flow
 
-### Target contract — not delivered at `aa8bf43`
+### Phase A observed flow and remaining target
+
+Phase A persists the Run and current user message before execution, loads a
+bounded prior StateView, commits safe/unsafe checkpoints around decision,
+approval, and tool calls, then persists the assistant reply and terminal state
+before returning. Restart marks interrupted active runs `recovering`; an unsafe
+tool-start checkpoint requires explicit owner resolution and is never replayed
+automatically. The target flow below still includes later provenance, approval,
+verification, learning, and containment outcomes.
 
 1. Channel message is persisted under a Session.
 2. RunEngine creates or resumes a Run and obtains a provenance-aware StateView.
@@ -123,13 +137,14 @@ binary/text lock compatibility path for earlier 1.1.x releases.
 - `dataDir/runtime.db` schema v1 owns durable messages, runs, transitions,
   budgets, checkpoints, and idempotency records. It is additive and does not
   migrate or reset existing files.
-- Current installed datasets and backup procedures are unknown.
+- External retained installations and production backup procedures are unknown;
+  one local stopped-app exact-file backup/read-only restore drill is verified.
 - No authority exists to reset retained runtime/user data. Designs must define
   migration, backup, rollback, and recovery before changing persisted formats.
 
 ## Depth, Locality, And Leverage
 
-### Target contract — not delivered at `aa8bf43`
+### Current and target contract
 
 - Durable state hides storage and recovery complexity behind small interfaces.
 - Capability containment is enforced once below built-ins/skills/MCP adapters,
@@ -141,11 +156,13 @@ binary/text lock compatibility path for earlier 1.1.x releases.
 
 ## Integration Shape
 
-### Target contract — not delivered at `aa8bf43`
+### Current Phase A and target contract
 
-`app` composes channels, RunEngine, AgentRuntime, stores, policy, capability
-runtime, verifiers, learning, and ladder. `agent` coordinates interfaces but
-does not own persistence backends, protocol details, or OS isolation policy.
+`app` now composes channels, `DurableRuntimeStore`, AgentRuntime, policy,
+cooperative run controls, and the current capability runtime. The target adds
+outcome verifiers, learning, and ladder integration. `agent` coordinates
+interfaces but does not own persistence backends, protocol details, or OS
+isolation policy.
 
 ## Test Surface
 
@@ -161,10 +178,12 @@ does not own persistence backends, protocol details, or OS isolation policy.
 
 ## Open Architecture Risks
 
-- SQLite/WAL and one cohesive adapter are selected for `OUT-002`; runtime
-  behavior and recovery evidence remain undelivered until implementation.
+- SQLite/WAL Phase A behavior, restart context, idempotency, safe/ambiguous
+  recovery classification, and exact-file backup readback are locally verified;
+  production recovery and schema migration remain unverified.
 - OS-specific network enforcement and sandbox primitives need current platform
   research and runtime evidence.
-- The current agent loop creates `history` per message and is not durable.
+- Provider-reported token usage, pricing, and enforceable token/monetary budgets
+  remain unavailable, so `OUT-002` is not complete.
 - The current ladder, decision log, and journal are not integrated with verified
   run outcomes.
