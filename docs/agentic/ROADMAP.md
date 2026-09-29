@@ -22,7 +22,7 @@
 **Dependencies:** OUT-001
 **Readiness:** Blocked
 **State:** In Progress
-**Completion Note:** Phase A is implemented and locally verified: schema-v1 SQLite/WAL messages/runs/checkpoints, restart StateView, idempotency, cooperative controls, safe/ambiguous recovery, and backup readback. OUT-002 remains incomplete and does not unblock OUT-003 until a policy-accepted successor adds provider-reported token usage, pricing, and enforceable token/monetary budgets.
+**Completion Note:** Phase A is implemented and locally verified: schema-v1 SQLite/WAL messages/runs/checkpoints, restart StateView with cross-run taint preservation, idempotency, cooperative controls, safe/ambiguous recovery, and backup readback. OUT-002 remains incomplete and does not unblock OUT-003 until a policy-accepted successor adds provider-reported token usage, pricing, and enforceable token/monetary budgets.
 **Brainstorming Prompt:** Use the brainstorming skill to design only the OUT-002 provider-usage/pricing successor from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry; preserve delivered Phase A behavior and do not enter OUT-003.
 **Execution Binding:** `docs/superpowers/progress/OUT-002.md` is the ignored current-selection owner. It must bind exact policy-accepted Foundation, Design Spec, receipt, and compatible Implementation Plan identities before implementation; missing or stale bindings block progression.
 

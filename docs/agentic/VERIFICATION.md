@@ -112,19 +112,26 @@ only configuration intent.
   Full inspectable local evidence is linked from ignored
   `docs/superpowers/progress/OUT-001-evidence.md`.
 - 2026-09-29, branch `codex/out-002-durable-runtime`, implementation HEAD
-  `bbf9f67`, macOS, Bun `1.4.2`: `/usr/bin/time -p bun run check` exits 0 with
-  328 tests, 0 failures, 949 expectations across 17 files in 2.95 s.
+  `b20afdf`, macOS, Bun `1.4.2`: `/usr/bin/time -p bun run check` exits 0 with
+  331 tests, 0 failures, 960 expectations across 17 files in 3.07 s.
 - Two separate real CLI processes shared one exact temporary HOME and the
   loaded local no-key model `unsloth/Qwen3.8-Flash-Next-GGUF`: the first stored
   `NEPTUNE-7429`; after process exit, the second answered with that exact word.
   The temp config had no `apiKeyEnv`, no secrets file existed, and runtime bytes
   contained no `sk-` or `Bearer ` marker.
 - With the app stopped and WAL at zero bytes, the exact `runtime.db` copy matched
-  SHA-256 `433387971804798ea98191efadea96ed070622b7ec244655ecfe531524ecfd9e`.
+  SHA-256 `c3cde05f41349cc10601f964218d00001a33a00b9b8bba600e63059846d3c7e2`.
   Separate read-only `DurableRuntimeStore` opens reported schema 1, 4 messages,
   and 2 runs for both primary and backup; immutable backup open created no WAL
   or shared-memory sidecars. Task-owned temp directories were moved to Trash
   after inspection. Evidence is retained in ignored OUT-002 progress.
+- Codex Security diff scan `06eee24c-82cd-45f8-9a18-c211ce719269`
+  covered all six changed source files through `2ec7d34` and found one Medium
+  cross-run provenance-loss issue. Commit `b20afdf` preserves durable session
+  taint; the public two-App regression proves the later run asks under
+  `tainted-context` while a clean session retains its mandate. Repair scan
+  `54865ba1-f93b-48a9-9287-64b21ef37111` covered all three repair source files
+  with zero findings and complete coverage.
 - OUT-002 Phase A does not verify provider token/cost accounting, production
   recovery, schema migration, multi-process coordination, or release readiness.
 - No current CI run, clean-platform matrix, real Laya weights, live Linux

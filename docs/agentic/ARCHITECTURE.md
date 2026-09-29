@@ -99,7 +99,9 @@ bounded prior StateView, commits safe/unsafe checkpoints around decision,
 approval, and tool calls, then persists the assistant reply and terminal state
 before returning. Restart marks interrupted active runs `recovering`; an unsafe
 tool-start checkpoint requires explicit owner resolution and is never replayed
-automatically. The target flow below still includes later provenance, approval,
+automatically. Session taint sources are reconstructed from durable checkpoints
+for new, resumed, and retried runs, preventing untrusted tool content from
+regaining clean-context authority after restart. The target flow below still includes later provenance, approval,
 verification, learning, and containment outcomes.
 
 1. Channel message is persisted under a Session.
