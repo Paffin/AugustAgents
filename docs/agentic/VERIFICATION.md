@@ -103,6 +103,27 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Live-provider repair at 2081216, 2026-09-29
+
+- Typecheck/full gate exit 0: 586 pass, 12 skip, 0 fail, 2180 expectations,
+  598 tests/35 files; tests 8.90 s, combined wall 10.11 s on macOS/Bun 1.4.2.
+- Actual local Qwen through the web UI read a random order.json with reference
+  50804b44ab5eb256 and amount 31676, then returned the correct amount+19=31695.
+  The run persisted completed/1 tool step, 1033 input and 1742 output tokens.
+- A second gateway process opened the same owned state. Without repeating the
+  numbers, the next web request returned the original reference/amount and the
+  correct amount+24=31700. It persisted completed/0 tool steps, 667 input and
+  1381 output tokens; this was conversation continuation, not another file read.
+- First/second elapsed times were 173.50 s / 35.95 s: useful behavior passes,
+  latency remains a gap. Both owned gateways and the browser were stopped;
+  foreign model processes were preserved. Evidence captures remain local.
+- Empty/truncated replies report valid usage before error, decision calls are
+  metered, and generation/retry callbacks enforce current controls. Invalid
+  usage (including null/unsafe integers) fails closed. Timeout responses without
+  usage cannot establish exact billing and remain an explicit limitation.
+- No real Laya, full platform isolation, clean release matrix or production
+  recovery claim is established by these local journeys.
+
 ### Credential-regression closeout at 6c4a2d5, 2026-09-29
 
 - Real encrypted backend injection isolates App/CLI/provenance fixtures from

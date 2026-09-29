@@ -14,19 +14,21 @@ The authoritative Agentic Foundation is listed in
 
 ## Current Focus
 
-Repair the live-provider/useful-task baseline. Credential fixtures are isolated
-and the full suite passes at 6c4a2d5; repository presentation is integrated at
-f7cb009. The complete goal remains governed by the Foundation and 28-outcome roadmap.
+Continue provider configuration and budget correctness after the live-runtime
+repair at 2081216. Real web file reading and useful continuation after restarting
+the process passed. Superpowers is disabled; develop directly against the full
+requirements and 28-outcome roadmap.
 
 ## Active Risks
 
 - Linux/Windows/CI, real Laya weights, live sandbox/egress, signing, updater,
   and recovery evidence remain unverified.
-- Source for budgets, learning, distillation, and memory exists; complete live
-  acceptance is outstanding. Real-model file reading failed in the current UI.
+- Source for budgets, learning, distillation, and memory exists; full acceptance
+  remains outstanding. Current local file/restart journeys pass, but latency is
+  high and broader failure/platform scenarios are not yet qualified.
 - Credential tests are isolated; production Keychain namespace/plaintext fallback
-  remain risks. Provider pricing/dates still contain fixed values; failed model
-  responses and decision calls need complete accounting and budget propagation.
+  remain risks. Provider pricing/dates still contain fixed values. Reported usage
+  now includes decision and empty replies; unreported timeout billing is unknown.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit
