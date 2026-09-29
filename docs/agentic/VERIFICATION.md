@@ -198,6 +198,27 @@ only configuration intent.
   probes before its original hook deadline. A bounded faulthandler trace now
   localizes startup stalls; it does not increase deadlines or establish a fix.
 
+### Proven macOS sidecar startup cause and targeted fix, 2026-09-30
+
+- Native hosted `879126e`, [run 36634734559](https://github.com/Paffin/AugustAgents/actions/runs/36634734559),
+  passed Ubuntu's entire suite and evidence gate: 634 pass, 0 skip, 0 fail,
+  634 tests / 36 files in 15.45 s. All former bubblewrap skips ran, including
+  private-home backing readback and retained hostile file/network/secret probes.
+- macOS's actual faulthandler trace localized the stall to `socket.getfqdn`
+  called by `HTTPServer.server_bind` during `sidecar/laya_server.py` startup.
+  Its loopback-only server now binds with `TCPServer.server_bind` and derives
+  HTTP server name/port from the numeric bound socket without reverse DNS.
+  No global DNS setting, test deadline or model answer was changed.
+- A focused Python regression forbids reverse DNS only during server binding
+  and checks the actual socket address/port. Four Python protocol tests and
+  Ruff 0.16.9 E9/F lint passed. `bun --no-env-file test` for Laya/containment
+  passed 14 tests, skipped 8 Linux-only cases, failed 0, 33 assertions / 22 tests
+  in 325 ms. Local engineering checks deliberately do not load the owner's
+  private `.env`; registration is the separately authorized exception.
+- The temporary traceback timer was removed after diagnosis; bounded fixture
+  process/probe diagnostics remain. A fresh native macOS matrix is required to
+  accept the fix. Windows permission/path/socket/process failures remain open.
+
 ### Exclusive runtime owner, 2026-09-30
 
 - Fixed the concurrent-start defect observed in the UX increment below. Ordinary

@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 import unittest
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("laya_server", ROOT / "laya_server.py")
@@ -17,9 +17,20 @@ spec.loader.exec_module(fake)
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_numeric_loopback_binding_never_uses_reverse_dns(self):
+        # Public startup contract: forbid an external resolver even if DNS stalls.
+        with patch("socket.getfqdn", side_effect=AssertionError("reverse DNS is forbidden")):
+            server = server_module.LoopbackHttpServer(("127.0.0.1", 0), server_module.make_handler(fake.load("fixture")))
+            try:
+                self.assertEqual(server.server_name, server.socket.getsockname()[0])
+                self.assertEqual(server.server_port, server.socket.getsockname()[1])
+                self.assertGreater(server.server_port, 0)
+            finally:
+                server.server_close()
+
     @classmethod
     def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), server_module.make_handler(fake.load("fixture")))
+        cls.server = server_module.LoopbackHttpServer(("127.0.0.1", 0), server_module.make_handler(fake.load("fixture")))
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
 

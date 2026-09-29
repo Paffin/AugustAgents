@@ -104,9 +104,7 @@ describe("python sidecar (with a fake laya module)", () => {
   const root = join(import.meta.dir, "../../../sidecar");
 
   async function start(mode: string, p: number): Promise<ChildProcess> {
-    const child = spawn(process.env.AUGUST_TEST_PYTHON ?? "python3", ["-c",
-      "import faulthandler, runpy, sys; faulthandler.dump_traceback_later(2); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')",
-      join(root, "laya_server.py"), "--port", String(p)], {
+    const child = spawn(process.env.AUGUST_TEST_PYTHON ?? "python3", [join(root, "laya_server.py"), "--port", String(p)], {
       env: { ...process.env, PYTHONPATH: join(root, "test/fake"), LAYA_FAKE: mode },
       stdio: ["ignore", "pipe", "pipe"],
     });

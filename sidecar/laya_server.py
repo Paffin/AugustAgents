@@ -21,10 +21,19 @@ import argparse
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 
 MODEL_ID = "convaiinnovations/laya-multilingual"
 MAX_BODY = 256 * 1024
 PROB_KEYS = ("probs", "probabilities", "scores", "distribution")
+
+
+class LoopbackHttpServer(ThreadingHTTPServer):
+    """Numeric local binding must not wait for external reverse DNS at startup."""
+
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.socket.getsockname()[:2]
 
 
 def to_laya(question):
@@ -117,7 +126,7 @@ def main(argv=None):
         print("The laya package is not installed: pip install laya", file=sys.stderr)
         return 1
     agent = laya.load(args.model)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(agent))
+    server = LoopbackHttpServer(("127.0.0.1", args.port), make_handler(agent))
     print(f"Laya sidecar on http://127.0.0.1:{args.port}", flush=True)
     server.serve_forever()
     return 0
