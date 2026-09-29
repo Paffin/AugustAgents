@@ -110,6 +110,56 @@ export interface AgentReply {
   tainted: boolean;
   stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget";
   error?: string;
+  /** Decisions and executions of this handle call, for the learning pipeline. */
+  trace?: RunTrace;
+}
+
+/** One decision the runtime made, with everything needed to score it later against a verified outcome. */
+export interface TraceDecision {
+  index: number;
+  questionId: string;
+  /** The question as asked, so an example can be replayed exactly. */
+  instructions: string;
+  /** The exact text the decision saw. Private: whoever persists it must drop it when `tainted`. */
+  state: string;
+  options: Array<{ key: string; description: string }>;
+  choice: string;
+  source: "primary" | "fallback" | "unknown";
+  reason?: string;
+  confidence: number;
+  /** What the primary (Laya) said even when another engine answered. */
+  primary?: { choice: string; confidence: number; probs: Record<string, number>; calibration?: { segment: string; level: string; temperature: number; raw: Record<string, number> } };
+  /** The context held untrusted content when the decision was made. Such a decision is never a training example. */
+  tainted: boolean;
+  taintSources: string[];
+  sensitivity: "public" | "personal" | "secret";
+  at: number;
+}
+
+/** What happened when a decision led to a call. */
+export interface TraceExecution {
+  decisionIndex: number;
+  tool: string;
+  /** Kept in memory for host-side verifiers, which re-observe the world with them; never persisted as content. */
+  args: Record<string, unknown>;
+  argsHash: string;
+  policy: { decision: string; rule: string };
+  /** A person approved it (the policy asked). Undefined when policy allowed it outright. */
+  approved?: boolean;
+  isError: boolean;
+  /** The result text as it reached the context, bounded. In memory only, for verifiers. */
+  result: string;
+  resultHash: string;
+  resultChars: number;
+  trust: Array<"trusted" | "untrusted">;
+  effects: string[];
+  startedAt: number;
+  finishedAt: number;
+}
+
+export interface RunTrace {
+  decisions: TraceDecision[];
+  executions: TraceExecution[];
 }
 
 export interface AgentCheckpointState {
@@ -169,6 +219,7 @@ class RunControlError extends Error {
 }
 export class AgentCheckpointError extends Error { constructor(cause: unknown) { super(`checkpoint observer failed: ${(cause as Error).message}`); this.name = "AgentCheckpointError"; } }
 
+const TOOL_CHOICE_INSTRUCTIONS = "Which tool should handle the request next? Choose none if the request is already answered above or needs no tool.";
 const DEFAULT_SCHEMA: JsonSchema = { type: "object", additionalProperties: true };
 
 function fingerprint(value: unknown): string {
@@ -204,12 +255,20 @@ export class AgentRuntime {
   }
 
   async handle(session: SessionKey, text: string, context: AgentExecutionContext = {}): Promise<AgentReply> {
+    const trace: RunTrace = { decisions: [], executions: [] };
+    const reply = await this.execute(session, text, context, trace);
+    return { ...reply, trace };
+  }
+
+  private async execute(session: SessionKey, text: string, context: AgentExecutionContext, trace: RunTrace): Promise<AgentReply> {
     const { journal } = this.options;
     const log = (kind: string, data: unknown) => journal.append({ kind, session, data }, this.now());
     if (context.checkpoint && (!context.checkpoint.taint || !context.checkpoint.loop)) throw new Error("checkpoint is missing safety state");
     const priorTaint = new TaintState(context.priorTaint ?? (context.priorMessages?.length ? { tainted: true, sources: ["durable-prior-context"] } : undefined));
     const taint = new TaintState(context.checkpoint?.taint);
     for (const source of priorTaint.snapshot().sources) taint.mark(source);
+    // What earlier runs of the session read stays as sensitive as it was, not only as untrusted.
+    taint.raiseSensitivity(priorTaint.snapshot().sensitivity ?? "public");
     const guard = new LoopGuard({ maxSteps: context.maxSteps ?? this.options.maxSteps ?? 12 });
     if (context.checkpoint) guard.restore(context.checkpoint.loop);
     if (context.maxSteps !== undefined && (!Number.isInteger(context.maxSteps) || context.maxSteps < 1)) throw new Error("invalid maxSteps");
@@ -263,10 +322,19 @@ export class AgentRuntime {
           this.options.decision,
           shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })),
           { state, tainted: taint.snapshot().tainted },
-          "Which tool should handle the request next? Choose none if the request is already answered above or needs no tool.",
+          TOOL_CHOICE_INSTRUCTIONS,
         );
         control();
         log("decision", { source: choice.decision.source, tool: choice.tool, confidence: choice.decision.confidence });
+        const seen = taint.snapshot();
+        const decided: TraceDecision = {
+          index: trace.decisions.length, questionId: "tool-choice", instructions: TOOL_CHOICE_INSTRUCTIONS, state,
+          options: [...shortlist.map((s) => ({ key: s.tool.name, description: s.tool.description })), { key: "none", description: "none of the above fits" }],
+          choice: choice.decision.choice, source: choice.decision.source ?? "unknown", reason: choice.decision.reason, confidence: choice.decision.confidence,
+          ...(choice.decision.primary ? { primary: { choice: choice.decision.primary.choice, confidence: choice.decision.primary.confidence, probs: { ...choice.decision.primary.probs }, calibration: choice.decision.primary.calibration } } : {}),
+          tainted: seen.tainted, taintSources: [...seen.sources], sensitivity: seen.sensitivity ?? "public", at: this.now(),
+        };
+        trace.decisions.push(decided);
 
         if (choice.tool === null) { control(); return await this.finish(text, allHistory(), undefined, steps, taint, log, llmControls(), control); }
 
@@ -342,6 +410,7 @@ export class AgentRuntime {
         if (hasExternalEffect) externalEffects += 1;
         await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
         control();
+        const startedAt = this.now();
         log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
         let parts: ContentPart[];
         let failed = false;
@@ -359,6 +428,12 @@ export class AgentRuntime {
         const total = parts.reduce((n, part) => n + part.text.length, 0);
         log("tool.result", { tool: descriptor.name, chars: total, failed, resultHash: fingerprint(parts.map((part) => part.text)), parts: parts.map((part) => ({ origin: part.origin.kind, trust: part.trust, sensitivity: part.sensitivity, chars: part.text.length })) });
 
+        trace.executions.push({
+          decisionIndex: decided.index, tool: descriptor.name, args: structuredClone(args), argsHash: fingerprint(args),
+          policy: { decision: verdict.decision, rule: verdict.rule }, ...(verdict.decision === "ask" ? { approved: true } : {}),
+          isError: failed, result: parts.map((part) => part.text).join("\n").slice(0, 20_000), resultHash: fingerprint(parts.map((part) => part.text)), resultChars: total,
+          trust: parts.map((part) => part.trust), effects: [...descriptor.effects], startedAt, finishedAt: this.now(),
+        });
         for (const part of parts) taint.absorbPart(part);
         history.push(`Result of ${descriptor.name}:${clipped.some((part) => part.trust === "untrusted") ? "\n" : " "}${renderParts(clipped)}`);
         await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });

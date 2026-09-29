@@ -5,6 +5,9 @@ import {
   DecisionCascade,
   HeuristicEngine,
   LayaEngine,
+  fitCalibrationTable,
+  parseCalibrationTable,
+  type CalibrationTable,
   LlmChoiceEngine,
   LlmQueryExpander,
   OpenAiCompatibleProvider,
@@ -17,12 +20,14 @@ import { CapabilityRegistry } from "@august/capabilities";
 import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, EventJournal, makeSessionKey, type SessionKey } from "@august/core";
 import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
 import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
+import { LearningStore, VerifierSet, calibrationSamples, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
 import { PolicyEngine } from "@august/policy";
 import { BuiltinExecutor, builtinManifest, clockManifest } from "./builtins.ts";
 import { ConfigError, loadConfig, resolveLlmPricing, writeConfig, type AugustConfig, type McpServerConfig } from "./config.ts";
 import { JsonlDecisionLog } from "./decision-log.ts";
 import { MetaExecutor, metaManifest, type ArtifactService } from "./meta.ts";
 import { targetsFor, type TargetRoots } from "./targets.ts";
+import { builtinVerifiers } from "./verifiers.ts";
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
 import { SecretBroker, type DeliveryContext, type EgressMode } from "./broker.ts";
 
@@ -65,6 +70,14 @@ export interface App {
   approvals: ApprovalLedger;
   secrets: SecretStore;
   sandbox: SandboxKind;
+  /** Decisions, executions and the evidence about their outcomes. Examples are derived from it by one rule. */
+  learning: LearningStore;
+  /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
+  feedback(session: SessionKey, runId: string, verdict: "success" | "failure", note?: string): void;
+  /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
+  recalibrate(): { samples: number; segments: number; table: CalibrationTable };
+  /** Whether verified outcomes support letting Laya decide alone. */
+  activationReport(): ActivationReport;
   /** Handle one message and save the decision statistics. */
   handle(session: SessionKey, text: string, approver?: Approver, options?: HandleOptions): Promise<DurableAgentReply>;
   getRun(id: string): DurableRun | undefined;
@@ -125,7 +138,15 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   // Laya decides when a sidecar is configured; until then a heuristic stands in.
   // Either way the cascade starts in shadow mode and earns its way out.
   let primary: DecisionEngine = new HeuristicEngine();
-  if (config.laya) primary = new LayaEngine(layaHttpTransport(config.laya.url, { fetch: deps.fetch }), { temperature: config.laya.temperature });
+  const engineId = config.laya?.engine ?? "laya";
+  const calibrationPath = join(config.dataDir, "calibration.json");
+  const loadCalibration = (): CalibrationTable | undefined => {
+    try { return existsSync(calibrationPath) ? parseCalibrationTable(JSON.parse(readFileSync(calibrationPath, "utf8"))) : undefined; }
+    // A damaged table is refused whole: Laya then runs uncalibrated, which only sends more decisions to the LLM.
+    catch { return undefined; }
+  };
+  let laya: LayaEngine | undefined;
+  if (config.laya) primary = laya = new LayaEngine(layaHttpTransport(config.laya.url, { fetch: deps.fetch }), { temperature: config.laya.temperature, calibration: loadCalibration(), engine: engineId });
   const cascade = new DecisionCascade({
     primary,
     fallback: new LlmChoiceEngine(llm),
@@ -262,6 +283,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   mcp = new McpHost(registry, { fallback: meta });
 
   const journal = new EventJournal(join(config.dataDir, "journal.db"));
+  const verifierSet = new VerifierSet(builtinVerifiers({ root: config.root, skillsDir: config.skillsDir, registry }));
+  const learning = new LearningStore(join(config.dataDir, "learning.db"), { verifiers: verifierSet.ids() });
   const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"));
   const policy = new PolicyEngine();
   const registryHost = new URL(config.registryUrl).host;
@@ -307,11 +330,23 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
   const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
+  /** Records what a run decided and did, then lets the host check what it can. A failure here never changes what the person gets. */
+  const learnFrom = async (run: DurableRun, reply: AgentReply, seg: { startedAt: number; llmCalls: number; usageBefore: DurableRun["usage"] }): Promise<void> => {
+    if (!reply.trace || reply.trace.decisions.length === 0) return;
+    try {
+      const after = runs.getRun(run.id)!.usage; const id = learning.nextSegmentId(run.id);
+      learning.recordRun({ runId: id, session: run.session, startedAt: seg.startedAt, finishedAt: Date.now(), trace: reply.trace, usage: { llmCalls: seg.llmCalls, totalTokens: after.totalTokens - seg.usageBefore.totalTokens, costMicros: after.costMicros - seg.usageBefore.costMicros } });
+      for (const { decisionIndex, evidence } of await verifierSet.verify(reply.trace.executions)) learning.addEvidence(id, decisionIndex, evidence);
+    } catch (error) {
+      journal.append({ kind: "learning.error", session: run.session, data: { name: (error as Error).name } });
+    }
+  };
   const execute = async (run: DurableRun, perMessage?: Approver, priorMessages?: string[], priorProvenance: { sources: string[]; sensitivity: "public" | "personal" | "secret" } = { sources: [], sensitivity: "public" }): Promise<DurableAgentReply> => {
     if (run.state === "recovering" && (!run.checkpoint?.safeToResume || run.checkpoint.phase === "tool_started")) throw new Error("run needs owner resolution before resume");
     const controller = new AbortController(); let finish!: () => void;
     const entry: Active = { controller, done: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
     active.set(run.id, entry); if (perMessage) approver.bySession.set(run.session, perMessage);
+    const segmentStart = Date.now(); const usageBefore = run.usage; let llmCalls = 0;
     let usageStop: "token-budget" | "cost-budget" | undefined = run.usage.totalTokens >= run.budget.maxTokens ? "token-budget" : run.usage.costMicros > 0 && run.usage.costMicros >= run.budget.maxCostMicros ? "cost-budget" : undefined;
     try {
       run = runs.transition(run.id, "running");
@@ -320,7 +355,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       let reply = await agent.handle(run.session, run.request, {
         priorMessages, priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(priorProvenance.sensitivity === "public" ? {} : { sensitivity: priorProvenance.sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
-        onUsage: async (usage) => { usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
+        onUsage: async (usage) => { llmCalls += 1; usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
         remainingTokens: () => { const current = runs.getRun(run.id)!; return Math.max(1, current.budget.maxTokens - current.usage.totalTokens); },
         usageExhaustion: () => usageStop,
         onEvent: (event) => {
@@ -343,6 +378,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       } else {
         run = runs.finishRun(run.id, "completed", reply.reply, { steps: reply.steps });
       }
+      await learnFrom(run, reply, { startedAt: segmentStart, llmCalls, usageBefore });
       return { ...reply, runId: run.id, replayed: false };
     } catch (error) {
       const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, current.checkpoint?.phase === "tool_started" && !current.checkpoint.safeToResume ? "recovering" : "failed", { error: (error as Error).message });
@@ -380,6 +416,21 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
     retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
+    learning,
+    feedback(session, runId, verdict, note) {
+      const segment = learning.latestSegmentId(runId);
+      // Only the person whose run it was can judge it: the session recorded with the run must be theirs.
+      if (!segment || learning.sessionOf(segment) !== session) throw new Error("no such run for this session");
+      recordOwnerFeedback(learning, segment, verdict, note);
+    },
+    recalibrate() {
+      const samples = calibrationSamples(learning.examples().examples, engineId);
+      const table = fitCalibrationTable(samples, { engine: engineId });
+      writeFileSync(calibrationPath, JSON.stringify(table, null, 2), { mode: 0o600 });
+      laya?.setCalibration(table);
+      return { samples: samples.length, segments: Object.keys(table.fits).length, table };
+    },
+    activationReport: () => evaluateActivation(learning.examples().examples),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };
       for (const entry of config.mcp) {
@@ -394,6 +445,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     close() {
       mcp.closeAll();
       for (const proxy of proxies) void proxy.close();
+      learning.close();
       runs.close();
       saveStats();
     },

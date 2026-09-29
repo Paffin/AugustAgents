@@ -1,0 +1,12 @@
+{
+  "name": "@august/learning",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@august/agent": "workspace:*",
+    "@august/brain": "workspace:*",
+    "@august/policy": "workspace:*"
+  },
+  "exports": { ".": "./src/index.ts" }
+}

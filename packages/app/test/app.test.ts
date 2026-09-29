@@ -231,7 +231,7 @@ describe("cli", () => {
       expect(denied.status).toBe(401);
       const ok = await fetch(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${cfg.gateway.token}` }, body });
       expect(ok.status).toBe(200);
-      expect(await ok.json()).toEqual({ reply: "hi from gateway" });
+      expect(await ok.json()).toEqual({ reply: "hi from gateway", runId: expect.any(String) });
     } finally {
       r.gateway?.stop();
     }

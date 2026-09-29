@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
-import { DecisionCascade, HeuristicEngine, expectedCalibrationError, fitTemperature, samplesFromLog, type DecisionRecord } from "@august/brain";
+import { DecisionCascade, HeuristicEngine } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
 import { LaneQueue, makeSessionKey } from "@august/core";
 import { startGateway, type RunningGateway } from "@august/gateway";
@@ -43,7 +43,8 @@ const HELP = `august: a local agent that decides with Laya and acts with your to
   august mcp list | rm ID | allow ID HOST... | deny ID      configured MCP servers
   august skills                installed skills
   august laya status | activate [--force]
-  august calibrate             fit Laya's confidence on your logged decisions
+  august calibrate             fit Laya's confidence on verified outcomes (per question, language, option count)
+  august learn status | report | export FILE | feedback RUN good|bad [note]   verified outcomes and training data
 `;
 
 function clip(value: unknown): string {
@@ -97,6 +98,8 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
         return laya(configPath, rest, io);
       case "calibrate":
         return calibrate(configPath, io);
+      case "learn":
+        return learn(configPath, rest, io);
       default:
         io.print(HELP);
         return { code: command === undefined || command === "help" || command === "--help" ? 0 : 1 };
@@ -227,13 +230,26 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
   const app = createApp(config, appDeps(io, configPath, terminalApprover(io)));
   await reportServers(app, io);
   const session = makeSessionKey({ workspace: config.workspace, channel: "cli", user: "local" });
-  io.print('Ready. Type "exit" to quit.');
+  io.print('Ready. Type "exit" to quit. After an answer, /good or /bad [why] tells August whether it was right.');
+  let lastRun: string | undefined;
   for (;;) {
     const line = await io.ask("you> ");
     if (line === null || line.trim() === "exit") break;
     if (line.trim() === "") continue;
+    const verdict = /^\/(good|bad)(?:\s+(.*))?$/.exec(line.trim());
+    if (verdict) {
+      try {
+        if (!lastRun) throw new Error("nothing to judge yet");
+        app.feedback(session, lastRun, verdict[1] === "good" ? "success" : "failure", verdict[2]);
+        io.print("Noted. Thank you.");
+      } catch (error) {
+        io.print(/already gave/.test((error as Error).message) ? "You already told me about that answer." : "There is no answer to judge yet.");
+      }
+      continue;
+    }
     try {
-      const { reply } = await app.handle(session, line);
+      const { reply, runId } = await app.handle(session, line);
+      lastRun = runId;
       io.print(reply);
     } catch {
       io.print("Something went wrong.");
@@ -262,7 +278,8 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
     // The browser polls /v1/pending, so the prompt itself needs no push.
-    onMessage: async ({ session, text }) => ({ reply: (await app.handle(session, text, approvals.approverFor(() => {}))).reply }),
+    onMessage: async ({ session, text }) => { const r = await app.handle(session, text, approvals.approverFor(() => {})); return { reply: r.reply, runId: r.runId }; },
+    feedback: ({ session, runId, verdict, note }) => app.feedback(session, runId, verdict, note),
   });
   } catch (error) {
     app.close();
@@ -284,6 +301,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
         approvals,
         fetch: io.fetch,
         handle: (session, text, approver) => app.handle(session, text, approver),
+        feedback: (session, runId, verdict) => app.feedback(session, runId, verdict),
         onError: (m) => io.print(`telegram: ${m}`),
       });
       void telegram.run();
@@ -401,55 +419,103 @@ function readStats(config: AugustConfig): ReturnType<DecisionCascade["stats"]> {
   return c.stats();
 }
 
-function laya(configPath: string, args: readonly string[], io: CliIo): CliResult {
+/** An app opened only to read what August has learned; nothing is started and no model is called. */
+function openLearningApp(configPath: string, io: CliIo): { config: AugustConfig; app: App } {
   const config = loadConfig(configPath);
-  const s = readStats(config);
-  const ready = s.shadowSamples >= 200 && s.agreementRate >= 0.9;
-  if (args[0] === undefined || args[0] === "status") {
-    io.print(config.laya ? `Laya sidecar: ${config.laya.url}` : "Laya: not connected (a heuristic stands in). See sidecar/laya_server.py.");
-    io.print(`Mode: ${config.laya?.shadow === false ? "deciding" : "shadow (the LLM decides, Laya is measured)"}`);
-    io.print(`Shadow samples: ${s.shadowSamples}, agreement with the LLM: ${(s.agreementRate * 100).toFixed(1)}%`);
-    io.print(ready ? "Ready to activate." : "Needs at least 200 samples with 90% agreement before it decides alone.");
-    return { code: 0 };
-  }
-  if (args[0] === "activate") {
-    if (!config.laya) {
-      io.print("Connect the Laya sidecar first (laya.url in the config).");
-      return { code: 1 };
+  return { config, app: createApp(config, { ...appDeps(io, configPath), llm: io.llm ?? { name: "none", complete: async () => "" } }) };
+}
+
+function laya(configPath: string, args: readonly string[], io: CliIo): CliResult {
+  const { config, app } = openLearningApp(configPath, io);
+  try {
+    const s = readStats(config);
+    const report = app.activationReport();
+    if (args[0] === undefined || args[0] === "status") {
+      io.print(config.laya ? `Laya sidecar: ${config.laya.url} (engine ${config.laya.engine ?? "laya"})` : "Laya: not connected (a heuristic stands in). See sidecar/laya_server.py.");
+      io.print(`Mode: ${config.laya?.shadow === false ? "deciding" : "shadow (the LLM decides, Laya is measured)"}`);
+      io.print(`Verified outcomes: ${report.samples} examples with Laya's answer across ${report.questions.join(", ") || "no question types yet"}`);
+      for (const q of report.perQuestion) io.print(`  ${q.questionId}: ${q.samples} samples, accuracy ${(q.accuracy * 100).toFixed(1)}% (lower bound ${(q.accuracyLowerBound * 100).toFixed(1)}%), calibration error ${q.ece.toFixed(3)}${q.passed ? " ✓" : ""}`);
+      io.print(`For reference only, shadow agreement with the LLM: ${s.shadowSamples} samples, ${(s.agreementRate * 100).toFixed(1)}%. Agreement does not count: only outcomes you or a check confirmed.`);
+      io.print(report.ready ? "Ready to activate." : `Not ready: ${report.reasons.join("; ")}`);
+      return { code: 0 };
     }
-    if (!ready && !args.includes("--force")) {
-      io.print("Not enough evidence yet (see august laya status). Use --force to activate anyway.");
-      return { code: 1 };
+    if (args[0] === "activate") {
+      if (!config.laya) {
+        io.print("Connect the Laya sidecar first (laya.url in the config).");
+        return { code: 1 };
+      }
+      const forced = args.includes("--force");
+      if (!report.ready && !forced) {
+        io.print(`Not enough verified outcomes yet: ${report.reasons.join("; ")}. Use --force to activate anyway.`);
+        return { code: 1 };
+      }
+      writeConfig(configPath, { ...config, laya: { ...config.laya, shadow: false } });
+      app.journal.append({ kind: "laya.activated", session: makeSessionKey({ workspace: config.workspace, channel: "system", user: "owner" }), data: { forced, ready: report.ready, samples: report.samples, questions: report.questions, reasons: report.reasons } });
+      io.print(forced && !report.ready ? "Laya now decides when it is confident. You overrode the evidence; that is recorded." : "Laya now decides when it is confident; the LLM handles the rest.");
+      return { code: 0 };
     }
-    writeConfig(configPath, { ...config, laya: { ...config.laya, shadow: false } });
-    io.print("Laya now decides when it is confident; the LLM handles the rest.");
-    return { code: 0 };
+    io.print("Usage: august laya status | activate [--force]");
+    return { code: 1 };
+  } finally {
+    app.close();
   }
-  io.print("Usage: august laya status | activate [--force]");
-  return { code: 1 };
 }
 
 function calibrate(configPath: string, io: CliIo): CliResult {
-  const config = loadConfig(configPath);
-  const path = join(config.dataDir, "decisions.jsonl");
-  const entries: DecisionRecord[] = existsSync(path)
-    ? readFileSync(path, "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } })
-    : [];
-  const samples = samplesFromLog(entries);
-  if (samples.length < 50) {
-    io.print(`Only ${samples.length} usable decisions logged; calibration needs at least 50.`);
+  const { config, app } = openLearningApp(configPath, io);
+  try {
+    const { examples } = app.learning.examples();
+    const usable = examples.filter((e) => e.label.kind === "chosen-worked" && e.primary?.calibration?.raw).length;
+    if (usable < 50) {
+      io.print(`Only ${usable} verified decisions with Laya's answer are recorded; calibration needs at least 50. Judge answers with /good and /bad in chat, or let the built-in checks confirm them.`);
+      return { code: 1 };
+    }
+    const { samples, segments, table } = app.recalibrate();
+    io.print(`Fitted ${segments} segments from ${samples} verified outcomes (engine ${table.engine}).`);
+    for (const [id, fit] of Object.entries(table.fits).filter(([, f]) => f.level === "exact")) io.print(`  ${id.replace(/^engine=[^|]+\|/, "")}: temperature ${fit.temperature}, error ${fit.eceBefore.toFixed(3)} -> ${fit.eceAfter.toFixed(3)} (${fit.samples} samples)`);
+    io.print(config.laya ? "Applied. Laya uses the fitted temperature for each segment from now on." : "Laya is not connected, so the table is saved but unused.");
+    return { code: 0 };
+  } finally {
+    app.close();
+  }
+}
+
+function learn(configPath: string, args: readonly string[], io: CliIo): CliResult {
+  const { app } = openLearningApp(configPath, io);
+  try {
+    const [action, a, b, ...note] = args;
+    if (action === undefined || action === "status") {
+      const s = app.learning.exclusionSummary();
+      io.print(`Training examples (verified, untainted): ${s.examples}`);
+      io.print(`Not used: ${s["tainted-context"]} made after reading untrusted content, ${s.unresolved} with no verdict yet, ${s["not-executed"]} never executed, ${s["conflicting-evidence"]} with conflicting evidence, ${s["ambiguous-credit"]} where the blame was ambiguous`);
+      return { code: 0 };
+    }
+    if (action === "report") {
+      const rows = app.learning.report();
+      if (!rows.length) io.print("No runs recorded yet.");
+      for (const r of rows) io.print(`${r.stage}: ${r.runs} runs, ${r.verifiedRuns} verified, success ${r.verifiedSuccessRate === null ? "n/a" : `${(r.verifiedSuccessRate * 100).toFixed(0)}%`}, latency ${Math.round(r.avgLatencyMs)} ms, LLM calls ${r.avgLlmCalls?.toFixed(1) ?? "n/a"}, tokens ${r.avgTokens?.toFixed(0) ?? "n/a"}, cost ${r.avgCostMicros === null ? "n/a" : `${(r.avgCostMicros / 1e6).toFixed(4)}`}`);
+      return { code: 0 };
+    }
+    if (action === "export" && a) {
+      const n = app.learning.exportJsonl(a);
+      io.print(`Wrote ${n} verified examples to ${a} (readable only by you: it contains your requests).`);
+      return { code: 0 };
+    }
+    if (action === "feedback" && a && (b === "good" || b === "bad")) {
+      const session = app.learning.sessionOf(app.learning.latestSegmentId(a) ?? a);
+      if (!session) { io.print(`No run ${a}.`); return { code: 1 }; }
+      app.feedback(session as never, a, b === "good" ? "success" : "failure", note.join(" "));
+      io.print("Recorded.");
+      return { code: 0 };
+    }
+    io.print("Usage: august learn status | report | export FILE | feedback RUN good|bad [note]");
     return { code: 1 };
+  } catch (error) {
+    io.print((error as Error).message);
+    return { code: 1 };
+  } finally {
+    app.close();
   }
-  const t = fitTemperature(samples);
-  io.print(`Samples: ${samples.length}`);
-  io.print(`Calibration error: ${expectedCalibrationError(samples, 1).toFixed(3)} -> ${expectedCalibrationError(samples, t).toFixed(3)} (temperature ${t})`);
-  if (config.laya) {
-    writeConfig(configPath, { ...config, laya: { ...config.laya, temperature: t } });
-    io.print("Saved to the config.");
-  } else {
-    io.print("Laya is not connected, so nothing was saved.");
-  }
-  return { code: 0 };
 }
 
 async function doctor(configPath: string, io: CliIo): Promise<CliResult> {

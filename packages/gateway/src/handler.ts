@@ -10,6 +10,9 @@ import {
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
+/** The owner's verdict on an answer they were shown. Throws when the run is not theirs or was already judged. */
+export type FeedbackSink = (input: { session: SessionKey; runId: string; verdict: "success" | "failure"; note?: string }) => void;
+
 export interface IncomingMessage {
   session: SessionKey;
   text: string;
@@ -45,7 +48,9 @@ export interface WebUi {
 export interface GatewayOptions extends BindConfig {
   workspace: string;
   /** The agent loop. Called serially per session, in parallel across sessions. */
-  onMessage(message: IncomingMessage): Promise<{ reply: string }>;
+  onMessage(message: IncomingMessage): Promise<{ reply: string; runId?: string }>;
+  /** Records the owner's judgement of an answer as an independent outcome. Absent: the route answers 404. */
+  feedback?: FeedbackSink;
   queue?: LaneQueue;
   /** Approvals for browser and API clients. They bypass the lane: the lane is busy waiting for them. */
   approvals?: GatewayApprovals;
@@ -162,6 +167,26 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       return json(gone ? 410 : 409, { error: gone ? "that approval is no longer open" : "no matching approval is waiting" });
     }
 
+    if (url.pathname === "/v1/feedback" && request.method === "POST") {
+      if (!options.feedback) return json(404, { error: "not found" });
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return json(415, { error: "content-type must be application/json" });
+      const raw = await readBody(request);
+      if (raw === null) return json(413, { error: "body too large" });
+      let payload: Record<string, unknown>;
+      try { payload = JSON.parse(raw) ?? {}; } catch { return json(400, { error: "invalid JSON" }); }
+      const session = sessionFrom(payload.channel, payload.user);
+      if (!session || typeof payload.runId !== "string" || payload.runId.length === 0 || payload.runId.length > 200 || (payload.verdict !== "success" && payload.verdict !== "failure") || (payload.note !== undefined && (typeof payload.note !== "string" || payload.note.length > 300))) {
+        return json(400, { error: "channel, user, runId and verdict (success or failure) are required" });
+      }
+      try {
+        options.feedback({ session, runId: payload.runId, verdict: payload.verdict, note: payload.note as string | undefined });
+        return json(200, { ok: true });
+      } catch (error) {
+        // Not theirs, unknown or already judged look the same from outside.
+        return json(/already/.test((error as Error).message) ? 410 : 409, { error: /already/.test((error as Error).message) ? "that answer was already judged" : "no such answer for this session" });
+      }
+    }
+
     if (url.pathname === "/v1/message" && request.method === "POST") {
       if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
         return json(415, { error: "content-type must be application/json" });
@@ -187,7 +212,7 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       }
       try {
         const result = await queue.enqueue(session, () => options.onMessage({ session, text }));
-        return json(200, { reply: result.reply });
+        return json(200, { reply: result.reply, ...(result.runId ? { runId: result.runId } : {}) });
       } catch (error) {
         if (error instanceof QueueOverflowError) return json(429, { error: "too many pending messages" });
         return json(500, { error: "agent failed" });

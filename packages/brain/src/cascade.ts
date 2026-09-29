@@ -15,6 +15,23 @@ export interface CascadeDecision extends DecisionResult {
   source: DecisionSource;
   /** Why the fallback was used, when it was. */
   reason?: "low-confidence" | "primary-error" | "shadow";
+  /** What the primary (Laya) said, even when the fallback answered: recorded so it can later be scored against the verified outcome. */
+  primary?: DecisionResult;
+}
+
+/**
+ * Evidence that the primary is right on verified outcomes, produced by the learning package. Agreement with
+ * the LLM is not evidence: it measures imitation, not correctness (DEC-0004).
+ */
+export interface ActivationEvidence {
+  source: "verified-outcomes";
+  ready: boolean;
+  /** Question types the evidence covers; activation applies to the cascade as a whole, so every one of them must have passed. */
+  questions: readonly string[];
+  samples: number;
+  evaluatedAt: number;
+  /** Why not, when not ready. */
+  reasons: readonly string[];
 }
 
 /** One decision the fallback (LLM) made for the primary (Laya) to learn from later. */
@@ -48,7 +65,7 @@ export interface CascadeStats {
   primaryErrors: number;
   shadowSamples: number;
   shadowAgreements: number;
-  /** Agreement of the primary with the fallback in shadow mode; 0 with no samples. */
+  /** Agreement of the primary with the fallback in shadow mode; 0 with no samples. Shadow diagnostics only: it is not a reason to activate. */
   agreementRate: number;
 }
 
@@ -104,16 +121,13 @@ export class DecisionCascade implements DecisionEngine {
     return { ...c, agreementRate: c.shadowSamples === 0 ? 0 : c.shadowAgreements / c.shadowSamples };
   }
 
-  /** Enough evidence that the primary matches the LLM to let it decide on its own. */
-  shouldActivate(minSamples = 200, minAgreement = 0.9): boolean {
-    const s = this.stats();
-    return s.shadowSamples >= minSamples && s.agreementRate >= minAgreement;
-  }
-
-  /** Leave shadow mode. Refuses without evidence unless `force` is set. */
-  activate(force = false): void {
-    if (!force && !this.shouldActivate()) {
-      throw new DecisionError("not enough agreement between Laya and the LLM to activate");
+  /**
+   * Leave shadow mode. Requires outcome evidence that says ready, or an explicit `force` (the owner overriding
+   * the evidence, which callers must record). Agreement with the LLM never qualifies.
+   */
+  activate(evidence?: ActivationEvidence, force = false): void {
+    if (!force && !(evidence && evidence.source === "verified-outcomes" && evidence.ready && evidence.questions.length > 0)) {
+      throw new DecisionError(`not enough verified outcomes to let the primary decide alone${evidence?.reasons.length ? `: ${evidence.reasons.join("; ")}` : ""}`);
     }
     this.shadow = false;
   }
@@ -130,7 +144,7 @@ export class DecisionCascade implements DecisionEngine {
 
     if (primary && !this.shadow && primary.confidence >= this.threshold) {
       this.counters.primaryAnswers += 1;
-      return { ...primary, source: "primary" };
+      return { ...primary, source: "primary", primary };
     }
 
     const fallback = await this.options.fallback.decide(input, question);
@@ -143,7 +157,7 @@ export class DecisionCascade implements DecisionEngine {
     await this.remember(input, question, primary, fallback);
 
     const reason = !primary ? "primary-error" : this.shadow ? "shadow" : "low-confidence";
-    return { ...fallback, source: "fallback", reason };
+    return { ...fallback, source: "fallback", reason, ...(primary ? { primary } : {}) };
   }
 
   private async remember(
