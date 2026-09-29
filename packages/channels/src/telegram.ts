@@ -1,6 +1,6 @@
 import { LaneQueue, QueueOverflowError, makeSessionKey, type SessionKey } from "@august/core";
 import type { Approver } from "@august/agent";
-import type { ApprovalView } from "@august/gateway";
+import type { ApprovalView, GatewayRunView } from "@august/gateway";
 import type { PendingApprovals } from "./approvals.ts";
 
 export interface TelegramOptions {
@@ -11,6 +11,10 @@ export interface TelegramOptions {
   handle(session: SessionKey, text: string, approver: Approver): Promise<{ reply: string; runId?: string; feedbackId?: string }>;
   /** Records the owner's judgement of an answer. Throws when it is not theirs or was already judged. */
   feedback?(session: SessionKey, feedbackId: string, verdict: "success" | "failure"): void;
+  runs?: {
+    list(session: SessionKey, limit: number): GatewayRunView[];
+    control(session: SessionKey, id: string, action: "pause" | "cancel" | "resume"): Promise<GatewayRunView>;
+  };
   approvals: PendingApprovals;
   fetch?: typeof fetch;
   queue?: LaneQueue;
@@ -98,6 +102,23 @@ export class TelegramChannel {
     return makeSessionKey({ workspace: this.o.workspace, channel: "telegram", user: String(userId) });
   }
 
+  private taskCard(run: GatewayRunView): Record<string, unknown> {
+    const usd = (value: number) => { const n = BigInt(value); return `${n / 1000000n}.${(n % 1000000n).toString().padStart(6, "0")}`; };
+    const active = ["created", "running", "waiting_approval", "waiting_external", "paused", "recovering"].includes(run.state);
+    const buttons = [
+      ...(active && !["paused", "recovering"].includes(run.state) ? [{ text: "Pause", callback_data: `task:${run.id}:pause` }] : []),
+      ...(run.canResume ? [{ text: "Continue", callback_data: `task:${run.id}:resume` }] : []),
+      ...(active ? [{ text: "Cancel further work", callback_data: `task:${run.id}:cancel` }] : []),
+      ...(run.state === "completed" && run.feedbackId && !run.feedbackRecorded && this.o.feedback ? [{ text: "Good answer", callback_data: `fb:${run.feedbackId}:g` }, { text: "Not right", callback_data: `fb:${run.feedbackId}:b` }] : []),
+    ];
+    return {
+      text: `${run.state.replaceAll("_", " ")} · ${run.id}\n\n${run.request.slice(0, 500)}\n\n${run.steps}/${run.budget.maxSteps} steps · ${run.usage.totalTokens}/${run.budget.maxTokens} tokens\nUSD ${usd(run.usage.costMicros)} estimate (not a vendor bill)` +
+        (run.reply ? `\n\n${run.reply.slice(0, 1500)}` : "") +
+        (run.state === "recovering" && !run.canResume ? "\n\nContinuation blocked: an external effect may be uncertain. Owner resolution is required." : ""),
+      reply_markup: { inline_keyboard: buttons.length ? [buttons] : [] },
+    };
+  }
+
   /** Process one batch of updates. Exposed for tests; run() loops over it. */
   async poll(): Promise<void> {
     const updates = await this.api<TgUpdate[]>(
@@ -121,6 +142,17 @@ export class TelegramChannel {
       const cq = u.callback_query;
       if (!this.allowed.has(cq.from.id)) return;
       const session = this.session(cq.from.id);
+      const task = /^task:([A-Za-z0-9_-]{1,40}):(pause|cancel|resume)$/.exec(cq.data ?? "");
+      if (task) {
+        if (!this.o.runs || cq.message?.chat.id !== cq.from.id) { await this.api("answerCallbackQuery", { callback_query_id: cq.id, text: "Task controls unavailable" }); return; }
+        // Acknowledge immediately: continuation can outlive Telegram's callback timeout.
+        await this.api("answerCallbackQuery", { callback_query_id: cq.id, text: "Requested. Stops wait for a safe boundary." });
+        try {
+          const run = await this.o.runs.control(session, task[1]!, task[2] as "pause" | "cancel" | "resume");
+          if (cq.message.message_id !== undefined) await this.api("editMessageText", { chat_id: cq.message.chat.id, message_id: cq.message.message_id, ...this.taskCard(run) });
+        } catch { await this.send(cq.message.chat.id, "Could not confirm that task control. Use /tasks to check the current state before retrying."); }
+        return;
+      }
       const judged = /^fb:([A-Za-z0-9_~-]{1,64}):([gb])$/.exec(cq.data ?? "");
       if (judged && this.o.feedback) {
         let text = "Thank you";
@@ -149,13 +181,21 @@ export class TelegramChannel {
     const session = this.session(m.from.id);
     const chatId = m.chat.id;
 
+    const command = /^\/(start|help|tasks)(?:@[A-Za-z0-9_]+)?\s*$/.exec(m.text);
+    if (command) {
+      if (command[1] === "tasks") {
+        if (!this.o.runs) { await this.send(chatId, "Task controls unavailable in this installation."); return; }
+        const runs = this.o.runs.list(session, 5);
+        if (!runs.length) { await this.send(chatId, "No tasks yet. Describe the result you need to start one."); return; }
+        for (const run of runs) await this.api("sendMessage", { chat_id: chatId, ...this.taskCard(run) });
+      } else await this.send(chatId, "August · your agent workspace\n\nDescribe the result you need. Sensitive actions require your approval.\n\n/tasks — recent tasks, usage, pause and continuation\n/help — this guide\n\nStops wait for a safe boundary; they do not undo calls already started. Keep API keys and passwords out of chat: use the secure web or CLI credential controls.");
+      return;
+    }
+    if (m.text.startsWith("/")) { await this.send(chatId, "Unknown command. Use /help or send your task without a leading slash."); return; }
+
     if (this.o.approvals.pending(session)) {
       // Only a message sent after the prompt, and (if it is a reply) one that replies to it, answers it.
       this.o.approvals.answerText(session, m.text, { sentAt: (m.date ?? 0) * 1000, replyTo: m.reply_to_message?.message_id, resolver: { channel: "telegram", identity: String(m.from.id) } });
-      return;
-    }
-    if (m.text === "/start") {
-      await this.send(chatId, "Hi! I am August. Write what you need.");
       return;
     }
     const approver = this.o.approvals.approverFor((text, view) => this.send(chatId, text, view));

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeSessionKey } from "@august/core";
+import type { GatewayRunView } from "@august/gateway";
 import { ApprovalLedger, type ApprovalRequest } from "@august/agent";
 import { PendingApprovals, TelegramChannel, TelegramError, WEB_HTML, WEB_JS, formatApproval, isYes, splitMessage } from "../src/index.ts";
 
@@ -188,6 +189,39 @@ describe("TelegramChannel", () => {
 
   const cb = (id: number, from: number, data: string) => ({ update_id: id, callback_query: { id: `c${id}`, from: { id: from }, data, message: { message_id: 1001, chat: { id: from } } } });
 
+  test("task commands stay out of the model, list session-bound usage, and refresh controls after pause", async () => {
+    const { f, calls } = fakeTelegram([]);
+    const run: GatewayRunView = { id: "b766e12d-52ba-4c8c-9258-ce20f437be59", state: "running", request: "Read the actual file", steps: 1, usage: { inputTokens: 19, outputTokens: 7, totalTokens: 26, costMicros: 3 }, budget: { maxSteps: 12, maxTokens: 100, maxCostMicros: 50, maxWallMs: 60000, maxExternalEffects: 1 }, canResume: false, updatedAt: 1 };
+    let handled = 0; const controls: string[] = [];
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42, 7], fetch: f, approvals: new PendingApprovals(), handle: async () => { handled++; return { reply: "answer" }; }, runs: {
+      list: (s, limit) => { expect(s).toBe(session); expect(limit).toBe(5); return [run]; },
+      control: async (s, id, action) => { if (s !== session || id !== run.id) throw Error("not owned"); controls.push(action); return { ...run, state: "paused", canResume: true }; },
+    } });
+    await tg.dispatchForTest(msg(1, 42, "/tasks"));
+    const card = calls.find(c => c.method === "sendMessage")!.body;
+    expect(card.text).toContain("26/100 tokens"); expect(card.text).toContain("0.000003 estimate");
+    const buttons = card.reply_markup.inline_keyboard[0];
+    expect(buttons.map((b: { text: string }) => b.text)).toEqual(["Pause", "Cancel further work"]);
+    for (const b of buttons) expect(Buffer.byteLength(b.callback_data)).toBeLessThanOrEqual(64);
+    await tg.dispatchForTest(cb(2, 42, buttons[0].callback_data));
+    expect(controls).toEqual(["pause"]);
+    expect(calls.find(c => c.method === "editMessageText")!.body.reply_markup.inline_keyboard[0][0].text).toBe("Continue");
+    await tg.dispatchForTest(cb(3, 7, buttons[0].callback_data));
+    await tg.dispatchForTest({ ...cb(4, 42, buttons[0].callback_data), callback_query: { ...cb(4, 42, buttons[0].callback_data).callback_query, message: { message_id: 2, chat: { id: -1 } } } });
+    expect(controls).toEqual(["pause"]);
+    await tg.dispatchForTest(msg(5, 42, "/help")); await tg.dispatchForTest(msg(6, 42, "/not-a-command"));
+    expect(handled).toBe(0);
+  });
+
+  test("help and task commands do not accidentally deny a pending approval", async () => {
+    const approvals = new PendingApprovals(); const { f } = fakeTelegram([]);
+    const waiting = approvals.approverFor(() => {}).approve(request(approvals.ledger));
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals, handle: async () => { throw Error("must not call model"); } });
+    await tg.dispatchForTest(msg(1, 42, "/help")); await tg.dispatchForTest(msg(2, 42, "/tasks"));
+    expect(approvals.pending(session)).not.toBeNull();
+    approvals.resolve({ ...answerOf(approvals), allow: false }); expect(await waiting).toBe(false);
+  });
+
   test("inline buttons answer only for the person they were issued to, and a replayed press resolves nothing", async () => {
     const approvals = new PendingApprovals();
     const { f, calls } = fakeTelegram([[msg(1, 42, "go")]]);
@@ -303,7 +337,8 @@ describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
     expect(WEB_HTML).toMatch(/<main>[\s\S]*<\/main>/);
     expect(WEB_HTML).toContain('role="log"');
     expect(WEB_HTML).toContain('aria-live="polite"');
-    expect(WEB_HTML).toMatch(/<label class="sr" for="text">[^<]+<\/label>\s*<input id="text"/);
+    expect(WEB_HTML).toMatch(/<label class="sr" for="text">[^<]+<\/label>\s*<textarea id="text"/);
+    expect(WEB_HTML).toContain('aria-describedby="composer-help"');
     expect(WEB_HTML).toContain(":focus-visible");
     expect(WEB_HTML).not.toMatch(/outline:\s*none/);
   });

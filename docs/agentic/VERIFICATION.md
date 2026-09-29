@@ -103,6 +103,37 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Owner workspace UX increment, 2026-09-30
+
+- Responsive web navigation separates Chat, Tasks and Secrets; multi-line input
+  uses Enter/Shift+Enter and retains an unsent draft across section changes.
+  Send is disabled until an authenticated runtime request succeeds. Invalid
+  fixture credentials show an unavailable state and a retry action; reconnect
+  with the owned token restores input. No external fonts/assets/requests added.
+- Actual browser captures inspected at 1440×900 and 390×844, in owned session
+  `august-ux-20260930`. Final Chat/Tasks/Secrets axe checks: zero violations and
+  zero incomplete checks; no browser errors observed. Captures are retained in
+  `/private/tmp/august-task-controls.O4O0qH/ux-*-final.png`, not production data.
+- A new useful task `83c4d6fb-bbb5-4ca9-8f65-f3f7e0bd3e24` actually read the
+  retained random `order.json`. New navigation exposed running state, pause,
+  usage and continuation. Pause succeeded, but continuation did NOT complete:
+  a concurrently opened CLI store incorrectly marked the running web task
+  recovering; the model request later timed out. UI showed failed state, no
+  success rating, and retained previous completed results. Source unchanged.
+  This is failure/state evidence, not a passed end-to-end continuation journey.
+- Actual terminal commands `/help`, `/tasks`, unknown-command handling and
+  `/exit` exercised the owned configuration, without forwarding commands to a
+  model. Existing public file-task regression now also checks those commands,
+  recorded usage and that command routing creates no extra runs.
+- Telegram task-card/action regressions cover private session binding,
+  forwarded/foreign controls, callback size and approval-preserving commands.
+  Live Telegram validation is explicitly deferred by the owner ("пока без тг").
+- `bun run check`: 620 pass, 12 skip, 0 fail; 2396 assertions / 632 tests /
+  36 files, 23.01s. Typecheck and host-native build pass. Full TUI, onboarding,
+  other control-center pages and competitor parity remain open. This stage
+  follows the frontend skill's hierarchy/responsiveness/state guidance; it does
+  not treat cosmetic work or transport fixtures as full product acceptance.
+
 ### Exact-result owner-feedback binding, 2026-09-30
 
 - Replaced implicit latest-segment selection with an exact feedback-id. The

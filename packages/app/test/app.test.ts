@@ -265,13 +265,19 @@ describe("cli", () => {
   test("chat answers from a file, end to end, and journals the task", async () => {
     const home = tmp();
     const llm = scriptedLlm({ tool: "fs.read", args: { path: "welcome.md" }, reply: "It says Welcome." });
-    const { io, out } = makeIo(home, ["what is in welcome.md? read the file", "exit"], llm);
+    const { io, out } = makeIo(home, ["/help", "/tasks", "/not-a-command", "what is in welcome.md? read the file", "/tasks", "/exit"], llm);
     await main(["init"], io); configureTestPricing(io.home);
     expect((await main(["chat"], io)).code).toBe(0);
     expect(out).toContain("It says Welcome.");
+    expect(out.join("\n")).toContain("No tasks yet.");
+    expect(out.join("\n")).toContain("/resume ID");
+    expect(out.join("\n")).toContain("Unknown command.");
+    expect(out.join("\n")).toContain("µUSD estimate (not a vendor bill)");
     const cfg = loadConfig(defaultConfigPath(home));
     const decisions = readFileSync(join(cfg.dataDir, "decisions.jsonl"), "utf8");
     expect(decisions).not.toBe("");
+    const runs = new DurableRuntimeStore(join(cfg.dataDir, "runtime.db"));
+    expect(runs.listRuns()).toHaveLength(1); runs.close();
   });
 
   test("chat ends cleanly when input ends", async () => {

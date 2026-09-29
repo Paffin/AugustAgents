@@ -31,6 +31,13 @@ one real file/computation task; unsafe recovery remains blocked.
 Owner answer ratings now bind exact learning segments across Web/CLI/Telegram,
 including persisted completed task cards after resume. Automated fixture feedback
 is not a real human rating or activation qualification.
+The user added competitive-quality UX across CLI/web/Telegram on 2026-09-30.
+Responsive web workspace navigation and multi-line input are implemented;
+CLI/TG commands now expose task state and safe continuation without using the
+model for command routing. This is an initial functional UX increment, not
+complete competitor parity. Live simultaneous CLI/gateway verification exposed
+a shared-runtime startup defect: a second writable store marks a still-running
+owner's tasks recovering. Multi-process recovery must be fixed and reverified.
 
 ## Active Risks
 

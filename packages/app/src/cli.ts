@@ -287,12 +287,30 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
   const app = createApp(config, appDeps(io, configPath, terminalApprover(io)));
   await reportServers(app, io);
   const session = makeSessionKey({ workspace: config.workspace, channel: "cli", user: "local" });
-  io.print('Ready. Type "exit" to quit. After an answer, /good or /bad [why] tells August whether it was right.');
+  io.print(`\nAugust · ${config.workspace}\nModel: ${config.llm.model}\nDescribe the result you need. /help shows controls; /exit leaves the chat.`);
+  const help = '/tasks — recent task state and usage\n/resume ID — continue a safely paused task\n/good or /bad [why] — assess the last completed answer\n/exit — leave the chat\nApprovals require an explicit y. Use august secret set for credentials, never chat.';
+  const report = (run: DurableRun) => io.print(`  ${run.id} · ${run.state}\n  ${run.steps}/${run.budget.maxSteps} steps · ${run.usage.totalTokens}/${run.budget.maxTokens} tokens · ${run.usage.costMicros} µUSD estimate (not a vendor bill)`);
   let lastRun: string | undefined;
   for (;;) {
     const line = await io.ask("you> ");
-    if (line === null || line.trim() === "exit") break;
+    if (line === null || ["exit", "/exit"].includes(line.trim())) break;
     if (line.trim() === "") continue;
+    if (line.trim() === "/help") { io.print(help); continue; }
+    if (line.trim() === "/tasks") {
+      const runs = app.listRuns({ session, limit: 10 });
+      if (!runs.length) io.print("No tasks yet. Describe the result you need.");
+      for (const run of runs) { report(run); io.print(`  ${run.request.slice(0, 200)}`); if (runView(app, run).canResume) io.print(`  Continue: /resume ${run.id}`); }
+      continue;
+    }
+    const resume = /^\/resume\s+([A-Za-z0-9_-]{1,64})$/.exec(line.trim());
+    if (resume) {
+      const run = app.getRun(resume[1]!);
+      if (!run || run.session !== session || !runView(app, run).canResume) { io.print("Cannot safely continue that task in this session. Check /tasks."); continue; }
+      io.print("Continuing from the saved safe boundary…");
+      try { const result = await app.resumeRun(run.id); lastRun = result.feedbackId; io.print(result.reply); report(app.getRun(run.id)!); }
+      catch { io.print("Continuation failed. Check /tasks before retrying."); }
+      continue;
+    }
     const verdict = /^\/(good|bad)(?:\s+(.*))?$/.exec(line.trim());
     if (verdict) {
       try {
@@ -304,10 +322,13 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
       }
       continue;
     }
+    if (line.trim().startsWith("/")) { io.print("Unknown command. Use /help or send a task without a leading slash."); continue; }
     try {
-      const { reply, feedbackId } = await app.handle(session, line);
+      io.print("Working…");
+      const { reply, feedbackId, runId } = await app.handle(session, line);
       lastRun = feedbackId;
       io.print(reply);
+      const run = app.getRun(runId); if (run) report(run);
     } catch {
       io.print("Something went wrong.");
     }
@@ -316,19 +337,31 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
   return { code: 0 };
 }
 
+function runView(app: App, run: DurableRun): GatewayRunView {
+    const feedbackId = run.state === "completed" ? app.learning.latestSegmentId(run.id) : undefined;
+    return { id: run.id, state: run.state, request: run.request,
+    feedbackId, feedbackRecorded: feedbackId ? app.learning.hasOwnerFeedback(feedbackId) : false,
+    steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) ? run.reply : undefined, updatedAt: run.updatedAt,
+    canResume: ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
+  }; }
+
 async function serve(configPath: string, io: CliIo): Promise<CliResult> {
   const config = loadConfig(configPath);
   const app = createApp(config, appDeps(io, configPath));
   await reportServers(app, io);
   const approvals = new PendingApprovals(app.approvals);
   const queue = new LaneQueue();
-  const runView = (run: DurableRun): GatewayRunView => {
-    const feedbackId = run.state === "completed" ? app.learning.latestSegmentId(run.id) : undefined;
-    return { id: run.id, state: run.state, request: run.request,
-    feedbackId, feedbackRecorded: feedbackId ? app.learning.hasOwnerFeedback(feedbackId) : false,
-    steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) ? run.reply : undefined, updatedAt: run.updatedAt,
-    canResume: ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
-  }; };
+  const controlRun = async (session: string, id: string, action: "pause" | "cancel" | "resume"): Promise<GatewayRunView> => {
+    const run = app.getRun(id); if (!run || run.session !== session) throw Error("no run for session");
+    if (action === "resume") {
+      if (!runView(app, run).canResume) throw Error("unsafe checkpoint");
+      await queue.enqueue(session, () => app.resumeRun(id, approvals.approverFor(() => {})));
+    } else {
+      if (!["created", "running", "waiting_approval", "waiting_external", "paused", "recovering"].includes(run.state)) throw Error("run is not active");
+      await (action === "pause" ? app.pauseRun(id) : app.cancelRun(id));
+    }
+    return runView(app, app.getRun(id)!);
+  };
   const gatewayRunSession = (session: string) => { if (session.split(":")[1] === "telegram") throw Error("channel has its own transport"); };
 
   let inner: RunningGateway;
@@ -345,18 +378,10 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     // The browser polls /v1/pending, so the prompt itself needs no push.
     onMessage: async ({ session, text, budget }) => { const r = await app.handle(session, text, approvals.approverFor(() => {}), { budget }); return { reply: r.reply, runId: r.runId, state: app.getRun(r.runId)?.state, feedbackId: r.feedbackId }; },
     runs: {
-      list: (session, limit) => { gatewayRunSession(session); return app.listRuns({ session, limit }).map(runView); },
+      list: (session, limit) => { gatewayRunSession(session); return app.listRuns({ session, limit }).map(run => runView(app, run)); },
       control: async ({ session, id, action }) => {
         gatewayRunSession(session);
-        const run = app.getRun(id); if (!run || run.session !== session) throw Error("no run for session");
-        if (action === "resume") {
-          if (!runView(run).canResume) throw Error("unsafe checkpoint");
-          await queue.enqueue(session, () => app.resumeRun(id, approvals.approverFor(() => {})));
-        } else {
-          if (!["created", "running", "waiting_approval", "waiting_external", "paused", "recovering"].includes(run.state)) throw Error("run is not active");
-          await (action === "pause" ? app.pauseRun(id) : app.cancelRun(id));
-        }
-        return runView(app.getRun(id)!);
+        return controlRun(session, id, action);
       },
     },
     feedback: ({ session, feedbackId, verdict, note }) => app.feedback(session, feedbackId, verdict, note),
@@ -392,8 +417,21 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
         workspace: config.workspace,
         allowedUsers: config.channels.telegram.allowedUsers,
         approvals,
+        queue,
         fetch: io.fetch,
         handle: (session, text, approver) => app.handle(session, text, approver),
+        runs: {
+          list: (session, limit) => app.listRuns({ session, limit }).map(run => runView(app, run)),
+          control: async (session, id, action) => {
+            // Resume approvals must return to Telegram, not the browser's pending poll.
+            if (action !== "resume") return controlRun(session, id, action);
+            const run = app.getRun(id);
+            if (!run || run.session !== session || !runView(app, run).canResume) throw Error("unsafe checkpoint");
+            const user = Number(session.split(":")[2]);
+            await queue.enqueue(session, () => app.resumeRun(id, approvals.approverFor((text, view) => telegram!.send(user, text, view))));
+            return runView(app, app.getRun(id)!);
+          },
+        },
         feedback: (session, runId, verdict) => app.feedback(session, runId, verdict),
         onError: (m) => io.print(`telegram: ${m}`),
       });

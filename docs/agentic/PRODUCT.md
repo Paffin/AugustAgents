@@ -67,6 +67,16 @@ provenance, recovery, and measurable success.
 - Let the owner interrupt, revise, cancel, and resume work.
 - Surface current run state and recovery options.
 - Keep local-first privacy visible and avoid sending unneeded data to models.
+- CLI, web and Telegram are one owner workspace, not three unrelated chat skins.
+  Prioritize task clarity, actual progress, safe continuation, accessible input,
+  recoverable errors and exact-result feedback. Competitive quality is a product
+  target, not a claim established by styling or source presence.
+- The web workspace now separates Chat, Tasks and Secrets with responsive
+  navigation, multi-line input and authenticated runtime reachability checks.
+  CLI chat offers local help, task history, safe resume and reported usage;
+  Telegram has local help and session-bound task cards/actions. Full terminal
+  editing/progress, first-run onboarding, memory/settings navigation and live
+  Telegram acceptance remain open.
 
 ## Product-Level Non-Goals
 
