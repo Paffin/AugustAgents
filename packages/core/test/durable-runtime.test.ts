@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   IdempotencyConflictError,
   InvalidRunTransitionError,
   RunInProgressError,
+  inspectRuntimeSchema,
   makeSessionKey,
 } from "../src/index.ts";
 
@@ -16,12 +17,20 @@ const dirs: string[] = [];
 const tempDb = () => { const dir = mkdtempSync(join(tmpdir(), "august-runtime-")); dirs.push(dir); return join(dir, "runtime.db"); };
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const session = makeSessionKey({ workspace: "home", channel: "test", user: "u" });
+const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+function createV1(path: string): string {
+  const db = new Database(path); const id = "legacy-run"; const budget = { maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8, maxTokens: "unavailable", maxCostMicros: "unavailable" };
+  db.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); db.run("INSERT INTO runtime_meta VALUES ('schema_version','1')");
+  db.run("CREATE TABLE messages (session TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(session,seq))");
+  db.run("CREATE TABLE runs (id TEXT PRIMARY KEY, session TEXT NOT NULL, state TEXT NOT NULL, request TEXT NOT NULL, request_fingerprint TEXT NOT NULL, idempotency_key TEXT, reply TEXT, error TEXT, budget_json TEXT NOT NULL, steps INTEGER NOT NULL DEFAULT 0, external_effects INTEGER NOT NULL DEFAULT 0, checkpoint_json TEXT, retry_of TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(session,idempotency_key))");
+  db.run("CREATE INDEX runs_session_updated ON runs(session,updated_at DESC)"); db.query("INSERT INTO messages VALUES (?,?,?,?,?)").run(session, 1, "user", "legacy", 1); db.query("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, session, "completed", "legacy request", "old-fingerprint", "legacy-key", "done", null, JSON.stringify(budget), 2, 1, JSON.stringify({ phase: "before_decision", safeToResume: true, history: [], taint: { tainted: true, sources: ["legacy.tool"] } }), null, 1, 2); db.close(); return id;
+}
 
 describe("DurableRuntimeStore", () => {
   test("Product behavior: owner-only WAL database reopens messages in order", () => {
     const path = tempDb();
     let store = new DurableRuntimeStore(path);
-    expect(store.schemaVersion()).toBe(1);
+    expect(store.schemaVersion()).toBe(2);
     expect(store.journalMode()).toBe("wal");
     expect(statSync(path).mode & 0o777).toBe(0o600);
     store.appendMessage(session, "user", "first", 1);
@@ -30,13 +39,13 @@ describe("DurableRuntimeStore", () => {
     store.close();
     store = new DurableRuntimeStore(path);
     expect(store.messages(session).map((m) => [m.seq, m.role, m.content])).toEqual([[1, "user", "first"], [2, "assistant", "second"]]);
-    expect(store.getRun(persistedRun.id)?.budget).toEqual({ maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8 });
+    expect(store.getRun(persistedRun.id)).toMatchObject({ budget: { maxTokens: 50_000, maxCostMicros: 100_000 }, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, costMicros: 0 } });
     store.close();
   });
 
   test("Safety/reliability invariant: backup copies open read-only without recovery writes", () => {
     const path = tempDb(); const backup = tempDb(); const writer = new DurableRuntimeStore(path); writer.appendMessage(session, "user", "kept"); writer.close(); copyFileSync(path, backup);
-    const reader = new DurableRuntimeStore(backup, { readOnly: true }); expect(reader.schemaVersion()).toBe(1); expect(reader.counts()).toEqual({ messages: 1, runs: 0 }); expect(existsSync(`${backup}-shm`)).toBe(false);
+    const reader = new DurableRuntimeStore(backup, { readOnly: true }); expect(reader.schemaVersion()).toBe(2); expect(reader.counts()).toEqual({ messages: 1, runs: 0 }); expect(existsSync(`${backup}-shm`)).toBe(false);
     expect(() => reader.appendMessage(session, "assistant", "blocked")).toThrow(); reader.close();
   });
 
@@ -78,7 +87,7 @@ describe("DurableRuntimeStore", () => {
   test("Safety/reliability invariant: existing malformed schemas fail closed without reseeding", () => {
     const path = tempDb(); const raw = new Database(path); raw.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); raw.close();
     expect(() => new DurableRuntimeStore(path)).toThrow(); const check = new Database(path); expect(check.query("SELECT COUNT(*) count FROM runtime_meta").get()).toEqual({ count: 0 }); check.close();
-    const wrong = tempDb(); const store = new DurableRuntimeStore(wrong); store.close(); const corrupt = new Database(wrong); corrupt.run("UPDATE runtime_meta SET value='2' WHERE key='schema_version'"); corrupt.close(); expect(() => new DurableRuntimeStore(wrong)).toThrow(/unsupported runtime schema 2/);
+    const wrong = tempDb(); const store = new DurableRuntimeStore(wrong); store.close(); const corrupt = new Database(wrong); corrupt.run("UPDATE runtime_meta SET value='3' WHERE key='schema_version'"); corrupt.close(); expect(() => new DurableRuntimeStore(wrong)).toThrow(/unsupported runtime schema 3/);
     const badBudget = tempDb(); const budgetStore = new DurableRuntimeStore(badBudget); budgetStore.startRun({ session, request: "x" }); budgetStore.close(); const budgetDb = new Database(badBudget); budgetDb.run("UPDATE runs SET budget_json='{}'"); budgetDb.close(); expect(() => new DurableRuntimeStore(badBudget)).toThrow(/invalid persisted run budget/);
   });
 
@@ -138,29 +147,35 @@ describe("DurableRuntimeStore", () => {
     store.close();
   });
 
-  test("Product behavior: token and monetary limits persist with the run and carry into a retry", () => {
+  test("Product behavior: numeric usage budgets persist and validate", () => {
     const store = new DurableRuntimeStore();
-    const { run } = store.startRun({ session, request: "limited", idempotencyKey: "a", budget: { maxTokens: 500, maxCostMicros: 2_000 } });
-    expect(run.budget).toEqual({ maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8, maxTokens: 500, maxCostMicros: 2_000 });
-    store.transition(run.id, "running"); store.finishRun(run.id, "failed", "stopped", { error: "token-budget" });
-    expect(store.retryRun(run.id, { idempotencyKey: "b" }).run.budget).toMatchObject({ maxTokens: 500, maxCostMicros: 2_000 });
+    const { run } = store.startRun({ session, request: "supported", budget: { maxTokens: 100, maxCostMicros: 10 } }); expect(run.budget).toMatchObject({ maxTokens: 100, maxCostMicros: 10 });
+    expect(() => store.startRun({ session, request: "x", budget: { maxTokens: 0 } })).toThrow(/maxTokens/); expect(() => store.startRun({ session, request: "x", budget: { maxCostMicros: -1 } })).toThrow(/maxCostMicros/);
+    expect(() => store.checkpoint(run.id, { phase: "before_decision", safeToResume: true, history: ["я".repeat(40_000)] })).toThrow(/too large/);
     store.close();
   });
 
-  test("Safety/reliability invariant: invalid usage limits fail before run creation and legacy rows stay readable", () => {
-    const path = tempDb(); const store = new DurableRuntimeStore(path);
-    for (const bad of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
-      expect(() => store.startRun({ session, request: "x", budget: { maxTokens: bad } })).toThrow(/positive integer/);
-      expect(() => store.startRun({ session, request: "x", budget: { maxCostMicros: bad } })).toThrow(/positive integer/);
-    }
-    expect(store.listRuns()).toHaveLength(0);
-    const { run } = store.startRun({ session, request: "legacy" }); expect(store.getRun(run.id)!.budget.maxTokens).toBeUndefined();
-    const legacyFingerprint = createHash("sha256").update(JSON.stringify(["legacy", { maxSteps: 12, maxWallMs: 300_000, maxExternalEffects: 8, maxTokens: "unavailable", maxCostMicros: "unavailable" }])).digest("hex");
-    expect(run.requestFingerprint).toBe(legacyFingerprint);
-    expect(() => store.checkpoint(run.id, { phase: "before_decision", safeToResume: true, history: ["я".repeat(40_000)] })).toThrow(/too large/);
-    store.close();
-    // Rows written before usage limits existed spell an absent limit "unavailable"; they still open, and their idempotency fingerprint is unchanged.
-    const db = new Database(path); db.run(`UPDATE runs SET budget_json='{"maxSteps":12,"maxWallMs":300000,"maxExternalEffects":8,"maxTokens":"unavailable","maxCostMicros":"unavailable"}'`); db.close();
-    const reopened = new DurableRuntimeStore(path); expect(reopened.getRun(run.id)!.budget.maxCostMicros).toBeUndefined(); reopened.close();
+  test("Temporary migration: v1 migrates with exact owner-only backup and preserved data", () => {
+    const path = tempDb(); const id = createV1(path); const before = sha256(path); const store = new DurableRuntimeStore(path); const backup = `${path}.v1.backup`;
+    expect(store.schemaVersion()).toBe(2); expect(sha256(backup)).toBe(before); expect(readFileSync(`${backup}.sha256`, "utf8").trim()).toBe(`sha256:${before}`); expect(statSync(backup).mode & 0o777).toBe(0o600); expect(inspectRuntimeSchema(backup)).toBe(1);
+    expect(store.messages(session).at(0)?.content).toBe("legacy"); expect(store.getRun(id)).toMatchObject({ state: "completed", reply: "done", steps: 2, externalEffects: 1, usage: { totalTokens: 0, costMicros: 0 } }); expect(store.taintSources(session)).toEqual(["legacy.tool"]); expect(store.startRun({ session, request: "legacy request", idempotencyKey: "legacy-key" }).replayed).toBe(true); store.close();
+    const rollback = tempDb(); copyFileSync(backup, rollback); expect(inspectRuntimeSchema(rollback)).toBe(1); const raw = new Database(rollback, { readonly: true }); expect(raw.query("SELECT reply FROM runs WHERE id=?").get(id)).toEqual({ reply: "done" }); raw.close();
+  });
+
+  test("Temporary migration: validated existing backup is reused and corrupt backup fails closed", () => {
+    const reusable = tempDb(); createV1(reusable); const digest = sha256(reusable); copyFileSync(reusable, `${reusable}.v1.backup`); writeFileSync(`${reusable}.v1.backup.sha256`, `sha256:${digest}\n`, { mode: 0o600 }); const store = new DurableRuntimeStore(reusable); expect(store.schemaVersion()).toBe(2); store.close();
+    const corrupt = tempDb(); createV1(corrupt); const original = sha256(corrupt); copyFileSync(corrupt, `${corrupt}.v1.backup`); writeFileSync(`${corrupt}.v1.backup.sha256`, `sha256:${original}\n`); writeFileSync(`${corrupt}.v1.backup`, "corrupt"); expect(() => new DurableRuntimeStore(corrupt)).toThrow(/invalid runtime v1 backup/); expect(inspectRuntimeSchema(corrupt)).toBe(1); expect(sha256(corrupt)).toBe(original);
+  });
+
+  test("Product behavior: usage accounting is cumulative, rounded once, durable, and budgeted", async () => {
+    const path = tempDb(); const a = new DurableRuntimeStore(path); const run = a.startRun({ session, request: "meter", budget: { maxTokens: 10, maxCostMicros: 2 } }).run; a.transition(run.id, "running");
+    expect(a.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000 }).run.usage.costMicros).toBe(1);
+    const b = new DurableRuntimeStore(path); await Promise.all([Promise.resolve().then(() => a.recordUsage(run.id, { inputTokens: 3, outputTokens: 0, totalTokens: 3 }, { inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000 })), Promise.resolve().then(() => b.recordUsage(run.id, { inputTokens: 0, outputTokens: 1, totalTokens: 1 }, { inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000 }))]);
+    expect(a.getRun(run.id)?.usage).toEqual({ inputTokens: 4, outputTokens: 1, totalTokens: 5, costMicros: 2 }); expect(a.recordUsage(run.id, { inputTokens: 5, outputTokens: 0, totalTokens: 5 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 }).exhausted).toBe("token-budget"); a.close(); b.close(); const reopened = new DurableRuntimeStore(path); expect(reopened.getRun(run.id)?.usage.totalTokens).toBe(10); reopened.close();
+  });
+
+  test("Safety/reliability invariant: usage rejects bad data and terminal writes", () => {
+    const store = new DurableRuntimeStore(); const run = store.startRun({ session, request: "strict", budget: { maxCostMicros: 0 } }).run; store.transition(run.id, "running");
+    expect(store.recordUsage(run.id, { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 }).exhausted).toBeUndefined(); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 })).toThrow(/invalid provider usage/); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: -1, outputMicrosPerMillion: 0 })).toThrow(/invalid usage pricing/); store.transition(run.id, "failed"); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 })).toThrow(/terminal/); store.close();
   });
 });

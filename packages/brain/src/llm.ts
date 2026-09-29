@@ -1,5 +1,4 @@
 import { validateArgs, type JsonSchema } from "./schema.ts";
-import { priceUsage, type Pricing, type TokenUsage } from "./usage.ts";
 import {
   DecisionError,
   validateQuestion,
@@ -8,17 +7,15 @@ import {
   type DecisionQuestion,
   type DecisionResult,
 } from "./decision.ts";
+import type { LlmCallControls, LlmUsage } from "./usage.ts";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
 
-export interface CompleteOptions {
+export interface CompleteOptions extends LlmCallControls {
   jsonSchema?: { name: string; schema: JsonSchema };
-  maxTokens?: number;
-  /** Called with the usage the provider reported for the winning response. */
-  onUsage?: (usage: TokenUsage) => void;
 }
 
 export interface LlmProvider {
@@ -33,6 +30,26 @@ export class LlmError extends Error {
   }
 }
 
+export class LlmUsageError extends LlmError {
+  constructor(message: string) { super(message, false); this.name = "LlmUsageError"; }
+}
+
+export class LlmUsageObserverError extends Error {
+  constructor(public readonly observerCause: unknown) { const name = observerCause instanceof Error ? observerCause.name : typeof observerCause; super(`LLM usage observer failed (${name})`); this.name = "LlmUsageObserverError"; }
+}
+
+export class UsageRequiredProvider implements LlmProvider {
+  readonly name: string;
+  constructor(private readonly inner: LlmProvider) { this.name = inner.name; }
+  async complete(messages: readonly ChatMessage[], options: CompleteOptions = {}): Promise<string> {
+    let reports = 0; let observerError: LlmUsageObserverError | undefined;
+    const text = await this.inner.complete(messages, { ...options, requireUsage: true, onUsage: async (usage) => { reports += 1; if (reports === 1) { try { await options.onUsage?.(usage); } catch (error) { observerError = new LlmUsageObserverError(error); throw observerError; } } } });
+    if (observerError) throw observerError;
+    if (reports !== 1) throw new LlmUsageError(`${this.name}: response reported usage ${reports} times`);
+    return text;
+  }
+}
+
 export interface OpenAiCompatibleOptions {
   baseUrl: string;
   model: string;
@@ -40,8 +57,6 @@ export interface OpenAiCompatibleOptions {
   name?: string;
   timeoutMs?: number;
   retries?: number;
-  /** Rates for this endpoint; without them usage is reported in tokens only. */
-  pricing?: Pricing;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -105,26 +120,23 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       const retryable = response.status === 429 || response.status >= 500;
       throw new LlmError(`${this.name}: HTTP ${response.status}`, retryable);
     }
-    const json = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
+    const json = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown } };
     const content = json.choices?.[0]?.message?.content;
     if (typeof content !== "string" || content.length === 0) {
       throw new LlmError(`${this.name}: response had no text`, false);
     }
-    const inputTokens = json.usage?.prompt_tokens;
-    const outputTokens = json.usage?.completion_tokens;
-    // Only what the provider states is counted; a missing or malformed figure is "not reported", never a guess.
-    if (opts.onUsage && Number.isSafeInteger(inputTokens) && (inputTokens as number) >= 0 && Number.isSafeInteger(outputTokens) && (outputTokens as number) >= 0) {
-      const pricing = this.options.pricing;
-      opts.onUsage({
-        provider: this.name,
-        model: this.options.model,
-        inputTokens: inputTokens as number,
-        outputTokens: outputTokens as number,
-        ...(pricing ? { costMicros: priceUsage(pricing, inputTokens as number, outputTokens as number), currency: pricing.currency } : {}),
-      });
-    }
+    const usage = parseUsage(json.usage);
+    if (opts.requireUsage && !usage) throw new LlmUsageError(`${this.name}: response had no usage`);
+    if (usage && opts.onUsage) { try { await opts.onUsage(usage); } catch (error) { throw new LlmUsageObserverError(error); } }
     return content;
   }
+}
+
+function parseUsage(value: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown } | undefined): LlmUsage | undefined {
+  if (value === undefined) return undefined;
+  const inputTokens = value.prompt_tokens; const outputTokens = value.completion_tokens; const totalTokens = value.total_tokens;
+  if (![inputTokens, outputTokens, totalTokens].every((n) => Number.isInteger(n) && (n as number) >= 0) || (inputTokens as number) + (outputTokens as number) !== totalTokens) throw new LlmUsageError("provider returned invalid usage");
+  return { inputTokens: inputTokens as number, outputTokens: outputTokens as number, totalTokens: totalTokens as number };
 }
 
 /** Tries providers in order; the first one that answers wins. */
@@ -142,6 +154,7 @@ export class FallbackProvider implements LlmProvider {
       try {
         return await provider.complete(messages, options);
       } catch (error) {
+        if (error instanceof LlmUsageObserverError || error instanceof LlmUsageError) throw error;
         failures.push(`${provider.name}: ${(error as Error).message}`);
       }
     }
@@ -184,7 +197,7 @@ export class LlmChoiceEngine implements DecisionEngine {
       },
     ];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const text = await this.provider.complete(messages, { jsonSchema: { name: "decision", schema }, maxTokens: 50 });
+      const text = await this.provider.complete(messages, { jsonSchema: { name: "decision", schema }, maxTokens: Math.min(50, input.maxCompletionTokens ?? 50), onUsage: input.onUsage, requireUsage: input.requireUsage });
       const value = parseJson(text);
       if (validateArgs(schema, value).length === 0) {
         const choice = (value as { choice: string }).choice;
@@ -212,6 +225,7 @@ export async function fillArguments(
   tool: ArgumentTool,
   request: string,
   maxAttempts = 3,
+  controls: LlmCallControls = {},
 ): Promise<Record<string, unknown>> {
   const messages: ChatMessage[] = [
     {
@@ -222,7 +236,7 @@ export async function fillArguments(
   ];
   let problems: string[] = [];
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const text = await provider.complete(messages, { jsonSchema: { name: "arguments", schema: tool.inputSchema } });
+    const text = await provider.complete(messages, { ...controls, jsonSchema: { name: "arguments", schema: tool.inputSchema } });
     const value = parseJson(text);
     problems = value === undefined ? ["the answer was not valid JSON"] : validateArgs(tool.inputSchema, value);
     if (problems.length === 0) return value as Record<string, unknown>;
@@ -240,7 +254,7 @@ export class LlmQueryExpander {
   private readonly cache = new Map<string, string>();
   constructor(private readonly provider: LlmProvider, private readonly maxEntries = 200) {}
 
-  async expand(request: string): Promise<string> {
+  async expand(request: string, controls: LlmCallControls = {}): Promise<string> {
     const key = request.trim().slice(0, 500);
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit;
@@ -252,7 +266,7 @@ export class LlmQueryExpander {
         },
         { role: "user", content: key },
       ],
-      { maxTokens: 40 },
+      { ...controls, maxTokens: Math.min(40, controls.maxTokens ?? 40) },
     );
     const keywords = (text.toLowerCase().match(/[a-z][a-z0-9-]*/g) ?? []).slice(0, 10).join(" ");
     if (this.cache.size >= this.maxEntries) this.cache.delete(this.cache.keys().next().value as string);

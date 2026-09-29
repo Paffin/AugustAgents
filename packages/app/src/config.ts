@@ -12,11 +12,8 @@ export interface AugustConfig {
     model: string;
     /** Name of the environment variable that holds the key. The key itself is never written to disk. */
     apiKeyEnv?: string;
-    /** Rates for this endpoint. Required for a monetary run budget; without it only tokens are accounted. */
-    pricing?: { currency: string; inputMicrosPerMillionTokens: number; outputMicrosPerMillionTokens: number };
+    pricing?: LlmPricing;
   };
-  /** Default limits for every run; a per-call budget overrides them. Costs are millionths of `llm.pricing.currency`. */
-  runBudget?: { maxTokens?: number; maxCostMicros?: number };
   gateway: { port: number; token: string };
   /** Where the event journal and the decision log live. */
   dataDir: string;
@@ -32,6 +29,10 @@ export interface AugustConfig {
   registryUrl: string;
   channels: ChannelsConfig;
 }
+
+export interface LlmPricing { inputMicrosPerMillion: number; outputMicrosPerMillion: number; source: string; asOf: string }
+const OPENAI_PRICING: LlmPricing = { inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000, source: "https://developers.openai.com/api/docs/models/gpt-4o-mini", asOf: "2026-09-29" };
+const OPENROUTER_PRICING: LlmPricing = { inputMicrosPerMillion: 80_000, outputMicrosPerMillion: 280_000, source: "https://openrouter.ai/qwen/qwen3-32b", asOf: "2026-09-29" };
 
 export type SandboxMode = "auto" | "required" | "off";
 
@@ -93,7 +94,7 @@ export function defaultConfig(home: string): AugustConfig {
   return {
     workspace: "home",
     root: join(home, "August"),
-    llm: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", apiKeyEnv: "OPENAI_API_KEY" },
+    llm: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", apiKeyEnv: "OPENAI_API_KEY", pricing: OPENAI_PRICING },
     gateway: { port: 7777, token: randomBytes(24).toString("hex") },
     dataDir: join(home, ".august", "data"),
     mcp: [],
@@ -141,8 +142,6 @@ export function parseConfig(value: unknown): AugustConfig {
   const token = str(c.gateway?.token, "gateway.token");
   if (token.length < 16) throw new ConfigError("gateway.token must be at least 16 characters");
 
-  const pricing = parsePricing(c.llm?.pricing);
-  const runBudget = parseRunBudget(c.runBudget, pricing !== undefined);
   const mcp = parseMcp(c.mcp);
   const sandbox = parseSandbox(c.sandbox ?? "auto", "sandbox");
   const skillsDir = c.skillsDir === undefined ? join(dirname(dataDir), "skills") : str(c.skillsDir, "skillsDir");
@@ -157,35 +156,23 @@ export function parseConfig(value: unknown): AugustConfig {
     registryUrl,
     laya: parseLaya(c.laya),
     channels: parseChannels(c.channels),
-    llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, ...(pricing ? { pricing } : {}) },
-    ...(runBudget ? { runBudget } : {}),
+    llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, pricing: parsePricing(c.llm?.pricing) },
     gateway: { port: port as number, token },
   };
 }
 
-function parsePricing(v: unknown): AugustConfig["llm"]["pricing"] {
-  if (v === undefined) return undefined;
-  const p = v as Record<string, unknown> | null;
-  if (!p || typeof p !== "object") throw new ConfigError("llm.pricing must be an object");
-  if (typeof p.currency !== "string" || !/^[A-Z]{3,5}$/.test(p.currency)) throw new ConfigError("llm.pricing.currency must be a code like USD");
-  for (const k of ["inputMicrosPerMillionTokens", "outputMicrosPerMillionTokens"] as const) {
-    if (!Number.isSafeInteger(p[k]) || (p[k] as number) < 0) throw new ConfigError(`llm.pricing.${k} must be a non-negative integer`);
-  }
-  return { currency: p.currency, inputMicrosPerMillionTokens: p.inputMicrosPerMillionTokens as number, outputMicrosPerMillionTokens: p.outputMicrosPerMillionTokens as number };
+function parsePricing(value: unknown): LlmPricing | undefined {
+  if (value === undefined) return undefined; const p = value as Partial<LlmPricing> | null;
+  if (!p || typeof p !== "object" || ![p.inputMicrosPerMillion, p.outputMicrosPerMillion].every((v) => Number.isSafeInteger(v) && (v as number) >= 0) || typeof p.source !== "string" || p.source.length === 0 || typeof p.asOf !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(p.asOf)) throw new ConfigError("llm.pricing needs non-negative integer rates, source, and YYYY-MM-DD asOf");
+  return p as LlmPricing;
 }
 
-function parseRunBudget(v: unknown, priced: boolean): AugustConfig["runBudget"] {
-  if (v === undefined) return undefined;
-  const b = v as Record<string, unknown> | null;
-  if (!b || typeof b !== "object") throw new ConfigError("runBudget must be an object");
-  const out: NonNullable<AugustConfig["runBudget"]> = {};
-  for (const k of ["maxTokens", "maxCostMicros"] as const) {
-    if (b[k] === undefined) continue;
-    if (!Number.isSafeInteger(b[k]) || (b[k] as number) < 1) throw new ConfigError(`runBudget.${k} must be a positive integer`);
-    out[k] = b[k] as number;
-  }
-  if (out.maxCostMicros !== undefined && !priced) throw new ConfigError("runBudget.maxCostMicros needs llm.pricing");
-  return out;
+export function resolveLlmPricing(config: AugustConfig): LlmPricing {
+  const local = isLocalUrl(new URL(config.llm.baseUrl)); const explicit = config.llm.pricing;
+  if (local) { if (explicit && (explicit.inputMicrosPerMillion !== 0 || explicit.outputMicrosPerMillion !== 0)) throw new ConfigError("local llm pricing must be zero"); return explicit ?? { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "local API price", asOf: "2026-09-29" }; }
+  if (explicit) { if (explicit.inputMicrosPerMillion <= 0 || explicit.outputMicrosPerMillion <= 0) throw new ConfigError("remote llm pricing rates must be positive"); return explicit; }
+  const base = config.llm.baseUrl.replace(/\/+$/, ""); if (base === "https://api.openai.com/v1" && config.llm.model === "gpt-4o-mini") return OPENAI_PRICING; if (base === "https://openrouter.ai/api/v1" && config.llm.model === "qwen/qwen3-32b") return OPENROUTER_PRICING;
+  throw new ConfigError("remote llm pricing is missing; configure input/output microdollars per million tokens");
 }
 
 function parseSandbox(v: unknown, where: string): SandboxMode {

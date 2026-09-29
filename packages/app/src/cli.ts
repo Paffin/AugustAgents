@@ -7,7 +7,7 @@ import { LaneQueue, makeSessionKey } from "@august/core";
 import { startGateway, type RunningGateway } from "@august/gateway";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
-import { ConfigError, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig } from "./config.ts";
+import { ConfigError, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
 import { SECRET_NAME, openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
 
 export interface CliIo {
@@ -134,12 +134,13 @@ interface Provider {
   baseUrl: string;
   keyName?: string;
   model: string;
+  pricing: LlmPricing;
 }
 
 export const PROVIDERS: Provider[] = [
-  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyName: "OPENAI_API_KEY", model: "gpt-4o-mini" },
-  { label: "OpenRouter (many models, one key)", baseUrl: "https://openrouter.ai/api/v1", keyName: "OPENROUTER_API_KEY", model: "qwen/qwen3-32b" },
-  { label: "Ollama on this computer (no key, fully local)", baseUrl: "http://localhost:11434/v1", model: "qwen3" },
+  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyName: "OPENAI_API_KEY", model: "gpt-4o-mini", pricing: { inputMicrosPerMillion: 150_000, outputMicrosPerMillion: 600_000, source: "https://developers.openai.com/api/docs/models/gpt-4o-mini", asOf: "2026-09-29" } },
+  { label: "OpenRouter (many models, one key)", baseUrl: "https://openrouter.ai/api/v1", keyName: "OPENROUTER_API_KEY", model: "qwen/qwen3-32b", pricing: { inputMicrosPerMillion: 80_000, outputMicrosPerMillion: 280_000, source: "https://openrouter.ai/qwen/qwen3-32b/", asOf: "2026-09-29" } },
+  { label: "Ollama on this computer (no key, fully local)", baseUrl: "http://localhost:11434/v1", model: "qwen3", pricing: { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "local API price", asOf: "2026-09-29" } },
 ];
 
 async function choose(io: CliIo, question: string, options: string[]): Promise<number | null> {
@@ -171,7 +172,9 @@ async function setup(configPath: string, io: CliIo): Promise<CliResult> {
   } else {
     const url = (await io.ask("Base URL (https://.../v1): "))?.trim();
     if (!url) return { code: 1 };
-    provider = { label: "custom", baseUrl: url, keyName: "LLM_API_KEY", model: "" };
+    const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname); let pricing: LlmPricing = { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, source: "local API price", asOf: new Date().toISOString().slice(0, 10) };
+    if (!local) { const rates = (await io.ask("Input/output microdollars per million tokens (e.g. 100000/400000): "))?.trim().split(/[\s,/]+/).map(Number); if (!rates || rates.length !== 2 || rates.some((n) => !Number.isSafeInteger(n) || n <= 0)) { io.print("Remote pricing needs two positive integer rates."); return { code: 1 }; } pricing = { inputMicrosPerMillion: rates[0]!, outputMicrosPerMillion: rates[1]!, source: url, asOf: new Date().toISOString().slice(0, 10) }; }
+    provider = { label: "custom", baseUrl: url, keyName: local ? undefined : "LLM_API_KEY", model: "", pricing };
   }
   const model = (await io.ask(`Model [${provider.model || "required"}]: `))?.trim() || provider.model;
   if (!model) return { code: 1 };
@@ -202,7 +205,7 @@ async function setup(configPath: string, io: CliIo): Promise<CliResult> {
     channels = { ...channels, telegram: { tokenSecret: "TELEGRAM_BOT_TOKEN", allowedUsers: [user] } };
   }
 
-  const config = parseConfig({ ...base, llm: { baseUrl: provider.baseUrl, model, apiKeyEnv: provider.keyName }, channels });
+  const config = parseConfig({ ...base, llm: { baseUrl: provider.baseUrl, model, apiKeyEnv: provider.keyName, pricing: provider.pricing }, channels });
   writeConfig(configPath, config);
   writeWelcome(config);
   io.print("");
