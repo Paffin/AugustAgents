@@ -7,7 +7,8 @@ import {
   type DecisionQuestion,
   type DecisionResult,
 } from "./decision.ts";
-import type { LlmCallControls, LlmUsage } from "./usage.ts";
+import { createHash, randomUUID } from "node:crypto";
+import type { LlmAttemptEvent, LlmCallControls, LlmUsage } from "./usage.ts";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -20,6 +21,8 @@ export interface CompleteOptions extends LlmCallControls {
 
 export interface LlmProvider {
   readonly name: string;
+  /** Emits one durable lifecycle per actual request, including internal retries. */
+  readonly managesAttempts?: boolean;
   complete(messages: readonly ChatMessage[], options?: CompleteOptions): Promise<string>;
 }
 
@@ -37,6 +40,32 @@ export class LlmUsageError extends LlmError {
 export class LlmUsageObserverError extends Error {
   constructor(public readonly observerCause: unknown) { const name = observerCause instanceof Error ? observerCause.name : typeof observerCause; super(`LLM usage observer failed (${name})`); this.name = "LlmUsageObserverError"; }
 }
+export class LlmAttemptObserverError extends Error {
+  constructor(public readonly observerCause: unknown) { super("Model attempt persistence failed"); this.name = "LlmAttemptObserverError"; }
+}
+async function notifyAttempt(options: CompleteOptions, event: LlmAttemptEvent): Promise<void> {
+  try { await options.onAttempt?.(event); } catch (error) { throw new LlmAttemptObserverError(error); }
+}
+async function invokeProvider(provider: LlmProvider, messages: readonly ChatMessage[], options: CompleteOptions): Promise<string> {
+  if (provider.managesAttempts || !options.onAttempt) return provider.complete(messages, options);
+  // An opaque adapter is tracked as one invocation; transport-aware providers track their own retries.
+  const id = randomUUID(); const requestHash = createHash("sha256").update(JSON.stringify([messages, options.jsonSchema])).digest("hex");
+  await notifyAttempt(options, { type: "started", id, provider: provider.name, model: provider.name, requestHash });
+  let reported = false;
+  try {
+    options.signal?.throwIfAborted();
+    const text = await provider.complete(messages, { ...options, onAttempt: undefined, onUsage: async usage => {
+      await notifyAttempt(options, { type: "receipt", id, usage }); reported = true;
+      try { await options.onUsage?.(usage); } catch (error) { throw error instanceof LlmUsageObserverError ? error : new LlmUsageObserverError(error); }
+    } });
+    if (options.requireUsage && !reported) throw new LlmUsageError(`${provider.name}: response had no usage`);
+    if (!reported) await notifyAttempt(options, { type: "failed", id, outcome: "unknown", reason: "invalid_response" });
+    return text;
+  } catch (error) {
+    if (!reported && !(error instanceof LlmAttemptObserverError) && !(error instanceof LlmUsageObserverError)) await notifyAttempt(options, { type: "failed", id, outcome: "unknown", reason: options.signal?.aborted ? "aborted" : "provider_error" });
+    throw error;
+  }
+}
 
 function callLimit(controls: LlmCallControls): number | undefined {
   controls.signal?.throwIfAborted();
@@ -52,11 +81,12 @@ function callLimit(controls: LlmCallControls): number | undefined {
 
 export class UsageRequiredProvider implements LlmProvider {
   readonly name: string;
+  readonly managesAttempts = true;
   constructor(private readonly inner: LlmProvider) { this.name = inner.name; }
   async complete(messages: readonly ChatMessage[], options: CompleteOptions = {}): Promise<string> {
     const maxTokens = callLimit(options);
     let reports = 0; let observerError: LlmUsageObserverError | undefined;
-    const text = await this.inner.complete(messages, { ...options, maxTokens, requireUsage: true, onUsage: async (usage) => { reports += 1; if (reports === 1) { try { await options.onUsage?.(usage); } catch (error) { observerError = new LlmUsageObserverError(error); throw observerError; } } } });
+    const text = await invokeProvider(this.inner, messages, { ...options, maxTokens, requireUsage: true, onUsage: async (usage) => { reports += 1; if (reports === 1) { try { await options.onUsage?.(usage); } catch (error) { observerError = new LlmUsageObserverError(error); throw observerError; } } } });
     if (observerError) throw observerError;
     if (reports !== 1) throw new LlmUsageError(`${this.name}: response reported usage ${reports} times`);
     return text;
@@ -77,6 +107,7 @@ export interface OpenAiCompatibleOptions {
 /** Any endpoint that speaks /chat/completions: OpenAI, OpenRouter, vLLM, Ollama, LM Studio. */
 export class OpenAiCompatibleProvider implements LlmProvider {
   readonly name: string;
+  readonly managesAttempts = true;
   private readonly fetchFn: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -128,20 +159,29 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.options.apiKey) headers.authorization = `Bearer ${this.options.apiKey}`;
 
+    const id = randomUUID(), requestHash = createHash("sha256").update(JSON.stringify([this.options.baseUrl, body])).digest("hex");
+    await notifyAttempt(opts, { type: "started", id, provider: this.name, model: this.options.model, requestHash });
+    let dispatched = false, finalized = false;
+    try {
+    opts.signal?.throwIfAborted();
     let response: Response;
     const timeout = Math.min(this.options.timeoutMs ?? 60_000, opts.deadlineAt === undefined ? Infinity : Math.max(1, opts.deadlineAt - Date.now()));
     const timed = AbortSignal.timeout(timeout);
     try {
+      dispatched = true;
       response = await this.fetchFn(`${this.options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
+        redirect: "error",
         headers,
         body: JSON.stringify(body),
         signal: opts.signal ? AbortSignal.any([opts.signal, timed]) : timed,
       });
     } catch (error) {
-      opts.signal?.throwIfAborted();
-      opts.beforeCall?.();
-      // Network failures and timeouts are worth retrying; never echo the request (it holds the key).
+      const code = (error as { code?: string; cause?: { code?: string } }).code ?? (error as { cause?: { code?: string } }).cause?.code;
+      const unsent = code === "ECONNREFUSED" || code === "ConnectionRefused" || code === "ENOTFOUND" || code === "EAI_AGAIN";
+      await notifyAttempt(opts, { type: "failed", id, outcome: unsent ? "not_sent" : "unknown", reason: opts.signal?.aborted ? "aborted" : (error as Error).name === "TimeoutError" ? "timeout" : "unreachable" });
+      finalized = true;
+      opts.signal?.throwIfAborted(); opts.beforeCall?.();
       throw new LlmError(`${this.name}: request failed (${(error as Error).name})`, true);
     }
     if (!response.ok) {
@@ -152,12 +192,18 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     const content = json.choices?.[0]?.message?.content;
     const usage = parseUsage(json.usage);
     if (opts.requireUsage && !usage) throw new LlmUsageError(`${this.name}: response had no usage`);
+    if (usage) { await notifyAttempt(opts, { type: "receipt", id, usage }); finalized = true; }
+    else if (opts.onAttempt) { await notifyAttempt(opts, { type: "failed", id, outcome: "unknown", reason: "invalid_response" }); finalized = true; }
     if (usage && opts.onUsage) { try { await opts.onUsage(usage); } catch (error) { throw new LlmUsageObserverError(error); } }
     opts.signal?.throwIfAborted();
     if (typeof content !== "string" || content.length === 0) {
       throw new LlmError(`${this.name}: response had no text`, false);
     }
     return content;
+    } catch (error) {
+      if (!finalized && !(error instanceof LlmAttemptObserverError) && !(error instanceof LlmUsageObserverError)) await notifyAttempt(opts, { type: "failed", id, outcome: dispatched ? "unknown" : "not_sent", reason: opts.signal?.aborted ? "aborted" : "invalid_response" });
+      throw error;
+    }
   }
 }
 
@@ -173,6 +219,7 @@ function parseUsage(value: unknown): LlmUsage | undefined {
 /** Tries providers in order; the first one that answers wins. */
 export class FallbackProvider implements LlmProvider {
   readonly name: string;
+  readonly managesAttempts = true;
 
   constructor(private readonly providers: readonly LlmProvider[]) {
     if (providers.length === 0) throw new Error("FallbackProvider needs at least one provider");
@@ -184,9 +231,9 @@ export class FallbackProvider implements LlmProvider {
     for (const provider of this.providers) {
       callLimit(options ?? {});
       try {
-        return await provider.complete(messages, options);
+        return await invokeProvider(provider, messages, options ?? {});
       } catch (error) {
-        if (error instanceof LlmUsageObserverError || error instanceof LlmUsageError) throw error;
+        if (error instanceof LlmAttemptObserverError || error instanceof LlmUsageObserverError || error instanceof LlmUsageError) throw error;
         options?.signal?.throwIfAborted();
         if (options?.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw error;
         options?.beforeCall?.();
@@ -232,7 +279,7 @@ export class LlmChoiceEngine implements DecisionEngine {
       },
     ];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const controls = { signal: input.signal, deadlineAt: input.deadlineAt, maxTokens: input.maxCompletionTokens, onUsage: input.onUsage, requireUsage: input.requireUsage, beforeCall: input.beforeCall, remainingTokens: input.remainingTokens };
+      const controls = { signal: input.signal, deadlineAt: input.deadlineAt, onAttempt: input.onAttempt, maxTokens: input.maxCompletionTokens, onUsage: input.onUsage, requireUsage: input.requireUsage, beforeCall: input.beforeCall, remainingTokens: input.remainingTokens };
       const text = await this.provider.complete(messages, { ...controls, maxTokens: callLimit(controls), jsonSchema: { name: "decision", schema } });
       const value = parseJson(text);
       if (validateArgs(schema, value).length === 0) {

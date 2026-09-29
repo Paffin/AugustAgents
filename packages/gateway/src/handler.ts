@@ -58,10 +58,13 @@ const SECRET_API_NAME = /^(?:[A-Za-z0-9_-]{1,64}\.)?[A-Z_][A-Z0-9_]{0,127}$/;
 export interface GatewayRunView {
   id: string; state: RunState; request: string; steps: number; usage: RunUsage;
   budget: RunBudget; canResume: boolean; reply?: string; feedbackId?: string; feedbackRecorded?: boolean; updatedAt: number;
+  accounting?: import("@august/core").ModelAccounting;
+  unresolvedAttempts?: Array<Pick<import("@august/core").ModelAttempt, "id" | "provider" | "model" | "state" | "quote" | "reservedTokens" | "reservedCostMicros">>;
 }
 export interface GatewayRuns {
   list(session: SessionKey, limit: number): readonly GatewayRunView[];
   control(input: { session: SessionKey; id: string; action: "pause" | "cancel" | "resume" }): Promise<GatewayRunView>;
+  reconcile?(input: { session: SessionKey; attemptId: string; inputTokens: number; outputTokens: number }): Promise<GatewayRunView>;
 }
 
 export interface GatewayOptions extends BindConfig {
@@ -180,6 +183,19 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       if (!session || typeof body.action !== "string" || !["pause", "cancel", "resume"].includes(body.action) || Object.keys(body).some(key => !["channel", "user", "action"].includes(key))) return json(400, { error: "invalid run control" });
       try { return json(200, { run: await options.runs.control({ session, id, action: body.action as "pause" | "cancel" | "resume" }) }); }
       catch { return json(409, { error: "run unavailable or unsafe to control" }); }
+    }
+    if (url.pathname.startsWith("/v1/model-attempts/") && request.method === "POST") {
+      if (!options.runs?.reconcile) return json(404, { error: "model reconciliation unavailable" });
+      const attemptId = url.pathname.slice("/v1/model-attempts/".length);
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(attemptId) || attemptId !== attemptId.trim()) return json(400, { error: "invalid model attempt" });
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return json(415, { error: "content-type must be application/json" });
+      const raw = await readBody(request); if (raw === null) return json(413, { error: "body too large" });
+      let body: Record<string, unknown>;
+      try { body = JSON.parse(raw); if (!body || typeof body !== "object" || Array.isArray(body)) throw Error(); } catch { return json(400, { error: "invalid JSON" }); }
+      const session = sessionFrom(body.channel, body.user), input = body.inputTokens, output = body.outputTokens;
+      if (!session || body.confirm !== true || ![input,output].every(value => Number.isSafeInteger(value) && (value as number) >= 0) || !Number.isSafeInteger((input as number) + (output as number)) || Object.keys(body).some(key => !["channel","user","inputTokens","outputTokens","confirm"].includes(key))) return json(400, { error: "confirmed non-negative usage is required" });
+      try { return json(200, { run: await options.runs.reconcile({ session, attemptId, inputTokens: input as number, outputTokens: output as number }) }); }
+      catch { return json(409, { error: "model attempt unavailable or conflicting receipt" }); }
     }
 
     if (url.pathname === "/v1/secrets" && request.method === "GET") {

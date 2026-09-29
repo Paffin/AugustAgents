@@ -60,6 +60,17 @@ restart, tainted learning, and local database tampering.
 
 ## Recovery
 
+### Current model-attempt boundary
+
+Generation is preceded by a durable attempt and tariff snapshot. An absent
+receipt is unresolved, not zero: remaining allowance is held and new generation
+cannot silently consume that run's reserve. Owner-token-only reconciliation is
+session-bound and explicitly owner-sourced; it does not certify a vendor invoice.
+Receipt and usage updates share a transaction and reject conflicting replays.
+HTTP redirects are not followed. Active-WAL immutable reads and incomplete WAL
+checkpoints refuse snapshot/migration operations; verified stopped snapshots
+are required. Retained user data is never reset to make a migration pass.
+
 ### Target contract — not delivered at `aa8bf43`
 
 - External effects use idempotency records and checkpoint-before-effect order.

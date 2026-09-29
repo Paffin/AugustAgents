@@ -11,6 +11,21 @@ import {
 
 const TOKEN = "correct-horse-battery-staple";
 
+describe("owner model reconciliation", () => {
+  test("requires confirmation/auth, validates counts, and does not expose backend errors", async () => {
+    const accepted: unknown[] = [];
+    const { handler } = make({ runs: { list: () => [], control: async () => { throw Error(); }, reconcile: async input => { accepted.push(input); throw Error("private accounting backend detail"); } } });
+    const body = { channel: "web", user: "local", inputTokens: 7, outputTokens: 3, confirm: true };
+    const path = "/v1/model-attempts/owned-attempt";
+    expect((await handler(post(body, { authorization: "Bearer wrong" }, path))).status).toBe(401);
+    for (const bad of [{ ...body, confirm: false }, { ...body, inputTokens: -1 }, { ...body, outputTokens: 1.5 }, { ...body, inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 }, { ...body, source: "provider" }]) expect((await handler(post(bad, {}, path))).status).toBe(400);
+    expect(accepted).toHaveLength(0);
+    const response = await handler(post(body, {}, path)); expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "model attempt unavailable or conflicting receipt" });
+    expect(accepted).toEqual([{ session: "home:web:local", attemptId: "owned-attempt", inputTokens: 7, outputTokens: 3 }]);
+  });
+});
+
 function make(overrides: Partial<GatewayOptions> = {}) {
   const seen: Array<{ session: string; text: string }> = [];
   const handler = createGatewayHandler({

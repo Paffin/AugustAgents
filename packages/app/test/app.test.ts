@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
 import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
-import { LlmUsageObserverError } from "@august/brain";
+import { LlmAttemptObserverError } from "@august/brain";
 import { DurableRuntimeStore, IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
 import { LoopGuard } from "@august/policy";
 import {
@@ -362,7 +362,7 @@ describe("createApp", () => {
 
   test("Safety/reliability invariant: provider failures persist as failed runs", async () => {
     const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: { name: "broken", complete: async () => { throw new Error("offline"); } } });
-    const reply = await app.handle(runtimeSession, "hello"); expect(reply.error).toBe("Error"); expect(app.getRun(reply.runId)).toMatchObject({ state: "failed", reply: reply.reply }); expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant"]); app.close();
+    const reply = await app.handle(runtimeSession, "hello"); expect(reply.stopReason).toBe("billing-unknown"); expect(app.getRun(reply.runId)).toMatchObject({ state: "failed", reply: reply.reply }); expect(app.runs.modelAccounting(reply.runId).unresolvedCalls).toBe(1); expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant"]); app.close();
   });
 
   test("Safety/reliability invariant: token and cost exhaustion stop before another model or tool call", async () => {
@@ -392,7 +392,7 @@ describe("createApp", () => {
 
   test("Safety/reliability invariant: missing usage fails and accounting persistence errors propagate", async () => {
     const missing = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, llm: { name: "missing", complete: async () => JSON.stringify({ choice: "none" }) } }); const reply = await missing.handle(runtimeSession, "missing"); expect(reply.error).toBe("LlmUsageError"); expect(missing.getRun(reply.runId)).toMatchObject({ state: "failed", usage: { totalTokens: 0 } }); missing.close();
-    const app = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "unused") }); app.runs.recordUsage = () => { throw new Error("disk full"); }; await expect(app.handle(runtimeSession, "persist")).rejects.toBeInstanceOf(LlmUsageObserverError); expect(app.listRuns({ session: runtimeSession })[0]?.state).toBe("failed"); app.close();
+    const app = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, llm: contextualLlm(() => "unused") }); app.runs.reportModelAttempt = () => { throw new Error("disk full"); }; await expect(app.handle(runtimeSession, "persist")).rejects.toBeInstanceOf(LlmAttemptObserverError); expect(app.listRuns({ session: runtimeSession })[0]?.state).toBe("failed"); app.close();
   });
 
   test("Safety/reliability invariant: a failed post-effect checkpoint leaves the run recovering", async () => {

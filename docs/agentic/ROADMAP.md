@@ -26,7 +26,7 @@ are product/verification prerequisites, not documentation ceremonies.
 **Dependencies:** OUT-001
 **Readiness:** Blocked
 **State:** Implementing
-**Completion Note:** Main includes Phase A plus schema-v2 usage/pricing source (227fa56). Current live provider/tool journeys fail, pricing has hardcoded fallbacks, and live budget/recovery acceptance is outstanding. Do not treat missing source as the blocker or this integration as completed acceptance.
+**Completion Note:** Historical integration 227fa56 supplied Phase A/schema-v2 but did not establish acceptance. Current schema-v3 adds durable model attempts, tariff snapshots, unresolved holds and explicit owner reconciliation; actual pause/reconcile/same-run continuation and cancel/crash journeys pass locally. Provider degradation/cooldown, broader external-effect/platform/production recovery and complete outcome acceptance remain open. Do not treat this increment as completion of OUT-002 or the full goal.
 
 ### OUT-003: Content provenance and replay-safe approvals
 

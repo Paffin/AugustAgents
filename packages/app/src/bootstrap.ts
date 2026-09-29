@@ -418,7 +418,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     const controller = new AbortController(); let finish!: () => void;
     const entry: Active = { controller, done: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
     active.set(run.id, entry); if (perMessage) approver.bySession.set(run.session, perMessage);
-    const segmentStart = Date.now(); const usageBefore = run.usage; let llmCalls = 0;
+    const segmentStart = Date.now(); const usageBefore = run.usage; let llmCalls = 0, receivedAttempt: string | undefined;
     let usageStop: "token-budget" | "cost-budget" | undefined = run.usage.totalTokens >= run.budget.maxTokens ? "token-budget" : run.usage.costMicros > 0 && run.usage.costMicros >= run.budget.maxCostMicros ? "cost-budget" : undefined;
     try {
       run = runs.transition(run.id, "running");
@@ -434,10 +434,20 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
         plan: route.plan, planReply: route.verbatim ? "verbatim" : "summarize", guidance: route.guidance,
         priorMessages: [...noted, ...(priorMessages ?? [])], priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(sensitivity === "public" ? {} : { sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
-        onUsage: async (usage) => { llmCalls += 1; usageStop = runs.recordUsage(run.id, usage, pricing).exhausted; },
+        onAttempt: event => {
+          if (event.type === "started") runs.beginModelAttempt(run.id, event, pricing);
+          else {
+            const attempt = runs.getModelAttempt(event.id);
+            if (!attempt || attempt.runId !== run.id) throw new Error("model receipt belongs to another run");
+            if (event.type === "receipt") { usageStop = runs.reportModelAttempt(event.id, event.usage).exhausted; receivedAttempt = event.id; }
+            else runs.finishModelAttempt(event.id, event.outcome, event.reason);
+          }
+        },
+        onUsage: async () => { if (!receivedAttempt) throw new Error("model usage has no durable attempt"); receivedAttempt = undefined; llmCalls += 1; },
         remainingTokens: () => { const current = runs.getRun(run.id)!; return Math.max(1, current.budget.maxTokens - current.usage.totalTokens); },
         usageExhaustion: () => usageStop,
         modelBudgetExhaustion: () => {
+          if (runs.modelAccounting(run.id).unknownCalls) return "billing-unknown";
           const current = runs.getRun(run.id)!;
           return (pricing.inputMicrosPerMillion > 0 || pricing.outputMicrosPerMillion > 0) && current.usage.costMicros >= current.budget.maxCostMicros ? "cost-budget" : undefined;
         },
@@ -510,7 +520,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     listRuns: (options = {}) => runs.listRuns(options.session, options.limit, options.states),
     pauseRun: (id) => stop(id, "paused"),
     cancelRun: (id) => stop(id, "cancelled"),
-    resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
+    resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state) || runs.modelAccounting(id).unresolvedCalls) throw new Error("run is not resumable; resolve safety/billing first"); return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
     retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     learning,

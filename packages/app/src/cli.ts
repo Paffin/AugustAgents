@@ -289,7 +289,13 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
   const session = makeSessionKey({ workspace: config.workspace, channel: "cli", user: "local" });
   io.print(`\nAugust · ${config.workspace}\nModel: ${config.llm.model}\nDescribe the result you need. /help shows controls; /exit leaves the chat.`);
   const help = '/tasks — recent task state and usage\n/resume ID — continue a safely paused task\n/good or /bad [why] — assess the last completed answer\n/exit — leave the chat\nApprovals require an explicit y. Use august secret set for credentials, never chat.';
-  const report = (run: DurableRun) => io.print(`  ${run.id} · ${run.state}\n  ${run.steps}/${run.budget.maxSteps} steps · ${run.usage.totalTokens}/${run.budget.maxTokens} tokens · ${run.usage.costMicros} µUSD estimate (not a vendor bill)`);
+  const report = (run: DurableRun) => {
+    io.print(`  ${run.id} · ${run.state}\n  ${run.steps}/${run.budget.maxSteps} steps · ${run.usage.totalTokens}/${run.budget.maxTokens} tokens · ${run.usage.costMicros} µUSD estimate (not a vendor bill)`);
+    const accounting = app.runs.modelAccounting(run.id);
+    if (accounting.unresolvedCalls) { io.print(`  Unresolved usage: ${accounting.unresolvedCalls} call(s), ${accounting.reservedTokens} tokens / ${accounting.reservedCostMicros} µUSD held (not billed).`); for (const attempt of app.runs.modelAttempts(run.id, true)) io.print(`  Receipt/estimate: /reconcile ${attempt.id} INPUT_TOKENS OUTPUT_TOKENS --confirm`); }
+    if (accounting.ownerReceipts) io.print("  Includes owner reconciliation, not provider receipts.");
+    if (accounting.legacyUsage) io.print("  Legacy estimate: earlier unreported usage cannot be reconstructed.");
+  };
   let lastRun: string | undefined;
   for (;;) {
     const line = await io.ask("you> ");
@@ -300,6 +306,15 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
       const runs = app.listRuns({ session, limit: 10 });
       if (!runs.length) io.print("No tasks yet. Describe the result you need.");
       for (const run of runs) { report(run); io.print(`  ${run.request.slice(0, 200)}`); if (runView(app, run).canResume) io.print(`  Continue: /resume ${run.id}`); }
+      continue;
+    }
+    const reconcile = /^\/reconcile\s+([A-Za-z0-9_-]{1,64})\s+([0-9]+)\s+([0-9]+)\s+--confirm$/.exec(line.trim());
+    if (reconcile) {
+      const attempt = app.runs.getModelAttempt(reconcile[1]!), run = attempt ? app.getRun(attempt.runId) : undefined;
+      const inputTokens = Number(reconcile[2]), outputTokens = Number(reconcile[3]);
+      if (!attempt || !run || run.session !== session || ["created","running","waiting_approval","waiting_external","verifying"].includes(run.state) || ![inputTokens,outputTokens,inputTokens+outputTokens].every(Number.isSafeInteger)) { io.print("No inactive owned attempt or valid token counts. Check /tasks."); continue; }
+      try { app.runs.reportModelAttempt(attempt.id, { inputTokens, outputTokens, totalTokens: inputTokens+outputTokens }, "owner"); io.print("Owner reconciliation recorded; this does not certify a provider bill."); report(app.getRun(run.id)!); }
+      catch { io.print("Receipt conflicts or storage is unavailable. Check /tasks before retrying."); }
       continue;
     }
     const resume = /^\/resume\s+([A-Za-z0-9_-]{1,64})$/.exec(line.trim());
@@ -339,10 +354,12 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
 
 function runView(app: App, run: DurableRun): GatewayRunView {
     const feedbackId = run.state === "completed" ? app.learning.latestSegmentId(run.id) : undefined;
+    const accounting = app.runs.modelAccounting(run.id);
     return { id: run.id, state: run.state, request: run.request,
+    accounting, unresolvedAttempts: app.runs.modelAttempts(run.id, true).map(({id,provider,model,state,quote,reservedTokens,reservedCostMicros}) => ({id,provider,model,state,quote,reservedTokens,reservedCostMicros})),
     feedbackId, feedbackRecorded: feedbackId ? app.learning.hasOwnerFeedback(feedbackId) : false,
     steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) ? run.reply : undefined, updatedAt: run.updatedAt,
-    canResume: ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
+    canResume: !accounting.unresolvedCalls && ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
   }; }
 
 async function serve(configPath: string, io: CliIo): Promise<CliResult> {
@@ -382,6 +399,14 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
       control: async ({ session, id, action }) => {
         gatewayRunSession(session);
         return controlRun(session, id, action);
+      },
+      reconcile: async ({ session, attemptId, inputTokens, outputTokens }) => {
+        gatewayRunSession(session);
+        const attempt = app.runs.getModelAttempt(attemptId), run = attempt ? app.getRun(attempt.runId) : undefined;
+        if (!run || run.session !== session || ["created","running","waiting_approval","waiting_external","verifying"].includes(run.state)) throw Error("no inactive owned model attempt");
+        app.runs.reportModelAttempt(attemptId, { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, "owner");
+        app.journal.append({ kind: "model.reconciled", session, data: { attemptId, runId: run.id, source: "owner", inputTokens, outputTokens } });
+        return runView(app, app.getRun(run.id)!);
       },
     },
     feedback: ({ session, feedbackId, verdict, note }) => app.feedback(session, feedbackId, verdict, note),

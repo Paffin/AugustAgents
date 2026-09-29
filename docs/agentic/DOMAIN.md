@@ -20,6 +20,14 @@
   learning.
 - **Distillation stage:** LLM, skill, workflow, or reflex execution level.
 - **Checkpoint:** durable recovery boundary in a run.
+- **Model attempt:** one recorded generation request, with its own identity and
+  tariff snapshot; a transport-aware adapter separates each actual retry.
+- **Billing hold:** reserved allowance while an attempt's usage is unresolved;
+  neither a received charge nor evidence that the call was free.
+- **Provider usage receipt:** token quantities received from the configured
+  provider, priced as an estimate using that attempt's recorded quote.
+- **Owner reconciliation:** explicitly entered owner receipt/estimate, retained
+  as owner-sourced evidence rather than relabelled as a provider receipt.
 
 ## Definitions
 
@@ -66,4 +74,3 @@
   bounded decision in `OUT-002`.
 - Verification methods and reward semantics vary by task type and need a typed
   contract in `OUT-006`.
-

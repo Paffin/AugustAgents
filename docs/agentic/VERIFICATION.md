@@ -103,6 +103,57 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Durable model accounting and owner reconciliation, 2026-09-30
+
+- Runtime schema v3 records an attempt before the actual generation request,
+  including the validated configured tariff snapshot and opaque request hash.
+  Received usage atomically settles its attempt and cumulative cost; changed
+  tariffs do not retroactively reprice old tokens. A unique pending index and
+  receipt conflict checks prevent duplicate accounting. No provider prices or
+  model choices are compiled into this path.
+- Interrupted/no-usage calls retain an unresolved hold against the remaining
+  allowance, not a fake zero receipt. Proven connection refusal/DNS failure
+  before delivery releases it as `not_sent`; redirects are rejected rather than
+  following credentials/prompt or misclassifying a later refusal. Both ordinary
+  and opaque adapters finalize their lifecycle and treat observer failure as fatal.
+- Browser owner reconciliation requires confirmation and an inactive owned run;
+  negative/unsafe quantities, unconfirmed input, foreign sessions and conflicting
+  receipts reject without mutation. Operator estimates remain labelled `owner`,
+  not provider receipts. Tasks exposes pending holds, blocks continuation until
+  reconciliation and preserves that status through gateway restart.
+- Real loaded-model journey `7695b3e4-d9cf-40ba-9a61-b304002fab23`: actual file
+  read, then Pause during the pending **answer** request (transport AbortError).
+  2984 received tokens remained; 47016 tokens / USD 0.099999 allowance was held.
+  Explicit process-owned operator estimate 23 input/11 output was stored as
+  owner-only evidence (not a vendor receipt); same-ID Continue completed one
+  file step and returned 14656 + 23 = **14679**. Final 4922 recorded tokens comprise
+  4888 provider-reported plus 34 owner-estimated tokens; configured estimate 1 µUSD.
+- `29d811b6-6524-4f0c-b1e0-cb7e648f3945` retained its unknown 50000-token /
+  USD 0.100000 hold after restart; another-session receipt POST returned 409
+  and the UI had no Continue control. Latest Cancel+SIGKILL of validated owned
+  gateway PID 13912 restored `0566701f-7c64-4053-9312-cad96e80a48c` as cancelled
+  **with its unknown hold intact**, not free/running/recovering. Original random
+  source file and all seven pre-upgrade runs remained; v2 snapshot (16 messages)
+  and sidecar digest verified. Captures/readback helpers retained under
+  `/private/tmp/august-task-controls.O4O0qH/billing-*`, not Git.
+- Desktop/mobile pixels inspected; final mobile unknown-hold/form axe: zero
+  violations and incomplete checks. Earlier scrolled mobile run reported two
+  offscreen contrast checks as incomplete; scroll-to-top resolved them without
+  hiding tests. No browser errors observed.
+- Independent review reproduced incomplete byte-copy backups with a live WAL
+  reader. Both v1/v2 migration now check checkpoint results and refuse before
+  backup/DDL when busy; real reader/commit regressions verify the recovered WAL
+  message in both upgraded and backup files after closing the reader. Read-only
+  snapshots reject live uncheckpointed WAL rather than returning stale accounting.
+  This is stopped-writer migration evidence, NOT zero-downtime qualification.
+- Final full gate including both WAL regressions: 656 pass, 12 skip,
+  0 fail / 668 tests / 38 files / 2589 assertions / 20.58s. Typecheck and
+  host-native build pass. Independent reviewer replay confirmed that the busy
+  migration refuses without a backup/schema change and, after writers/readers
+  close, both migrated and backup images retain all three committed messages.
+  Windows/production migration, vendor invoice accuracy, automatic reconciliation,
+  configured provider degradation/cooldown and the full 28-outcome goal remain open.
+
 ### In-flight model abort and durable stop intent — partial issue #2, 2026-09-30
 
 - Run cancellation/deadline now reaches expansion, decision, argument generation,

@@ -14,8 +14,9 @@
   Backend loading is lazy; invalid/unavailable native assets yield primary errors
   and the cascade uses its LLM fallback. Native activation and local training
   remain subject to independently verified, engine-specific outcomes (OUT-011).
-- Bun SQLite `runtime.db` schema v2/WAL now stores messages/runs/checkpoints and
-  provider usage. Earlier Phase A evidence remains historical.
+- Bun SQLite `runtime.db` schema v3/WAL stores messages/runs/checkpoints, received
+  usage and durable model attempts with tariff snapshots and unresolved holds.
+  Earlier Phase A evidence remains historical.
 - Maintained MCP SDK 1.31.0 is pinned behind the existing August adapter.
 - Local filesystem and journal persistence; current storage contracts are
   package-specific and incomplete.
@@ -40,7 +41,7 @@
 
 ### Current source, observed 2026-09-29
 
-- `core`: lane queue, session keys, schema-v2 durable store with usage accounting,
+- `core`: lane queue, session keys, schema-v3 durable store with usage accounting,
   and audit/journal primitives. Current runtime acceptance is incomplete.
 - `agent`: orchestration of decision, arguments, policy, approval, execution,
   result, and response.
@@ -219,10 +220,15 @@ evidence and outstanding Windows portability gaps belong in `VERIFICATION.md`.
 - Repository source and tests are Git-managed.
 - `~/.august` may contain retained configuration, decisions, journal, secrets,
   capability configuration, and future run/memory state.
-- `dataDir/runtime.db` schema v2 owns messages, runs, transitions, budgets,
-  usage, checkpoints and idempotency; source includes a v1 backup/migration path.
-  No present retained-data migration or reset is authorized. Evaluate actual
-  consumer/data/support-window evidence before extending compatibility.
+- `dataDir/runtime.db` schema v3 owns messages, runs, transitions, budgets,
+  usage, checkpoints, model attempts and idempotency; source includes v1→v2→v3
+  verified backup/migration paths. App refuses live-owner migration, and busy
+  WAL checkpoints refuse migration before creating an incomplete backup. Read-only
+  image inspection is restricted to stopped/checkpointed snapshots, not live WAL.
+  Migration has been exercised only on process-owned temporary state; unknown
+  external retained datasets and production rollback are not qualified. No reset
+  is authorized. Evaluate consumer/data/support-window evidence before extending
+  compatibility.
 - learning.db, patterns.db and memory.db are retained runtime datasets with
   owner/provenance boundaries; do not reseed them to achieve green tests.
 - External retained installations and production backup procedures are unknown;

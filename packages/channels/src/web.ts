@@ -75,6 +75,11 @@ export const WEB_HTML = `<!doctype html>
   .task-state { text-transform:capitalize; }
   .task-request { font-weight:600; margin:12px 0 !important; }
   .task-reply { max-height:240px; overflow:auto; padding:12px 0; border-top:1px solid var(--line); }
+  .billing-warning { color:var(--warn); padding:12px 0; }
+  .receipt-form { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .receipt-form label { display:block; font-size:13px; }
+  .receipt-form input[type=number] { display:block; width:100%; min-width:0; margin-top:4px; }
+  .receipt-confirm { grid-column:1/-1; }
   @media (max-width:760px) { .sidebar { width:76px; padding:24px 8px; } .brand { padding:0; text-align:center; font-size:17px; } .brand span,.sidebar-note,.nav-label { display:none; } nav button { justify-content:center; padding:12px 4px; } header { padding:20px; } .credentials,#log { padding:20px; } #form { width:calc(100% - 40px); } .budgets { padding:8px 20px 12px; } }
   @media (max-width:480px) { body { flex-direction:column; } .sidebar { width:100%; padding:8px 12px; flex-direction:row; align-items:center; gap:12px; border-right:0; border-bottom:1px solid var(--line); } .brand { font-size:18px; } nav { display:flex; margin-left:auto; gap:4px; } nav button { width:auto; padding:8px 12px; } .nav-label { display:inline; font-size:12px; } .nav-icon { display:none; } header { padding:16px; } #connection { max-width:140px; } .credentials,#log { padding:16px; } #form { width:calc(100% - 24px); gap:4px; } .budgets { padding:8px 12px 12px; gap:8px; } .budgets label { min-width:120px; } .task-title { flex-direction:column; gap:4px; } .welcome h2 { font-size:26px; } }
   :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
@@ -217,6 +222,7 @@ export const WEB_JS = `(() => {
   const taskPanel = document.getElementById("tasks"), taskList = document.getElementById("task-list"), taskStatus = document.getElementById("task-status");
   let taskTimer = null, taskLoading = false, taskFingerprint = "";
   const controlling = new Set();
+  const receiptDrafts = new Map();
   const usd = value => { const n = BigInt(value); return (n / 1000000n).toString() + "." + (n % 1000000n).toString().padStart(6, "0"); };
   async function loadTasks() {
     if (!token || taskLoading) return;
@@ -227,15 +233,23 @@ export const WEB_JS = `(() => {
       if (!response.ok || !Array.isArray(body.runs)) { taskList.replaceChildren(); taskFingerprint = ""; taskStatus.textContent = "Tasks unavailable. Check your connection."; if ([401, 403].includes(response.status)) connectionState(false, "Connection rejected"); return; }
       const fingerprint = JSON.stringify(body.runs) + Array.from(controlling).join(",");
       if (fingerprint === taskFingerprint) return;
-      const focused = taskList.contains(document.activeElement) ? { run: document.activeElement.dataset.run, action: document.activeElement.dataset.action } : null;
+      const focused = taskList.contains(document.activeElement) ? { id: document.activeElement.id, run: document.activeElement.dataset.run, action: document.activeElement.dataset.action } : null;
       taskFingerprint = fingerprint; taskList.replaceChildren();
-      taskStatus.textContent = body.runs.length ? "Runtime state and reported usage." : "No tasks in this session yet.";
+      taskStatus.textContent = body.runs.length ? "Runtime state and recorded usage." : "No tasks in this session yet.";
       for (const run of body.runs) {
         const item = document.createElement("li"), title = document.createElement("p"), metrics = document.createElement("p"), request = document.createElement("p");
         title.className = "task-title"; const state = document.createElement("span"), id = document.createElement("span"); state.className = "task-state"; state.textContent = run.state.replaceAll("_", " "); id.className = "task-id"; id.textContent = run.id; title.append(state, id); metrics.className = "muted";
         metrics.textContent = run.steps + "/" + run.budget.maxSteps + " steps · " + run.usage.totalTokens + "/" + run.budget.maxTokens + " tokens (" + run.usage.inputTokens + " in / " + run.usage.outputTokens + " out) · USD " + usd(run.usage.costMicros) + "/" + usd(run.budget.maxCostMicros) + " estimate";
         request.className = "task-request"; request.textContent = run.request.slice(0, 600); item.append(title, request, metrics);
         if (run.reply) { const reply = document.createElement("p"); reply.className = "task-reply"; reply.textContent = run.reply; item.appendChild(reply); }
+        if (run.accounting?.unresolvedCalls) {
+          const warning = document.createElement("p"); warning.className = "billing-warning";
+          warning.textContent = "Usage receipt pending for " + run.accounting.unresolvedCalls + " call(s). Held allowance: " + run.accounting.reservedTokens + " tokens / USD " + usd(run.accounting.reservedCostMicros) + ". This is a hold, not a bill or proof of zero charge." + (run.accounting.unknownCalls || !["created","running","waiting_approval","waiting_external","verifying"].includes(run.state) ? " Further generation needs reconciliation." : " Generation is in progress; the receipt will settle this hold.");
+          item.appendChild(warning);
+          if (!["created","running","waiting_approval","waiting_external","verifying"].includes(run.state)) for (const attempt of run.unresolvedAttempts || []) addReconciliation(item, attempt);
+        }
+        if (run.accounting?.ownerReceipts) { const manual = document.createElement("p"); manual.className = "muted"; manual.textContent = "Includes " + run.accounting.ownerReceipts + " owner-reconciled estimate(s), not provider receipts."; item.appendChild(manual); }
+        if (run.accounting?.legacyUsage) { const legacy = document.createElement("p"); legacy.className = "muted"; legacy.textContent = "Legacy usage predates the attempt ledger. Earlier unreported billing cannot be reconstructed automatically."; item.appendChild(legacy); }
         if (run.feedbackId && !run.feedbackRecorded) judge(item, run.id, run.feedbackId);
         if (run.feedbackRecorded) { const recorded = document.createElement("p"); recorded.className = "muted"; recorded.textContent = "Your assessment is recorded for this result."; item.appendChild(recorded); }
         if (run.state === "recovering" && !run.canResume) { const caution = document.createElement("p"); caution.textContent = "Continuation blocked: an external effect may be uncertain. Owner resolution is required."; item.appendChild(caution); }
@@ -260,11 +274,40 @@ export const WEB_JS = `(() => {
         }
         taskList.appendChild(item);
       }
-      if (focused) { const button = Array.from(taskList.querySelectorAll("button")).find(b => b.dataset.run === focused.run && b.dataset.action === focused.action); if (button && !button.disabled) button.focus({ preventScroll: true }); }
+      if (focused) { const element = focused.id ? document.getElementById(focused.id) : focused.run && focused.action ? Array.from(taskList.querySelectorAll("button")).find(b => b.dataset.run === focused.run && b.dataset.action === focused.action) : null; if (element && !element.disabled) element.focus({ preventScroll: true }); }
     } catch { taskStatus.textContent = "Runtime is not reachable."; connectionState(false, "Runtime unreachable"); }
     finally { taskLoading = false; }
   }
   document.getElementById("task-refresh").disabled = !token;
+  function addReconciliation(item, attempt) {
+    const receipt = document.createElement("form"); receipt.className = "receipt-form";
+    const intro = document.createElement("p"); intro.className = "receipt-confirm muted";
+    intro.textContent = "Reconcile " + attempt.model + " · " + attempt.id + ". Frozen quote: " + attempt.quote.inputMicrosPerMillion + " input / " + attempt.quote.outputMicrosPerMillion + " output microdollars per million tokens.";
+    receipt.appendChild(intro);
+    const draft = receiptDrafts.get(attempt.id) || { input: "", output: "", confirm: false };
+    const fields = [];
+    for (const [key,label] of [["input","Input tokens"],["output","Output tokens"]]) {
+      const row = document.createElement("label"), field = document.createElement("input");
+      field.type = "number"; field.min = "0"; field.step = "1"; field.required = true; field.max = String(Number.MAX_SAFE_INTEGER); field.value = draft[key];
+      field.id = "receipt-" + attempt.id + "-" + key; row.htmlFor = field.id; row.textContent = label;
+      field.oninput = () => { draft[key] = field.value; receiptDrafts.set(attempt.id, draft); }; row.appendChild(field); receipt.appendChild(row); fields.push(field);
+    }
+    const row = document.createElement("label"), confirm = document.createElement("input"); row.className = "receipt-confirm";
+    confirm.type = "checkbox"; confirm.required = true; confirm.checked = draft.confirm; confirm.id = "receipt-" + attempt.id + "-confirm"; row.htmlFor = confirm.id;
+    confirm.onchange = () => { draft.confirm = confirm.checked; receiptDrafts.set(attempt.id, draft); };
+    row.append(confirm, document.createTextNode(" I checked the receipt/estimate. This records my reconciliation, not a provider receipt.")); receipt.appendChild(row);
+    const save = document.createElement("button"); save.type = "submit"; save.id = "receipt-" + attempt.id + "-save"; save.textContent = "Record owner reconciliation"; receipt.appendChild(save);
+    receipt.onsubmit = async e => {
+      e.preventDefault(); const inputTokens = Number(fields[0].value), outputTokens = Number(fields[1].value);
+      if (!confirm.checked || ![inputTokens,outputTokens,inputTokens+outputTokens].every(Number.isSafeInteger) || inputTokens < 0 || outputTokens < 0) return;
+      save.disabled = true;
+      try {
+        const response = await fetch("/v1/model-attempts/" + encodeURIComponent(attempt.id), { method: "POST", headers: headers(), body: JSON.stringify({ ...who, inputTokens, outputTokens, confirm: true }) });
+        if (!response.ok) throw Error(); receiptDrafts.delete(attempt.id); taskFingerprint = ""; await loadTasks(); taskStatus.textContent = "Owner reconciliation recorded. It does not certify a vendor bill.";
+      } catch { taskStatus.textContent = "Could not record reconciliation. Check task state before retrying."; save.disabled = false; }
+    };
+    item.appendChild(receipt);
+  }
   document.getElementById("task-refresh").onclick = () => { taskFingerprint = ""; loadTasks(); };
   taskPanel.ontoggle = () => {
     if (taskTimer) clearInterval(taskTimer); taskTimer = null;

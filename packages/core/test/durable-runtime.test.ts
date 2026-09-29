@@ -32,7 +32,7 @@ describe("DurableRuntimeStore", () => {
   test("Product behavior: owner-only WAL database reopens messages in order", () => {
     const path = tempDb();
     let store = new DurableRuntimeStore(path);
-    expect(store.schemaVersion()).toBe(2);
+    expect(store.schemaVersion()).toBe(3);
     expect(store.journalMode()).toBe("wal");
     expect(statSync(path).mode & 0o777).toBe(0o600);
     store.appendMessage(session, "user", "first", 1);
@@ -47,7 +47,7 @@ describe("DurableRuntimeStore", () => {
 
   test("Safety/reliability invariant: backup copies open read-only without recovery writes", () => {
     const path = tempDb(); const backup = tempDb(); const writer = new DurableRuntimeStore(path); writer.appendMessage(session, "user", "kept"); writer.close(); copyFileSync(path, backup);
-    const reader = new DurableRuntimeStore(backup, { readOnly: true }); expect(reader.schemaVersion()).toBe(2); expect(reader.counts()).toEqual({ messages: 1, runs: 0 }); expect(existsSync(`${backup}-shm`)).toBe(false);
+    const reader = new DurableRuntimeStore(backup, { readOnly: true }); expect(reader.schemaVersion()).toBe(3); expect(reader.counts()).toEqual({ messages: 1, runs: 0 }); expect(existsSync(`${backup}-shm`)).toBe(false);
     expect(() => reader.appendMessage(session, "assistant", "blocked")).toThrow(); reader.close();
   });
 
@@ -89,7 +89,7 @@ describe("DurableRuntimeStore", () => {
   test("Safety/reliability invariant: existing malformed schemas fail closed without reseeding", () => {
     const path = tempDb(); const raw = new Database(path); raw.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); raw.close();
     expect(() => new DurableRuntimeStore(path)).toThrow(); const check = new Database(path); expect(check.query("SELECT COUNT(*) count FROM runtime_meta").get()).toEqual({ count: 0 }); check.close();
-    const wrong = tempDb(); const store = new DurableRuntimeStore(wrong); store.close(); const corrupt = new Database(wrong); corrupt.run("UPDATE runtime_meta SET value='3' WHERE key='schema_version'"); corrupt.close(); expect(() => new DurableRuntimeStore(wrong)).toThrow(/unsupported runtime schema 3/);
+    const wrong = tempDb(); const store = new DurableRuntimeStore(wrong); store.close(); const corrupt = new Database(wrong); corrupt.run("UPDATE runtime_meta SET value='4' WHERE key='schema_version'"); corrupt.close(); expect(() => new DurableRuntimeStore(wrong)).toThrow(/unsupported runtime schema 4/);
     const badBudget = tempDb(); const budgetStore = new DurableRuntimeStore(badBudget); budgetStore.startRun({ session, request: "x" }); budgetStore.close(); const budgetDb = new Database(badBudget); budgetDb.run("UPDATE runs SET budget_json='{}'"); budgetDb.close(); expect(() => new DurableRuntimeStore(badBudget)).toThrow(/invalid persisted run budget/);
   });
 
@@ -219,13 +219,13 @@ describe("DurableRuntimeStore", () => {
 
   test("Temporary migration: v1 migrates with exact owner-only backup and preserved data", () => {
     const path = tempDb(); const id = createV1(path); const before = sha256(path); const store = new DurableRuntimeStore(path); const backup = `${path}.v1.backup`;
-    expect(store.schemaVersion()).toBe(2); expect(sha256(backup)).toBe(before); expect(readFileSync(`${backup}.sha256`, "utf8").trim()).toBe(`sha256:${before}`); expect(statSync(backup).mode & 0o777).toBe(0o600); expect(inspectRuntimeSchema(backup)).toBe(1);
+    expect(store.schemaVersion()).toBe(3); expect(sha256(backup)).toBe(before); expect(readFileSync(`${backup}.sha256`, "utf8").trim()).toBe(`sha256:${before}`); expect(statSync(backup).mode & 0o777).toBe(0o600); expect(inspectRuntimeSchema(backup)).toBe(1);
     expect(store.messages(session).at(0)?.content).toBe("legacy"); expect(store.getRun(id)).toMatchObject({ state: "completed", reply: "done", steps: 2, externalEffects: 1, usage: { totalTokens: 0, costMicros: 0 } }); expect(store.taintSources(session)).toEqual(["legacy.tool"]); expect(store.startRun({ session, request: "legacy request", idempotencyKey: "legacy-key" }).replayed).toBe(true); store.close();
     const rollback = tempDb(); copyFileSync(backup, rollback); expect(inspectRuntimeSchema(rollback)).toBe(1); const raw = new Database(rollback, { readonly: true }); expect(raw.query("SELECT reply FROM runs WHERE id=?").get(id)).toEqual({ reply: "done" }); raw.close();
   });
 
   test("Temporary migration: validated existing backup is reused and corrupt backup fails closed", () => {
-    const reusable = tempDb(); createV1(reusable); const digest = sha256(reusable); copyFileSync(reusable, `${reusable}.v1.backup`); writeFileSync(`${reusable}.v1.backup.sha256`, `sha256:${digest}\n`, { mode: 0o600 }); const store = new DurableRuntimeStore(reusable); expect(store.schemaVersion()).toBe(2); store.close();
+    const reusable = tempDb(); createV1(reusable); const digest = sha256(reusable); copyFileSync(reusable, `${reusable}.v1.backup`); writeFileSync(`${reusable}.v1.backup.sha256`, `sha256:${digest}\n`, { mode: 0o600 }); const store = new DurableRuntimeStore(reusable); expect(store.schemaVersion()).toBe(3); store.close();
     const corrupt = tempDb(); createV1(corrupt); const original = sha256(corrupt); copyFileSync(corrupt, `${corrupt}.v1.backup`); writeFileSync(`${corrupt}.v1.backup.sha256`, `sha256:${original}\n`); writeFileSync(`${corrupt}.v1.backup`, "corrupt"); expect(() => new DurableRuntimeStore(corrupt)).toThrow(/invalid runtime v1 backup/); expect(inspectRuntimeSchema(corrupt)).toBe(1); expect(sha256(corrupt)).toBe(original);
   });
 
@@ -239,6 +239,89 @@ describe("DurableRuntimeStore", () => {
   test("Safety/reliability invariant: usage rejects bad data and terminal writes", () => {
     const store = new DurableRuntimeStore(); const run = store.startRun({ session, request: "strict", budget: { maxCostMicros: 0 } }).run; store.transition(run.id, "running");
     expect(store.recordUsage(run.id, { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 }).exhausted).toBeUndefined(); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 })).toThrow(/invalid provider usage/); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: -1, outputMicrosPerMillion: 0 })).toThrow(/invalid usage pricing/); store.transition(run.id, "failed"); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 })).toThrow(/terminal/); store.close();
+  });
+
+  test("model attempts hold unknown billing across restart and settle one immutable quote exactly once", () => {
+    const path = tempDb(); let store = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    const run = store.startRun({ session, request: "owned pending generation", budget: { maxTokens: 100, maxCostMicros: 100 } }).run;
+    store.transition(run.id, "running");
+    const quote = { inputMicrosPerMillion: 100_000, outputMicrosPerMillion: 500_000, source: "owned quote", asOf: "2026-09-30" };
+    store.beginModelAttempt(run.id, { id: "attempt-owned-1", provider: "owned-provider", model: "owned-model", requestHash: "a".repeat(64) }, quote);
+    quote.outputMicrosPerMillion = 1;
+    expect(store.modelAccounting(run.id)).toEqual({ unresolvedCalls: 1, reservedTokens: 100, reservedCostMicros: 100 });
+    expect(() => store.beginModelAttempt(run.id, { id: "attempt-owned-2", provider: "p", model: "m", requestHash: "b".repeat(64) }, quote)).toThrow(/unresolved/);
+    store.finishRun(run.id, "cancelled", "owner cancelled"); store.close();
+    store = new DurableRuntimeStore(path, { exclusiveOwner: true });
+    expect(store.getModelAttempt("attempt-owned-1")?.state).toBe("unknown");
+    const usage = { inputTokens: 10, outputTokens: 2, totalTokens: 12 };
+    expect(store.reportModelAttempt("attempt-owned-1", usage, "owner").run.usage).toEqual({ ...usage, costMicros: 2 });
+    expect(store.reportModelAttempt("attempt-owned-1", usage).run.usage.totalTokens).toBe(12);
+    expect(() => store.reportModelAttempt("attempt-owned-1", { inputTokens: 1, outputTokens: 1, totalTokens: 2 })).toThrow(/conflicts/);
+    expect(store.modelAccounting(run.id).unresolvedCalls).toBe(0); expect(store.getRun(run.id)?.state).toBe("cancelled"); store.close();
+  });
+
+  test("known unsent attempts release the hold; new tariffs never reprice earlier usage", () => {
+    const store = new DurableRuntimeStore(); const run = store.startRun({ session, request: "quotes" }).run; store.transition(run.id, "running");
+    const quote = { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000 };
+    store.beginModelAttempt(run.id, { id: "unsent", provider: "p", model: "m", requestHash: "a".repeat(64) }, quote);
+    store.finishModelAttempt("unsent", "not_sent", "connection_refused"); expect(store.modelAccounting(run.id).unresolvedCalls).toBe(0);
+    store.recordUsage(run.id, { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, quote);
+    expect(store.recordUsage(run.id, { inputTokens: 2, outputTokens: 0, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 }).run.usage.costMicros).toBe(3);
+    store.close();
+  });
+
+  test("v2→v3 preserves rows/costs, verifies its exact backup, and refuses a live owner", () => {
+    const v2 = () => {
+      const path = tempDb(), store = new DurableRuntimeStore(path);
+      const run = store.startRun({ session, request: "legacy received estimate" }).run; store.transition(run.id, "running");
+      store.recordUsage(run.id, { inputTokens: 10, outputTokens: 2, totalTokens: 12 }, { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 0 });
+      store.finishRun(run.id, "completed", "retained"); store.close();
+      const raw = new Database(path); raw.run("DROP TABLE model_attempts"); raw.run("ALTER TABLE runs DROP COLUMN cost_numerator"); raw.run("UPDATE runtime_meta SET value='2' WHERE key='schema_version'"); raw.run("PRAGMA wal_checkpoint(TRUNCATE)"); raw.close();
+      return { path, id: run.id };
+    };
+    const { path, id } = v2(), before = sha256(path), migrated = new DurableRuntimeStore(path);
+    expect(migrated.schemaVersion()).toBe(3); expect(migrated.getRun(id)).toMatchObject({ reply: "retained", usage: { totalTokens: 12, costMicros: 10 } });
+    expect(migrated.modelAccounting(id).legacyUsage).toBe(true); expect(sha256(`${path}.v2.backup`)).toBe(before);
+    expect(inspectRuntimeSchema(`${path}.v2.backup`)).toBe(2); migrated.close();
+    const reader = new DurableRuntimeStore(`${path}.v2.backup`, { readOnly: true }); expect(reader.getRun(id)?.reply).toBe("retained"); reader.close();
+    const invalid = v2(); copyFileSync(invalid.path, `${invalid.path}.v2.backup`); writeFileSync(`${invalid.path}.v2.backup.sha256`, "invalid-owned-fixture");
+    expect(() => new DurableRuntimeStore(invalid.path)).toThrow(/invalid runtime v2 backup/); expect(inspectRuntimeSchema(invalid.path)).toBe(2);
+    const live = v2(), raw = new Database(live.path); raw.query("INSERT INTO runtime_meta VALUES ('runtime_owner',?)").run(JSON.stringify({ pid: process.pid, nonce: "owned-fixture" })); raw.close();
+    const unchanged = sha256(live.path); expect(() => new DurableRuntimeStore(live.path)).toThrow(RuntimeOwnerInUseError);
+    expect(sha256(live.path)).toBe(unchanged); expect(existsSync(`${live.path}.v2.backup`)).toBe(false);
+  });
+
+  test("busy WAL snapshots refuse v1/v2 migration before creating an incomplete backup", () => {
+    for (const version of [1,2]) {
+      const path = tempDb();
+      if (version === 1) createV1(path);
+      else {
+        const store = new DurableRuntimeStore(path); store.close();
+        const raw = new Database(path); raw.run("DROP TABLE model_attempts"); raw.run("ALTER TABLE runs DROP COLUMN cost_numerator"); raw.run("UPDATE runtime_meta SET value='2' WHERE key='schema_version'"); raw.close();
+      }
+      const writer = new Database(path); writer.run("PRAGMA journal_mode=WAL");
+      let seq = (writer.query("SELECT COALESCE(MAX(seq),0) n FROM messages WHERE session=?").get(session) as {n:number}).n;
+      writer.query("INSERT INTO messages VALUES (?,?,?,?,?)").run(session, ++seq, "user", "owned-before-snapshot", 1);
+      const reader = new Database(path); reader.run("BEGIN"); reader.query("SELECT COUNT(*) n FROM messages").get();
+      writer.query("INSERT INTO messages VALUES (?,?,?,?,?)").run(session, ++seq, "user", "owned-committed-in-WAL", 2);
+      expect(() => new DurableRuntimeStore(path)).toThrow(/WAL checkpoint is busy/);
+      expect(existsSync(`${path}.v${version}.backup`)).toBe(false);
+      expect((writer.query("SELECT value FROM runtime_meta WHERE key='schema_version'").get() as {value:string}).value).toBe(String(version));
+      reader.run("ROLLBACK"); reader.close(); writer.close();
+      const migrated = new DurableRuntimeStore(path); expect(migrated.messages(session).at(-1)?.content).toBe("owned-committed-in-WAL"); migrated.close();
+      const image = new Uint8Array(readFileSync(`${path}.v${version}.backup`)); image[18] = 1; image[19] = 1;
+      const backup = Database.deserialize(image);
+      expect(backup.query("SELECT content FROM messages ORDER BY seq DESC LIMIT 1").get()).toEqual({ content: "owned-committed-in-WAL" }); backup.close();
+    }
+  });
+
+  test("read-only snapshots reject active WAL rather than returning stale billing or missing runs", () => {
+    const path = tempDb(), writer = new DurableRuntimeStore(path);
+    const run = writer.startRun({ session, request: "committed only in WAL" }).run; writer.transition(run.id, "running");
+    writer.appendMessage(session, "user", "retained WAL message");
+    expect(() => new DurableRuntimeStore(path, { readOnly: true })).toThrow(/uncheckpointed WAL/);
+    writer.close(); const reader = new DurableRuntimeStore(path, { readOnly: true });
+    expect(reader.getRun(run.id)?.state).toBe("running"); expect(reader.messages(session)[0]?.content).toBe("retained WAL message"); reader.close();
   });
 });
 
