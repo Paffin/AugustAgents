@@ -8,9 +8,10 @@
 **Blueprint Requirements:** REQ-REL-003, REQ-OPS-002
 **Decision Prerequisites:** DEC-0008, DEC-0009
 **Dependencies:** none
-**Readiness:** Ready for Brainstorming
+**Readiness:** Blocked
 **State:** Complete
-**Brainstorming Prompt:** Use the brainstorming skill to design roadmap outcome OUT-001 from `/Users/mkiktev/Documents/agents_system/AugustAgents/docs/agentic/WAYFINDING.md`, binding the exact policy-accepted Ready or preserved Approved Agentic Foundation revision shown there at phase entry.
+**Completion Note:** Outcome is complete; do not re-enter Brainstorming. Continue with OUT-002.
+**Brainstorming Prompt:** Historical only — the completed OUT-001 design entry is retained for traceability and must not be invoked.
 **Execution Binding:** `docs/superpowers/progress/OUT-001.md` is the ignored current-selection owner. Before Planning it must bind the exact accepted Foundation, Design Spec, and Application Receipt; before implementation it must also bind the compatible exact accepted Implementation Plan. Missing, stale, or ambiguous bindings block progression.
 
 ### OUT-002: Durable session and run engine

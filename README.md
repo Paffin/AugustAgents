@@ -188,7 +188,7 @@ python sidecar/laya_server.py            # http://127.0.0.1:7788
 
 **Локальный baseline 2026-09-29:** typecheck и 297 тестов проходят, полный `bun run check` занимает 2.58 с на проверенной macOS-машине; терминальный путь подтверждён на локальном Qwen. Это локальное доказательство, не CI/кроссплатформенная сертификация.
 
-**Следующий milestone:** сначала воспроизводимый baseline, durable runtime, provenance/approval safety, MCP и capability supply chain, outcome-verified learning, интегрированная лестница и memory. Порядок зафиксирован в [Agentic Roadmap](docs/agentic/ROADMAP.md).
+**Следующий milestone:** durable session/run engine (`OUT-002`), затем provenance/approval safety, MCP и capability supply chain, outcome-verified learning, интегрированная лестница и memory. Порядок зафиксирован в [Agentic Roadmap](docs/agentic/ROADMAP.md).
 
 Честный список того, что ещё не закрыто, — в конце [модели угроз](docs/THREAT_MODEL.md) и в [дорожной карте](docs/ROADMAP.md). Проект на стадии MVP: пока не подключайте его к аккаунтам с деньгами.
 
