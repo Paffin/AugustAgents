@@ -103,6 +103,50 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Direct owner web credential controls, 2026-09-29
+
+- Added authenticated GET names/backend, PUT opaque value and DELETE managed
+  name APIs, separate from the agent lane; no value-reading route. Schema, Origin,
+  Host, header token and request bounds apply before storage callbacks. Opaque
+  errors cannot reflect values or backend exception text. Plaintext adapters are
+  unavailable. Names/backend-only journal events record updates/deletions.
+- Real browser/CLI gateway exercise used owned `august-credential-owner-yhfw31`
+  with actual encrypted-file storage, OS access forbidden and the live provider
+  selected by its catalog. A random scoped value submitted through the password
+  form matched fresh-process backend SHA-256 readback. Fields cleared before
+  await; no value appeared in DOM text, journal, run rows or plaintext app files.
+  A global value was also saved with Tab/Enter keyboard navigation.
+- A real filesystem write failure (owned temporary-path collision) returned an
+  error, cleared the field and preserved the previous decrypted value. Restart
+  retained its exact hash and UI name. Delete cancellation preserved it; confirmed
+  deletion removed only the selected scoped entry. A separately injected real
+  FileStore fixture disabled the form; returning to the encrypted backend enabled
+  it. No agent runs were created by any credential operation (runtime count 0).
+- Browser captures inspected at desktop/320 px, with no horizontal overflow at
+  320/768/1024/1440 px. Axe 4.12.1: 0 violations, 0 incomplete, 23 passes for
+  WCAG2 A/AA; default audit also reports 0 violations/0 incomplete, 38 passes.
+  No unhandled frontend errors observed. Keyboard-triggered native confirmation
+  required a separate dialog tool command; a duplicate acceptance found no open
+  dialog. Actual deletion ran once and was independently read back.
+- Regression repair: failed Keychain/Secret Service delete commands now throw
+  and preserve the owned name index. The web adapter does not delete unindexed
+  names, and a listed entry's false deletion result is not reported as success.
+  Runner fixtures prove that boundary; no live native credential operation ran.
+- A revoked gateway token was exercised without reloading the already-open
+  form: the write was refused, its value cleared, controls disabled and stale
+  names removed. Backend hash/events remained unchanged; reconnection restored
+  access. Final WCAG A/AA audit remains 0 violations/0 incomplete (22 passes).
+- Verification is implementation-first, without TDD. Final `bun run check`
+  exits 0: 614 pass, 12 skip, 0 fail, 2344 expectations, 626 tests/36 files,
+  19.92 s. Earlier stages also passed; no unchanged rerun was used to select a
+  best time. Skips remain unavailable sandbox/platform evidence.
+- Owned verification gateway/browser stopped after the journeys; port 50045
+  is clear. Scratch evidence and generated credentials remain outside Git.
+- Native namespace isolation, legacy plaintext cleanup, complete first-run web
+  onboarding, active-provider key refresh/redaction across replacement, key
+  rotation crash atomicity and full control-center/team authorization remain
+  open. This is not completion of OUT-014 or the 28-outcome goal.
+
 ### File-backed master-key placement boundary, 2026-09-29
 
 - Encrypted storage rejects master-key folders or individual `master.key`

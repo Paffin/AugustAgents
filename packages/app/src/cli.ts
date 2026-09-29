@@ -337,6 +337,19 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     // The browser polls /v1/pending, so the prompt itself needs no push.
     onMessage: async ({ session, text, budget }) => { const r = await app.handle(session, text, approvals.approverFor(() => {}), { budget }); return { reply: r.reply, runId: r.runId }; },
     feedback: ({ session, runId, verdict, note }) => app.feedback(session, runId, verdict, note),
+    secrets: app.secrets.kind === "file" ? undefined : {
+      list: () => ({ backend: app.secrets.kind, names: app.secrets.list() }),
+      set: (name, value) => {
+        app.secrets.set(name, value);
+        app.journal.append({ kind: "secret.updated", session: makeSessionKey({ workspace: config.workspace, channel: "system", user: "owner" }), data: { name, backend: app.secrets.kind, source: "owner-api" } });
+      },
+      delete: name => {
+        const listed = app.secrets.list().includes(name);
+        const changed = listed ? app.secrets.delete(name) : false;
+        if (listed && !changed) throw new SecretError("could not confirm credential deletion");
+        app.journal.append({ kind: "secret.deleted", session: makeSessionKey({ workspace: config.workspace, channel: "system", user: "owner" }), data: { name, backend: app.secrets.kind, source: "owner-api", changed } });
+      },
+    },
   });
   } catch (error) {
     app.close();

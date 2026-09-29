@@ -88,6 +88,7 @@ export class KeychainStore implements SecretStore {
   delete(name: string): boolean {
     checkName(name);
     const ok = this.run("security", ["delete-generic-password", "-s", SERVICE, "-a", name]).status === 0;
+    if (!ok) throw new SecretError("could not confirm deletion from the keychain; the name index was preserved");
     this.index.write(this.index.read().filter((n) => n !== name));
     return ok;
   }
@@ -117,6 +118,7 @@ export class SecretServiceStore implements SecretStore {
   delete(name: string): boolean {
     checkName(name);
     const ok = this.run("secret-tool", ["clear", "service", SERVICE, "account", name]).status === 0;
+    if (!ok) throw new SecretError("could not confirm deletion from the secret service; the name index was preserved");
     this.index.write(this.index.read().filter((n) => n !== name));
     return ok;
   }

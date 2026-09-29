@@ -11,6 +11,18 @@ export const WEB_HTML = `<!doctype html>
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; display:flex; flex-direction:column; height:100vh; }
   header { padding:12px 16px; border-bottom:1px solid var(--line); }
+  .credentials { width:100%; max-width:760px; margin:0 auto; padding:8px 16px; border-bottom:1px solid var(--line); }
+  .credentials summary { cursor:pointer; font-weight:600; }
+  .credential-panel { max-height:50vh; overflow:auto; }
+  #credential-form { display:block; padding:0; border:0; }
+  #credential-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; border:0; padding:0; margin:8px 0; }
+  #credential-fields label { font-size:13px; }
+  #credential-fields input { display:block; width:100%; min-width:0; margin-top:4px; }
+  .credential-value { grid-column:1/-1; }
+  #credential-list { padding:0; list-style:none; }
+  #credential-list li { display:flex; gap:8px; align-items:center; justify-content:space-between; margin:8px 0; overflow-wrap:anywhere; }
+  #credential-list button, #credential-refresh { padding:4px 10px; border:1px solid var(--line); border-radius:8px; color:var(--fg); background:var(--card); font:inherit; cursor:pointer; }
+  @media (max-width:480px) { #credential-fields { grid-template-columns:minmax(0,1fr); } }
   h1 { margin:0; font-size:1rem; font-weight:600; }
   main { flex:1; display:flex; flex-direction:column; min-height:0; }
   #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; max-width:760px; width:100%; margin:0 auto; }
@@ -34,6 +46,21 @@ export const WEB_HTML = `<!doctype html>
 </head>
 <body>
 <header><h1>August</h1></header>
+<details class="credentials" id="credentials"><summary>Secrets</summary>
+<section class="credential-panel" aria-label="Secure credential controls">
+<p class="muted">Sent directly to your credential store, never through chat. Values cannot be displayed. Running providers or capabilities may need a restart after replacement.</p>
+<p id="credential-warning" class="muted" hidden>This OS backend currently shares credential names across installations. Verify the scope before changing entries.</p>
+<form id="credential-form" autocomplete="off">
+<fieldset id="credential-fields" disabled><legend class="sr">Store a credential</legend>
+<label for="credential-name">Secret name<input id="credential-name" required pattern="[A-Z_][A-Z0-9_]*" maxlength="128" placeholder="API_KEY" autocomplete="off" spellcheck="false"></label>
+<label for="credential-scope">Capability ID (optional)<input id="credential-scope" pattern="[A-Za-z0-9_\\-]+" maxlength="64" autocomplete="off" spellcheck="false"></label>
+<label class="credential-value" for="credential-value">Secret value<input id="credential-value" type="password" required maxlength="8192" autocomplete="new-password" spellcheck="false"></label>
+<button type="submit">Save secret</button>
+</fieldset></form>
+<p id="credential-status" class="muted" role="status" aria-live="polite">Connect to your local agent to manage secrets.</p>
+<button id="credential-refresh" type="button" disabled>Refresh names</button>
+<ul id="credential-list" aria-label="Stored secret names"></ul>
+</section></details>
 <main>
 <div id="log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" tabindex="0"><p class="muted" id="hint"></p></div>
 <section class="budgets" aria-label="Optional task limits">
@@ -57,6 +84,50 @@ export const WEB_JS = `(() => {
   hint.textContent = token ? "Connected to your local agent." : "Open the link printed by \\"august serve\\" to connect.";
   const who = { channel: "web", user: "local" };
   const headers = () => ({ "content-type": "application/json", authorization: "Bearer " + token });
+  const credentialForm = document.getElementById("credential-form"), credentialFields = document.getElementById("credential-fields");
+  const credentialStatus = document.getElementById("credential-status"), credentialList = document.getElementById("credential-list");
+  let credentialBusy = false, credentialAvailable = false;
+  document.getElementById("credential-refresh").disabled = !token;
+  document.getElementById("credential-refresh").onclick = () => { if (!credentialBusy) loadCredentials().catch(() => { credentialStatus.textContent = "Credential store is not reachable."; }); };
+  async function loadCredentials() {
+    if (!token) return;
+    credentialAvailable = false; credentialFields.disabled = true; credentialStatus.textContent = "Loading credential names…";
+    credentialList.replaceChildren(); document.getElementById("credential-warning").hidden = true;
+    const r = await fetch("/v1/secrets", { headers: headers() });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || typeof body.backend !== "string" || !Array.isArray(body.names) || body.names.some(name => typeof name !== "string")) { credentialFields.disabled = true; credentialStatus.textContent = "Secure credential controls unavailable. Check your connection and backend."; credentialList.replaceChildren(); return; }
+    credentialAvailable = true; credentialFields.disabled = credentialBusy; credentialList.replaceChildren();
+    document.getElementById("credential-warning").hidden = body.backend !== "keychain" && body.backend !== "secret-service";
+    credentialStatus.textContent = "Store: " + body.backend + (body.names.length ? ". Values are hidden." : ". No stored secrets.");
+    for (const name of body.names) {
+      const row = document.createElement("li"), label = document.createElement("span"), remove = document.createElement("button");
+      label.textContent = name; remove.type = "button"; remove.textContent = "Remove"; remove.setAttribute("aria-label", "Remove secret " + name);
+      remove.onclick = async () => {
+        if (credentialBusy || !credentialAvailable || !confirm("Remove secret " + name + "? This may disconnect its provider or capability.")) return;
+        credentialBusy = true; credentialFields.disabled = true; remove.disabled = true;
+        try { const response = await fetch("/v1/secrets/" + encodeURIComponent(name), { method: "DELETE", headers: headers() }); if (!response.ok) { if ([401, 403, 404].includes(response.status)) { credentialAvailable = false; credentialList.replaceChildren(); } throw new Error(); } await loadCredentials(); credentialStatus.textContent = "Secret removed."; }
+        catch { credentialStatus.textContent = "Could not remove the secret. Refresh the list before retrying."; remove.disabled = false; }
+        finally { credentialBusy = false; credentialFields.disabled = !credentialAvailable; }
+      };
+      row.append(label, remove); credentialList.appendChild(row);
+    }
+  }
+  document.getElementById("credentials").ontoggle = () => {
+    if (document.getElementById("credentials").open) loadCredentials().catch(() => { credentialStatus.textContent = "Credential store is not reachable."; });
+    else document.getElementById("credential-value").value = "";
+  };
+  credentialForm.onsubmit = async e => {
+    e.preventDefault(); if (!token || credentialBusy || credentialFields.disabled) return;
+    const name = document.getElementById("credential-name").value.trim(), scope = document.getElementById("credential-scope").value.trim();
+    const field = document.getElementById("credential-value"), value = field.value;
+    field.value = ""; credentialBusy = true; credentialFields.disabled = true; credentialStatus.textContent = "Saving securely…";
+    try {
+      const r = await fetch("/v1/secrets/" + encodeURIComponent((scope ? scope + "." : "") + name), { method: "PUT", headers: headers(), body: JSON.stringify({ value }) });
+      if (!r.ok) { if ([401, 403, 404].includes(r.status)) { credentialAvailable = false; credentialList.replaceChildren(); } throw new Error(); }
+      await loadCredentials(); credentialStatus.textContent = "Secret saved. Its value is hidden.";
+    } catch { credentialStatus.textContent = "Could not confirm storage. The value was cleared; refresh the list before retrying."; }
+    finally { credentialBusy = false; credentialFields.disabled = !credentialAvailable; if (credentialAvailable) field.focus(); }
+  };
   const add = (text, cls) => { const d = document.createElement("div"); d.className = "msg " + (cls || ""); d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
   let shown = null;
   // An answered request stays in the log as a record, no longer a dialog.

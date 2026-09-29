@@ -333,4 +333,17 @@ describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
   test("the script is valid JavaScript", () => {
     expect(() => new Function(WEB_JS)).not.toThrow();
   });
+
+  test("Safety (REQ-SEC-004): credentials use a separate password form, direct endpoint and names-only display", () => {
+    expect(WEB_HTML).toContain('id="credential-value" type="password"');
+    expect(WEB_HTML).toContain('for="credential-name"');
+    expect(WEB_HTML).toContain('for="credential-scope"');
+    expect(WEB_HTML).toContain('aria-label="Stored secret names"');
+    expect(WEB_JS).toContain('field.value = ""');
+    expect(WEB_JS).toContain('method: "PUT"');
+    expect(WEB_JS).toContain('method: "DELETE"');
+    expect(WEB_JS).toContain('JSON.stringify({ value })');
+    expect(WEB_JS).toContain('label.textContent = name');
+    expect(WEB_JS).not.toContain("innerHTML");
+  });
 });

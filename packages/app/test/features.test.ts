@@ -48,6 +48,19 @@ function makeIo(home: string, answers: Array<string | null> = [], extra: Partial
 }
 
 describe("secret stores", () => {
+  test("Safety: failed OS deletion preserves the owned name index and reports an error", () => {
+    for (const Store of [KeychainStore, SecretServiceStore]) {
+      let refuse = false;
+      const run: Runner = () => ({ status: refuse ? 1 : 0, stdout: "" });
+      const store = new Store(tmp(), run);
+      store.set("OWNED_TOKEN", "fixture-value"); refuse = true;
+      expect(() => store.delete("OWNED_TOKEN")).toThrow(/could not confirm deletion/);
+      expect(store.list()).toEqual(["OWNED_TOKEN"]);
+      refuse = false; expect(store.delete("OWNED_TOKEN")).toBe(true);
+      expect(store.list()).toEqual([]);
+    }
+  });
+
   test("file store: owner-only file, set/get/list/delete, name rules", () => {
     const dir = tmp();
     const s = new FileStore(dir);

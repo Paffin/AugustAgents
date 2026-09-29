@@ -93,6 +93,12 @@ master-key storage is unavailable and never falls back to plaintext. The CLI
 returns a safe failure before asking for a credential and can retry after the
 key-folder configuration is corrected. Explicit FileStore/legacy migration
 tooling remains, without automatic selection on encryption failure.
+The configured web UI now writes credentials through a direct owner-token API,
+not through agent messages. No HTTP operation retrieves values. Plaintext
+backends are disabled for these controls, request sizes/names are bounded, and
+backend failures cannot echo values. Actual encrypted-store browser journeys
+pass; OS-backend deletion failure is regression-tested at the Runner seam and
+preserves names. Live OS credentials remain deliberately untouched/unqualified.
 Current acceptance remains incomplete: live sandbox tests skip on this host;
 the global `august` OS service/account can collide across installations;
 key folders/key-file symlinks are checked against known data and tool roots

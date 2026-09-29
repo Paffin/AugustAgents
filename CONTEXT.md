@@ -22,6 +22,9 @@ activation exam, local training and other platforms remain pending (see Verifica
 Frozen prices were removed;
 owner quotes and web task thresholds are validated. Real file reading, restart
 and zero-cost admission journeys pass locally. Preserve the full 28-outcome goal.
+Owner credential controls are now implemented and live-verified in the web UI:
+direct encrypted writes, names-only lists, restart, failure and confirmed deletion.
+First-run web setup and the rest of the complete control center remain open.
 
 ## Active Risks
 

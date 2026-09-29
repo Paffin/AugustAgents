@@ -46,6 +46,15 @@ export interface WebUi {
   js: string;
 }
 
+/** Owner credential controls. Deliberately no value-reading operation. */
+export interface GatewaySecrets {
+  list(): { backend: string; names: readonly string[] };
+  set(name: string, value: string): void;
+  delete(name: string): void;
+}
+
+const SECRET_API_NAME = /^(?:[A-Za-z0-9_-]{1,64}\.)?[A-Z_][A-Z0-9_]{0,127}$/;
+
 export interface GatewayOptions extends BindConfig {
   workspace: string;
   /** The agent loop. Called serially per session, in parallel across sessions. */
@@ -57,6 +66,8 @@ export interface GatewayOptions extends BindConfig {
   approvals?: GatewayApprovals;
   /** Chat page served at "/". The token reaches it in the URL fragment, which browsers never send. */
   webUi?: WebUi;
+  /** Owner-token-only controls; absent (including plaintext backends): 404. */
+  secrets?: GatewaySecrets;
 }
 
 function json(status: number, body: unknown): Response {
@@ -138,6 +149,32 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
         return null;
       }
     };
+
+    if (url.pathname === "/v1/secrets" && request.method === "GET") {
+      if (!options.secrets) return json(404, { error: "secure credential controls unavailable" });
+      try { const snapshot = options.secrets.list(); return json(200, { backend: snapshot.backend, names: [...snapshot.names] }); }
+      catch { return json(500, { error: "credential store unavailable" }); }
+    }
+    if (url.pathname.startsWith("/v1/secrets/") && (request.method === "PUT" || request.method === "DELETE")) {
+      if (!options.secrets) return json(404, { error: "secure credential controls unavailable" });
+      let name: string;
+      try { name = decodeURIComponent(url.pathname.slice("/v1/secrets/".length)); } catch { return json(400, { error: "invalid credential name" }); }
+      if (!SECRET_API_NAME.test(name) || name !== name.trim()) return json(400, { error: "invalid credential name" });
+      if (request.method === "DELETE") {
+        try { options.secrets.delete(name); return json(200, { ok: true }); }
+        catch { return json(500, { error: "credential store unavailable" }); }
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return json(415, { error: "content-type must be application/json" });
+      const raw = await readBody(request);
+      if (raw === null) return json(413, { error: "body too large" });
+      let payload: unknown;
+      try { payload = JSON.parse(raw); } catch { return json(400, { error: "invalid JSON" }); }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).some(key => key !== "value")) return json(400, { error: "only value is accepted" });
+      const value = (payload as { value?: unknown }).value;
+      if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > 8192) return json(400, { error: "credential value must contain 1 to 8192 bytes" });
+      try { options.secrets.set(name, value); return json(200, { ok: true }); }
+      catch { return json(500, { error: "credential store unavailable" }); }
+    }
 
     if (url.pathname === "/v1/pending" && request.method === "GET") {
       const session = sessionFrom(url.searchParams.get("channel"), url.searchParams.get("user"));

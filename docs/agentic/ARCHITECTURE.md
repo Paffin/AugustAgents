@@ -109,6 +109,24 @@
 
 ## Data Flow
 
+### Owner credential controls
+
+The configured web gateway has a direct `GatewaySecrets` adapter to the secure
+credential store, separate from the agent/message lane. GET `/v1/secrets` returns
+backend identity and names only. PUT `/v1/secrets/:name` accepts only `{value}`
+(1–8192 UTF-8 bytes); DELETE establishes absence within the managed name index.
+Writes accept global uppercase names or `capability.NAME`, with bounded identifier
+lengths. There is no credential value-reading HTTP route. Host/Origin/header-token
+checks precede every operation; responses are no-store and backend errors opaque.
+Plaintext stores do not expose the adapter. Journal events contain names/backend,
+never submitted values; deletion records whether an entry changed. OS deletion
+errors preserve the name index and report failure rather than a successful delete.
+
+The browser provides separate password input, loading/error/disabled/success
+states and explicit delete confirmation; values are cleared before submission
+awaits and on panel close. Provider/MCP credential refresh is not automatic;
+initial provider setup and the complete owner control center remain incomplete.
+
 ### Phase A observed flow and remaining target
 
 Phase A persists the Run and current user message before execution, loads a

@@ -42,6 +42,58 @@ function post(body: unknown, headers: Record<string, string> = {}, path = "/v1/m
 
 const valid = { channel: "cli", user: "dan", text: "hello" };
 
+describe("owner secret controls (REQ-SEC-004)", () => {
+  // Safety/security invariant: owner auth, bounded direct writes, no value-reading route or model call.
+  function setup() {
+    const values = new Map<string, string>();
+    const { handler, seen } = make({ secrets: {
+      list: () => ({ backend: "encrypted-file", names: [...values.keys()] }),
+      set: (name, value) => void values.set(name, value), delete: name => void values.delete(name),
+    } });
+    const request = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => new Request(`http://127.0.0.1:7777${path}`, {
+      method, headers: { host: "127.0.0.1:7777", authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { values, handler, seen, request };
+  }
+
+  test("PUT is repeatable, list returns names only, GET cannot retrieve a value, DELETE is idempotent", async () => {
+    const { handler, values, seen, request } = setup(); const path = "/v1/secrets/weather.API_KEY";
+    for (let i = 0; i < 2; i++) expect((await handler(request("PUT", path, { value: "fixture-secret" }))).status).toBe(200);
+    expect(values.get("weather.API_KEY")).toBe("fixture-secret");
+    const response = await handler(request("GET", "/v1/secrets"));
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = await response.json(); expect(body).toEqual({ backend: "encrypted-file", names: ["weather.API_KEY"] });
+    expect(JSON.stringify(body)).not.toContain("fixture-secret");
+    expect((await handler(request("GET", path))).status).toBe(404);
+    for (let i = 0; i < 2; i++) expect((await handler(request("DELETE", path))).status).toBe(200);
+    expect(values.size).toBe(0); expect(seen).toHaveLength(0);
+  });
+
+  test("unauthenticated, cross-origin and malformed writes never reach storage", async () => {
+    const { handler, values, request } = setup(); const path = "/v1/secrets/OWNER_TOKEN";
+    expect((await handler(request("PUT", path, { value: "private" }, { authorization: "" }))).status).toBe(401);
+    expect((await handler(request("PUT", path, { value: "private" }, { origin: "https://evil.example" }))).status).toBe(403);
+    for (const body of [null, [], { value: "" }, { value: 12 }, { value: "x", channel: "web" }, { value: "x".repeat(8193) }]) expect((await handler(request("PUT", path, body))).status).toBe(400);
+    expect((await handler(request("PUT", "/v1/secrets/a.b.TOKEN", { value: "private" }))).status).toBe(400);
+    expect((await handler(request("PUT", "/v1/secrets/TOKEN%0A", { value: "private" }))).status).toBe(400);
+    expect((await handler(request("PUT", path, { value: "private" }, { "content-type": "text/plain" }))).status).toBe(415);
+    expect((await handler(request("PUT", path, { value: "x".repeat(MAX_BODY_BYTES) }))).status).toBe(413);
+    expect(values.size).toBe(0);
+  });
+
+  test("disabled controls and storage errors reveal neither request values nor exception details", async () => {
+    const { request } = setup(); const disabled = make().handler;
+    expect((await disabled(request("GET", "/v1/secrets"))).status).toBe(404);
+    const failure = () => { throw Error("private-credential-and-path"); };
+    const broken = make({ secrets: { list: failure, set: failure, delete: failure } }).handler;
+    for (const req of [request("GET", "/v1/secrets"), request("PUT", "/v1/secrets/TOKEN", { value: "private-credential-and-path" }), request("DELETE", "/v1/secrets/TOKEN")]) {
+      const response = await broken(req); expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain("private-credential-and-path");
+    }
+  });
+});
+
 describe("assertSafeBind", () => {
   test("refuses a short token", () => {
     expect(() => assertSafeBind({ hostname: "127.0.0.1", port: 1, token: "short" })).toThrow(GatewayConfigError);
