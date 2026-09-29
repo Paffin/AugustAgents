@@ -67,9 +67,10 @@ function publicAddress(ip: string): boolean {
     Math.floor(v4(ip) / 2 ** (32 - bits)) === Math.floor(v4(base) / 2 ** (32 - bits)));
   if (isIP(ip) !== 6 || ip.includes("%")) return false;
   const [first = "0", second = "0"] = ip.toLowerCase().split(":");
-  const a = parseInt(first, 16), b = parseInt(second, 16);
-  // Conservative global-unicast policy: reject mapped/NAT64, 6to4 and special 2001 ranges.
-  return a >= 0x2000 && a <= 0x3fff && a !== 0x2002 && !(a === 0x2001 && (b < 0x200 || b === 0xdb8));
+  const a = parseInt(first || "0", 16), b = parseInt(second || "0", 16);
+  // Conservative global-unicast policy: reject mapped/NAT64, 6to4, special 2001 and 3ffe/3fff ranges.
+  // RFC 9637 reserves 3fff::/20 as non-forwardable documentation space.
+  return a >= 0x2000 && a < 0x3ffe && a !== 0x2002 && !(a === 0x2001 && (b < 0x200 || b === 0xdb8));
 }
 const numericLoopback = (host: string) => host === "::1" || (isIP(host) === 4 && host.startsWith("127."));
 
