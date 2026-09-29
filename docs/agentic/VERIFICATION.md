@@ -233,6 +233,35 @@ only configuration intent.
   Windows/production migration, vendor invoice accuracy, automatic reconciliation,
   configured provider degradation/cooldown and the full 28-outcome goal remain open.
 
+### Non-vacuous App primary/backup stop acceptance — `b100677`, 2026-09-30
+
+- An independent agent used an owned App, encrypted store, web session and two
+  physical transparent relays to the actual discovered loaded local model.
+  Both `/models` catalogs confirmed availability; no inference responses were
+  manufactured. This uses App's injected FallbackProvider seam, not a delivered
+  primary/backup configuration UX (that remains issue #3).
+- Real pending argument call on `11e3f45d-0e96-4200-8ebf-d0309963e9ed`:
+  UI Pause reached Paused in 81ms, primary 2 requests / 1 finished / 1 AbortError,
+  backup 0 requests; prior 462 provider-reported tokens and unknown 49538-token
+  allowance remained persisted. No tool step ran and source hash was unchanged.
+- Owner-labelled fixture estimate 23 input / 11 output was then reconciled
+  through UI, explicitly NOT a vendor receipt. Same-ID Continue encountered a
+  genuine 120000ms provider deadline: failed `billing-unknown`, 950 retained
+  tokens including that estimate, backup 0. It did **not** complete the useful
+  task and is not counted as acceptance of successful fallback/recovery. Root's
+  separate real-model useful file journey is recorded above. Issue #3 still
+  needs configured degradation, cooldown and transparent waiting/resumption.
+- Separate pending argument request on `cff2d7f3-20a5-47cb-a20e-7134ae1fd6f7`:
+  UI Cancel then immediate SIGKILL of validated owned PID 33586; restart showed
+  Cancelled in SQLite and the real browser, retaining prior 545 tokens and
+  unknown 49455-token hold. Primary 6 total requests / 3 finished, backup 0
+  before/after restart; source hash unchanged. This is non-vacuous evidence
+  that cancellation does not dispatch to an available backup.
+- Evidence JSON, pause/failed-resume/cancel-restart screenshots and PID ownership
+  are retained at `/private/tmp/august-live-fallback.2xZZ23/` and were inspected.
+  Gateway and both relays stopped; ports 63255/49936/49937 connection-refused;
+  owned browser closed. No foreign model/service or OS credential was touched.
+
 ### In-flight model abort and durable stop intent — partial issue #2, 2026-09-30
 
 - Run cancellation/deadline now reaches expansion, decision, argument generation,
