@@ -292,6 +292,89 @@ export class AgentRuntime {
       catch (error) { throw new AgentCheckpointError(error); }
     };
 
+    /** Runs one chosen call through every safeguard: loop guard, rug-pull check, policy, approval, budgets, the call itself, trace and taint. */
+    const attempt = async (descriptor: ToolDescriptor, args: Record<string, unknown>, decided: TraceDecision): Promise<{ terminal?: AgentReply; failed?: boolean }> => {
+        const loop = guard.record(descriptor.name, args);
+        if (loop.decision === "deny") {
+          log("guard.stop", { rule: loop.rule });
+          if (loop.rule === "step-limit") throw new RunControlError("step-budget");
+          return { terminal: await this.finish(text, allHistory(), `Stopped: ${loop.reason}.`, steps, taint, log, llmControls(), control) };
+        }
+
+        const capabilityId = descriptor.name.split(".")[0]!;
+        if (this.options.executor.liveDescriptors) {
+          const live = await this.options.executor.liveDescriptors(capabilityId);
+          if (live && this.options.registry.verify(capabilityId, live) === "changed") {
+            log("capability.changed", { capability: capabilityId });
+            return { terminal: await this.finish(
+              text,
+              history,
+              `"${capabilityId}" changed its tools since you approved it, so I switched it off until you approve the change.`,
+              steps,
+              taint,
+              log,
+              llmControls(),
+              control,
+            ) };
+          }
+        }
+
+        const destination = this.options.destinationOf?.(descriptor.name, args);
+        const targets = this.options.targetsOf?.(descriptor, args);
+        const verdict = this.options.policy.evaluate({ tool: descriptor, taint: taint.snapshot(), destination, targets }, this.now());
+        log("policy", { tool: descriptor.name, decision: verdict.decision, rule: verdict.rule });
+
+        if (verdict.decision === "deny") {
+          return { terminal: await this.finish(text, allHistory(), `Blocked: ${verdict.reason}.`, steps, taint, log, llmControls(), control) };
+        }
+        if (verdict.decision === "ask") {
+          control();
+          await checkpoint("waiting_approval", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
+          const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
+          control();
+          const ok = await this.askApproval({ session, tool: descriptor.name, args, verdict, details, destination, targets, signal: context.signal, log });
+          await checkpoint("before_decision", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
+          if (!ok) {
+            return { terminal: await this.finish(text, allHistory(), `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log, llmControls(), control) };
+          }
+        }
+
+        control();
+        const hasExternalEffect = descriptor.effects.some((effect) => effect !== "read");
+        if (hasExternalEffect && externalEffects >= (context.maxExternalEffects ?? Number.MAX_SAFE_INTEGER)) throw new RunControlError("external-effect-budget");
+        if (hasExternalEffect) externalEffects += 1;
+        await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
+        control();
+        const startedAt = this.now();
+        log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
+        let parts: ContentPart[];
+        let failed = false;
+        try {
+          const r = await this.options.executor.call(descriptor.name, args);
+          parts = resultParts(descriptor, r);
+          failed = r.isError === true;
+        } catch (error) {
+          parts = resultParts(descriptor, { content: `tool failed: ${(error as Error).message}` });
+          failed = true;
+        }
+        steps += 1;
+        // Results are trimmed before entering the context; a huge page must not bury the request.
+        const clipped = clipParts(parts, this.maxResultChars);
+        const total = parts.reduce((n, part) => n + part.text.length, 0);
+        log("tool.result", { tool: descriptor.name, chars: total, failed, resultHash: fingerprint(parts.map((part) => part.text)), parts: parts.map((part) => ({ origin: part.origin.kind, trust: part.trust, sensitivity: part.sensitivity, chars: part.text.length })) });
+
+        trace.executions.push({
+          decisionIndex: decided.index, tool: descriptor.name, args: structuredClone(args), argsHash: fingerprint(args),
+          policy: { decision: verdict.decision, rule: verdict.rule }, ...(verdict.decision === "ask" ? { approved: true } : {}),
+          isError: failed, result: parts.map((part) => part.text).join("\n").slice(0, 20_000), resultHash: fingerprint(parts.map((part) => part.text)), resultChars: total,
+          trust: parts.map((part) => part.trust), effects: [...descriptor.effects], startedAt, finishedAt: this.now(),
+        });
+        for (const part of parts) taint.absorbPart(part);
+        history.push(`Result of ${descriptor.name}:${clipped.some((part) => part.trust === "untrusted") ? "\n" : " "}${renderParts(clipped)}`);
+        await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
+        return { failed };
+    };
+
     log("task.start", { chars: text.length });
 
     try {
@@ -359,84 +442,8 @@ export class AgentRuntime {
         );
         control();
 
-        const loop = guard.record(descriptor.name, args);
-        if (loop.decision === "deny") {
-          log("guard.stop", { rule: loop.rule });
-          if (loop.rule === "step-limit") throw new RunControlError("step-budget");
-          return await this.finish(text, allHistory(), `Stopped: ${loop.reason}.`, steps, taint, log, llmControls(), control);
-        }
-
-        const capabilityId = descriptor.name.split(".")[0]!;
-        if (this.options.executor.liveDescriptors) {
-          const live = await this.options.executor.liveDescriptors(capabilityId);
-          if (live && this.options.registry.verify(capabilityId, live) === "changed") {
-            log("capability.changed", { capability: capabilityId });
-            return await this.finish(
-              text,
-              history,
-              `"${capabilityId}" changed its tools since you approved it, so I switched it off until you approve the change.`,
-              steps,
-              taint,
-              log,
-              llmControls(),
-              control,
-            );
-          }
-        }
-
-        const destination = this.options.destinationOf?.(descriptor.name, args);
-        const targets = this.options.targetsOf?.(descriptor, args);
-        const verdict = this.options.policy.evaluate({ tool: descriptor, taint: taint.snapshot(), destination, targets }, this.now());
-        log("policy", { tool: descriptor.name, decision: verdict.decision, rule: verdict.rule });
-
-        if (verdict.decision === "deny") {
-          return await this.finish(text, allHistory(), `Blocked: ${verdict.reason}.`, steps, taint, log, llmControls(), control);
-        }
-        if (verdict.decision === "ask") {
-          control();
-          await checkpoint("waiting_approval", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
-          const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
-          control();
-          const ok = await this.askApproval({ session, tool: descriptor.name, args, verdict, details, destination, targets, signal: context.signal, log });
-          await checkpoint("before_decision", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
-          if (!ok) {
-            return await this.finish(text, allHistory(), `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log, llmControls(), control);
-          }
-        }
-
-        control();
-        const hasExternalEffect = descriptor.effects.some((effect) => effect !== "read");
-        if (hasExternalEffect && externalEffects >= (context.maxExternalEffects ?? Number.MAX_SAFE_INTEGER)) throw new RunControlError("external-effect-budget");
-        if (hasExternalEffect) externalEffects += 1;
-        await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
-        control();
-        const startedAt = this.now();
-        log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
-        let parts: ContentPart[];
-        let failed = false;
-        try {
-          const r = await this.options.executor.call(descriptor.name, args);
-          parts = resultParts(descriptor, r);
-          failed = r.isError === true;
-        } catch (error) {
-          parts = resultParts(descriptor, { content: `tool failed: ${(error as Error).message}` });
-          failed = true;
-        }
-        steps += 1;
-        // Results are trimmed before entering the context; a huge page must not bury the request.
-        const clipped = clipParts(parts, this.maxResultChars);
-        const total = parts.reduce((n, part) => n + part.text.length, 0);
-        log("tool.result", { tool: descriptor.name, chars: total, failed, resultHash: fingerprint(parts.map((part) => part.text)), parts: parts.map((part) => ({ origin: part.origin.kind, trust: part.trust, sensitivity: part.sensitivity, chars: part.text.length })) });
-
-        trace.executions.push({
-          decisionIndex: decided.index, tool: descriptor.name, args: structuredClone(args), argsHash: fingerprint(args),
-          policy: { decision: verdict.decision, rule: verdict.rule }, ...(verdict.decision === "ask" ? { approved: true } : {}),
-          isError: failed, result: parts.map((part) => part.text).join("\n").slice(0, 20_000), resultHash: fingerprint(parts.map((part) => part.text)), resultChars: total,
-          trust: parts.map((part) => part.trust), effects: [...descriptor.effects], startedAt, finishedAt: this.now(),
-        });
-        for (const part of parts) taint.absorbPart(part);
-        history.push(`Result of ${descriptor.name}:${clipped.some((part) => part.trust === "untrusted") ? "\n" : " "}${renderParts(clipped)}`);
-        await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
+        const done = await attempt(descriptor, args, decided);
+        if (done.terminal) return done.terminal;
       }
     } catch (error) {
       if (error instanceof AgentCheckpointError || error instanceof LlmUsageObserverError) throw error;
