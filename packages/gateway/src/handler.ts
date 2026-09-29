@@ -16,17 +16,25 @@ export interface IncomingMessage {
 }
 
 export interface ApprovalView {
+  /** Identifies the approval. Shown to the person and handed back with the answer. */
+  id: string;
+  /** Secret half of the binding: the answer must return the one that was displayed. */
+  nonce: string;
   tool: string;
   reason: string;
   details?: string;
   args: Record<string, unknown>;
+  createdAt: number;
+  expiresAt: number;
 }
+
+export type ApprovalAnswer = { ok: true; status: "approved" | "denied" } | { ok: false; reason: "unknown" | "nonce" | "session" | "resolver" | "expired" | "already-resolved" };
 
 export interface GatewayApprovals {
   /** The approval this session is waiting on, if any. */
   pending(session: SessionKey): ApprovalView | null;
-  /** Answer it. False when nothing was pending. */
-  answer(session: SessionKey, allow: boolean): boolean;
+  /** Answer that approval by id and nonce. Nothing else can be resolved through it. */
+  resolve(input: { session: SessionKey; approvalId: string; nonce: string; allow: boolean }): ApprovalAnswer;
 }
 
 export interface WebUi {
@@ -144,9 +152,14 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
         return json(400, { error: "invalid JSON" });
       }
       const session = sessionFrom(payload.channel, payload.user);
-      if (!session || typeof payload.allow !== "boolean") return json(400, { error: "channel, user and allow are required" });
-      const answered = options.approvals?.answer(session, payload.allow) ?? false;
-      return json(answered ? 200 : 409, answered ? { ok: true } : { error: "nothing is waiting for approval" });
+      if (!session || typeof payload.allow !== "boolean" || typeof payload.approvalId !== "string" || typeof payload.nonce !== "string") {
+        return json(400, { error: "channel, user, approvalId, nonce and allow are required" });
+      }
+      const answer = options.approvals?.resolve({ session, approvalId: payload.approvalId, nonce: payload.nonce, allow: payload.allow }) ?? { ok: false as const, reason: "unknown" as const };
+      if (answer.ok) return json(200, { ok: true, status: answer.status });
+      // A wrong nonce or session says nothing about whether the id exists; both look the same from outside.
+      const gone = answer.reason === "expired" || answer.reason === "already-resolved";
+      return json(gone ? 410 : 409, { error: gone ? "that approval is no longer open" : "no matching approval is waiting" });
     }
 
     if (url.pathname === "/v1/message" && request.method === "POST") {

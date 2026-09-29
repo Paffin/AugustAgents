@@ -90,8 +90,14 @@ describe("built-in file tools", () => {
 
   test("reads and lists inside the root", async () => {
     const { ex } = setup();
-    expect(await ex.call("fs.read", { path: "a.txt" })).toEqual({ content: "hello" });
-    expect((await ex.call("fs.list", {})).content.split("\n")).toEqual(["a.txt", "sub/"]);
+    const read = await ex.call("fs.read", { path: "a.txt" });
+    expect(read.content).toBe("hello");
+    // Owner's file: personal, and written by whoever put it there, so untrusted.
+    expect(read.parts).toEqual([{ text: "hello", origin: { kind: "file", source: "fs.read", locator: "a.txt" }, trust: "untrusted", sensitivity: "personal" }]);
+    const listed = await ex.call("fs.list", {});
+    expect(listed.content.split("\n")).toEqual(["a.txt", "sub/"]);
+    expect(listed.parts![0]).toMatchObject({ trust: "untrusted", sensitivity: "personal", origin: { kind: "file", locator: "." } });
+    expect((await ex.call("clock.now", {})).parts![0]).toMatchObject({ trust: "trusted", sensitivity: "public", origin: { kind: "builtin" } });
   });
 
   test("blocks ../ and absolute paths and never leaks the host path", async () => {

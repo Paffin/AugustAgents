@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ApprovalLedger, actionHash, type ApprovalTicket } from "./approvals.ts";
 import { type EventJournal, type SessionKey } from "@august/core";
 import {
   CapabilityRegistry,
@@ -20,13 +21,23 @@ import {
   LoopGuard,
   PolicyEngine,
   TaintState,
-  fenceUntrusted,
+  type ContentPart,
+  renderParts,
+  wholeResultPart,
+  validateContentPart,
+  type WriteTarget,
   type Verdict,
 } from "@august/policy";
 
 export interface ToolResult {
   content: string;
   isError?: boolean;
+  /**
+   * The result as fragments with their own origin, trust and sensitivity. When present it is
+   * authoritative and `content` is only its plain-text rendering; when absent the whole
+   * result is judged by the tool's descriptor.
+   */
+  parts?: ContentPart[];
 }
 
 /** Talks to the real tool servers (MCP, skills, builtins). */
@@ -45,14 +56,23 @@ export interface ToolExecutor {
 export interface ApprovalRequest {
   session: SessionKey;
   tool: string;
+  /** A copy: changing it changes nothing about what runs. */
   args: Record<string, unknown>;
   verdict: Verdict;
   /** What exactly will happen, when the executor can say. */
   details?: string;
+  /** The bound approval this request asks about. Channels show its id and hand back its nonce. */
+  ticket: ApprovalTicket;
 }
 
-/** Asks the person. The default approver says no. */
+/**
+ * Asks the person. The default approver says no. An approver that answers from a chat, a web
+ * page or another process resolves `request.ticket` through the ledger with what it displayed;
+ * one that answers in-process just returns the person's answer, and the runtime records it.
+ */
 export interface Approver {
+  /** Names the channel for the audit record of an in-process answer. */
+  readonly channel?: string;
   approve(request: ApprovalRequest): Promise<boolean>;
 }
 
@@ -68,6 +88,13 @@ export interface AgentOptions {
   approver?: Approver;
   /** Names the host, address or payee a call acts on, so mandates can match it. */
   destinationOf?: (tool: string, args: Record<string, unknown>) => string | undefined;
+  /**
+   * Where a write or delete lands, resolved by the host from the call's arguments. Absent: a
+   * writing tool has no known target and asks every time.
+   */
+  targetsOf?: (tool: ToolDescriptor, args: Record<string, unknown>) => readonly WriteTarget[] | undefined;
+  /** Shared with the channels that answer approvals. Default: a private ledger (only in-process approvers can answer). */
+  approvals?: ApprovalLedger;
   maxSteps?: number;
   maxResultChars?: number;
   /** Rewrites the request into search words (e.g. English) when lexical search finds too little. */
@@ -110,6 +137,33 @@ export interface AgentExecutionContext {
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
 }
 
+/**
+ * The result as parts. The descriptor is the ceiling: a tool marked as producing untrusted content
+ * cannot have any part trusted, and a part may only be stricter than that. Parts that fail
+ * validation, or a result with none, fall back to judging the whole result by the descriptor.
+ */
+function resultParts(descriptor: ToolDescriptor, result: ToolResult): ContentPart[] {
+  let parts: ContentPart[] | undefined;
+  try {
+    if (result.parts && result.parts.length > 0) { for (const part of result.parts) validateContentPart(part); parts = result.parts; }
+  } catch {
+    parts = [{ ...wholeResultPart(result.content, { name: descriptor.name, producesUntrusted: true }), sensitivity: "personal" }];
+  }
+  if (!parts) return [wholeResultPart(result.content, descriptor)];
+  return parts.map((part) => (descriptor.producesUntrusted && part.trust === "trusted" ? { ...part, trust: "untrusted" as const } : part));
+}
+
+/** Keeps part boundaries while bounding the total text that reaches the context. */
+function clipParts(parts: readonly ContentPart[], max: number): ContentPart[] {
+  const out: ContentPart[] = []; let left = max;
+  for (const part of parts) {
+    if (left <= 0) break;
+    if (part.text.length > left) { out.push({ ...part, text: `${part.text.slice(0, left)}\n[truncated]` }); break; }
+    out.push(part); left -= part.text.length;
+  }
+  return out;
+}
+
 class RunControlError extends Error {
   constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>) { super(reason); this.name = "RunControlError"; }
 }
@@ -138,12 +192,14 @@ function boundedCheckpointHistory(history: readonly string[], redact?: (text: st
  */
 export class AgentRuntime {
   private readonly approver: Approver;
+  private readonly ledger: ApprovalLedger;
   private readonly now: () => number;
   private readonly maxResultChars: number;
 
   constructor(private readonly options: AgentOptions) {
     this.approver = options.approver ?? denyAll;
     this.now = options.now ?? Date.now;
+    this.ledger = options.approvals ?? new ApprovalLedger({ now: this.now });
     this.maxResultChars = options.maxResultChars ?? 4000;
   }
 
@@ -260,14 +316,9 @@ export class AgentRuntime {
           }
         }
 
-        const verdict = this.options.policy.evaluate(
-          {
-            tool: descriptor,
-            taint: taint.snapshot(),
-            destination: this.options.destinationOf?.(descriptor.name, args),
-          },
-          this.now(),
-        );
+        const destination = this.options.destinationOf?.(descriptor.name, args);
+        const targets = this.options.targetsOf?.(descriptor, args);
+        const verdict = this.options.policy.evaluate({ tool: descriptor, taint: taint.snapshot(), destination, targets }, this.now());
         log("policy", { tool: descriptor.name, decision: verdict.decision, rule: verdict.rule });
 
         if (verdict.decision === "deny") {
@@ -278,8 +329,7 @@ export class AgentRuntime {
           await checkpoint("waiting_approval", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
           const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
           control();
-          const ok = await this.approver.approve({ session, tool: descriptor.name, args, verdict, details });
-          log("approval", { tool: descriptor.name, granted: ok, rule: verdict.rule });
+          const ok = await this.askApproval({ session, tool: descriptor.name, args, verdict, details, destination, targets, signal: context.signal, log });
           await checkpoint("before_decision", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
           if (!ok) {
             return await this.finish(text, allHistory(), `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log, llmControls(), control);
@@ -293,27 +343,24 @@ export class AgentRuntime {
         await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
         control();
         log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
-        let result: string;
+        let parts: ContentPart[];
         let failed = false;
         try {
           const r = await this.options.executor.call(descriptor.name, args);
-          result = r.content;
+          parts = resultParts(descriptor, r);
           failed = r.isError === true;
         } catch (error) {
-          result = `tool failed: ${(error as Error).message}`;
+          parts = resultParts(descriptor, { content: `tool failed: ${(error as Error).message}` });
           failed = true;
         }
         steps += 1;
         // Results are trimmed before entering the context; a huge page must not bury the request.
-        const clipped = result.length > this.maxResultChars ? `${result.slice(0, this.maxResultChars)}\n[truncated]` : result;
-        log("tool.result", { tool: descriptor.name, chars: result.length, failed, resultHash: fingerprint(result) });
+        const clipped = clipParts(parts, this.maxResultChars);
+        const total = parts.reduce((n, part) => n + part.text.length, 0);
+        log("tool.result", { tool: descriptor.name, chars: total, failed, resultHash: fingerprint(parts.map((part) => part.text)), parts: parts.map((part) => ({ origin: part.origin.kind, trust: part.trust, sensitivity: part.sensitivity, chars: part.text.length })) });
 
-        taint.absorb(descriptor);
-        history.push(
-          descriptor.producesUntrusted
-            ? `Result of ${descriptor.name}:\n${fenceUntrusted(clipped, descriptor.name)}`
-            : `Result of ${descriptor.name}: ${clipped}`,
-        );
+        for (const part of parts) taint.absorbPart(part);
+        history.push(`Result of ${descriptor.name}:${clipped.some((part) => part.trust === "untrusted") ? "\n" : " "}${renderParts(clipped)}`);
         await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
       }
     } catch (error) {
@@ -332,6 +379,40 @@ export class AgentRuntime {
           : "Something went wrong while working on this. Nothing further was done.";
       return { reply, steps, tainted: taint.snapshot().tainted, error: name === "LlmError" ? (error as Error).message : name };
     }
+  }
+
+  /**
+   * Opens one bound approval, lets the approver answer it, and grants only if the ledger agrees:
+   * the record is approved, unexpired, unused, and its action hash still equals the action about to run.
+   */
+  private async askApproval(o: {
+    session: SessionKey;
+    tool: string;
+    args: Record<string, unknown>;
+    verdict: Verdict;
+    details?: string;
+    destination?: string;
+    targets?: readonly WriteTarget[];
+    signal?: AbortSignal;
+    log: (kind: string, data: unknown) => unknown;
+  }): Promise<boolean> {
+    const hash = actionHash({ tool: o.tool, args: o.args, destination: o.destination, targets: o.targets });
+    const ticket = this.ledger.open({ session: o.session, tool: o.tool, actionHash: hash });
+    o.log("approval.open", { tool: o.tool, approvalId: ticket.id, actionHash: hash, rule: o.verdict.rule, expiresAt: ticket.expiresAt });
+    const cancel = () => void this.ledger.resolveTrusted(ticket.id, "deny", { channel: "system", identity: "cancelled" });
+    o.signal?.addEventListener("abort", cancel, { once: true });
+    let answer = false;
+    try {
+      answer = (await this.approver.approve({ session: o.session, tool: o.tool, args: structuredClone(o.args), verdict: o.verdict, details: o.details, ticket })) === true;
+    } finally {
+      o.signal?.removeEventListener("abort", cancel);
+      // An approver that failed or answered nothing leaves no live approval behind.
+      if (this.ledger.get(ticket.id)?.status === "pending") this.ledger.resolveTrusted(ticket.id, answer ? "approve" : "deny", { channel: this.approver.channel ?? "in-process", identity: "approver" });
+    }
+    const granted = answer && this.ledger.consume(ticket.id, actionHash({ tool: o.tool, args: o.args, destination: o.destination, targets: o.targets }));
+    const record = this.ledger.get(ticket.id);
+    o.log("approval", { tool: o.tool, granted, rule: o.verdict.rule, approvalId: ticket.id, status: record?.status, resolver: record?.resolver?.channel });
+    return granted;
   }
 
   private async finish(

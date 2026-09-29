@@ -6,26 +6,33 @@ export const WEB_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>August</title>
 <style>
-  :root { --bg:#faf9f7; --fg:#1d1c1a; --muted:#6b6862; --card:#fff; --line:#e6e3de; --accent:#2f5d50; --warn:#8a5a00; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --fg:#ecebe8; --muted:#a09d97; --card:#1f1f1d; --line:#2e2d2a; --accent:#7fb8a4; --warn:#e0b25a; } }
+  :root { --bg:#faf9f7; --fg:#1d1c1a; --muted:#57544e; --card:#fff; --line:#cfcbc4; --accent:#2f5d50; --on-accent:#fff; --warn:#8a5a00; --focus:#0b57d0; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --fg:#ecebe8; --muted:#b4b1ab; --card:#1f1f1d; --line:#4a4945; --accent:#7fb8a4; --on-accent:#10201a; --warn:#e0b25a; --focus:#8ab4f8; } }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; display:flex; flex-direction:column; height:100vh; }
-  header { padding:12px 16px; border-bottom:1px solid var(--line); font-weight:600; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:1rem; font-weight:600; }
+  main { flex:1; display:flex; flex-direction:column; min-height:0; }
   #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; max-width:760px; width:100%; margin:0 auto; }
   .msg { padding:10px 12px; border-radius:10px; background:var(--card); border:1px solid var(--line); white-space:pre-wrap; word-wrap:break-word; }
-  .me { align-self:flex-end; background:var(--accent); color:var(--bg); border:none; max-width:85%; }
-  .ask { border-color:var(--warn); }
-  .ask button { margin:8px 8px 0 0; padding:6px 14px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; }
+  .me { align-self:flex-end; background:var(--accent); color:var(--on-accent); border:none; max-width:85%; }
+  .ask { border:2px solid var(--warn); }
+  .ask h2 { margin:0 0 4px; font-size:1rem; }
+  .ask button { margin:8px 8px 0 0; padding:8px 16px; border-radius:8px; border:1px solid var(--fg); background:var(--bg); color:var(--fg); cursor:pointer; font:inherit; }
   .muted { color:var(--muted); font-size:13px; }
   form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); max-width:760px; width:100%; margin:0 auto; }
-  input { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); font:inherit; }
-  button[type=submit] { padding:10px 16px; border-radius:10px; border:none; background:var(--accent); color:var(--bg); font:inherit; cursor:pointer; }
+  input { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--fg); background:var(--card); color:var(--fg); font:inherit; }
+  button[type=submit] { padding:10px 16px; border-radius:10px; border:none; background:var(--accent); color:var(--on-accent); font:inherit; cursor:pointer; }
+  :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+  .sr { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); border:0; }
 </style>
 </head>
 <body>
-<header>August</header>
-<div id="log"><div class="muted" id="hint"></div></div>
-<form id="form"><input id="text" autocomplete="off" placeholder="Message"><button type="submit">Send</button></form>
+<header><h1>August</h1></header>
+<main>
+<div id="log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" tabindex="0"><p class="muted" id="hint"></p></div>
+<form id="form"><label class="sr" for="text">Message to August</label><input id="text" autocomplete="off" placeholder="Message"><button type="submit">Send</button></form>
+</main>
 <script src="/app.js"></script>
 </body>
 </html>
@@ -43,19 +50,38 @@ export const WEB_JS = `(() => {
   const headers = () => ({ "content-type": "application/json", authorization: "Bearer " + token });
   const add = (text, cls) => { const d = document.createElement("div"); d.className = "msg " + (cls || ""); d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
   let shown = null;
+  // An answered request stays in the log as a record, no longer a dialog.
+  const resolved = (card) => { card.querySelectorAll("button").forEach((x) => x.remove()); card.removeAttribute("role"); card.removeAttribute("aria-labelledby"); card.removeAttribute("aria-describedby"); card.removeAttribute("tabindex"); };
+  const clear = () => { if (shown) { shown.card.remove(); shown = null; } };
+  async function answer(approval, allow, label) {
+    const card = shown && shown.card;
+    if (card) card.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    const r = await fetch("/v1/approve", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, approvalId: approval.id, nonce: approval.nonce, allow }) });
+    if (card) { resolved(card); card.appendChild(document.createTextNode("\\n" + (r.ok ? "→ " + label : "This request is no longer open."))); }
+    shown = null; input.focus();
+  }
   async function checkPending() {
-    const r = await fetch("/v1/pending?channel=web&user=local", { headers: headers() });
+    const r = await fetch("/v1/pending?channel=" + who.channel + "&user=" + who.user, { headers: headers() });
     if (!r.ok) return;
     const { approval } = await r.json();
-    if (!approval || shown) return;
-    const card = add(approval.tool + " wants to run: " + approval.reason + (approval.details ? "\\n" + approval.details : "") + "\\n" + JSON.stringify(approval.args, null, 2), "ask");
-    shown = card;
-    for (const [label, allow] of [["Allow once", true], ["Deny", false]]) {
-      const b = document.createElement("button"); b.textContent = label;
-      b.onclick = async () => { card.querySelectorAll("button").forEach((x) => x.remove()); card.appendChild(document.createTextNode("\\n→ " + label)); shown = null;
-        await fetch("/v1/approve", { method: "POST", headers: headers(), body: JSON.stringify({ ...who, allow }) }); };
+    if (!approval) { return; }
+    if (shown && shown.id === approval.id) return;
+    clear();
+    const card = document.createElement("section");
+    card.className = "msg ask"; card.setAttribute("role", "alertdialog"); card.setAttribute("aria-labelledby", "ask-title-" + approval.id); card.setAttribute("aria-describedby", "ask-body-" + approval.id); card.tabIndex = -1;
+    const title = document.createElement("h2"); title.id = "ask-title-" + approval.id; title.textContent = approval.tool + " needs your approval";
+    const body = document.createElement("div"); body.id = "ask-body-" + approval.id;
+    body.textContent = approval.reason + (approval.details ? "\\n" + approval.details : "") + "\\n" + JSON.stringify(approval.args, null, 2) + "\\nRequest " + approval.id;
+    card.append(title, body);
+    for (const [label, allow, aria] of [["Deny", false, "Deny " + approval.tool], ["Allow once", true, "Allow " + approval.tool + " once"]]) {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.setAttribute("aria-label", aria);
+      b.onclick = () => answer(approval, allow, label).catch(() => {});
       card.appendChild(b);
     }
+    card.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); answer(approval, false, "Deny").catch(() => {}); } });
+    log.appendChild(card); log.scrollTop = log.scrollHeight;
+    shown = { id: approval.id, card };
+    card.focus();
   }
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -68,7 +94,7 @@ export const WEB_JS = `(() => {
       const body = await r.json().catch(() => ({}));
       wait.remove(); add(r.ok ? body.reply : "Error: " + (body.error || r.status));
     } catch { wait.remove(); add("The agent is not reachable."); }
-    finally { clearInterval(timer); if (shown) { shown.querySelectorAll("button").forEach((x) => x.remove()); shown = null; } }
+    finally { clearInterval(timer); if (shown) { resolved(shown.card); shown = null; } }
   };
 })();
 `;

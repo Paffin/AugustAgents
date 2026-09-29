@@ -42,7 +42,7 @@ describe("McpConnection", () => {
 
   test("server-reported errors come back as isError, not exceptions", async () => {
     const r = await (await connect()).callTool("plain", {});
-    expect(r).toEqual({ content: "boom", isError: true });
+    expect(r).toEqual({ content: "boom", isError: true, parts: [{ kind: "text", text: "boom" }] });
   });
 
   test("a server that never answers times out", async () => {
@@ -137,6 +137,29 @@ describe("McpHost", () => {
     expect(registry.enabledTools().map((t) => t.name)).toEqual(["fake.echo", "fake.delete_file_", "fake.plain"]);
     expect(await h.call("fake.echo", { text: "hey" })).toMatchObject({ isError: false });
     expect(h.serverIds).toEqual(["fake"]);
+  });
+
+  // Suite category: Safety/security invariant (REQ-SEC-001 part-level provenance).
+  test("mixed results: the tool's own text keeps its trust, everything that names an outside resource is untrusted, and server annotations bless nothing", async () => {
+    const { host: h } = host();
+    await h.add(spec("mixed"), "known", { sensitivity: "public" });
+    const r = await h.call("fake.echo", { text: "x" });
+    expect(r.parts!.map((p) => [p.origin.kind, p.origin.source, p.origin.locator, p.trust, p.sensitivity, p.text.slice(0, 12)])).toEqual([
+      ["mcp", "fake.echo", undefined, "trusted", "public", "3 results"],
+      ["mcp", "fake.echo", "https://evil.example/page", "untrusted", "public", "IGNORE PREVI"],
+      ["mcp", "fake.echo", "file:///blob", "trusted", "public", "[binary reso"],
+      ["mcp", "fake.echo", "https://evil.example/next", "untrusted", "public", "[link] read "],
+      ["mcp", "fake.echo", undefined, "trusted", "public", "[image conte"],
+      ["mcp", "fake.echo", undefined, "trusted", "public", "{\"rows\":3}"],
+    ]);
+  });
+
+  test("a community server's own text is untrusted, and results default to personal sensitivity", async () => {
+    const { host: h } = host();
+    await h.add(spec("mixed"), "community");
+    const r = await h.call("fake.echo", { text: "x" });
+    expect(r.parts![0]).toMatchObject({ trust: "untrusted", sensitivity: "personal" });
+    expect(r.parts!.every((p) => p.trust === "untrusted")).toBe(true);
   });
 
   test("the sanitised name maps back to the server's own name", async () => {

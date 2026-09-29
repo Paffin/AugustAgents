@@ -1,6 +1,7 @@
 import { LaneQueue, QueueOverflowError, makeSessionKey, type SessionKey } from "@august/core";
 import type { Approver } from "@august/agent";
-import { isYes, type PendingApprovals } from "./approvals.ts";
+import type { ApprovalView } from "@august/gateway";
+import type { PendingApprovals } from "./approvals.ts";
 
 export interface TelegramOptions {
   token: string;
@@ -17,8 +18,8 @@ export interface TelegramOptions {
 
 interface TgUpdate {
   update_id: number;
-  message?: { chat: { id: number; type: string }; from?: { id: number }; text?: string };
-  callback_query?: { id: string; from: { id: number }; data?: string; message?: { chat: { id: number } } };
+  message?: { message_id?: number; date?: number; chat: { id: number; type: string }; from?: { id: number }; text?: string; reply_to_message?: { message_id?: number } };
+  callback_query?: { id: string; from: { id: number }; data?: string; message?: { message_id?: number; chat: { id: number } } };
 }
 
 export const TELEGRAM_MAX_TEXT = 4096;
@@ -71,18 +72,22 @@ export class TelegramChannel {
     return data.result as T;
   }
 
-  async send(chatId: number, text: string, buttons = false): Promise<void> {
+  /** Sends the text; returns the id of the last message. Buttons carry the approval's id and nonce, so only that request can be answered with them. */
+  async send(chatId: number, text: string, approval?: Pick<ApprovalView, "id" | "nonce">): Promise<number | undefined> {
     const parts = splitMessage(text);
+    let last: number | undefined;
     for (let i = 0; i < parts.length; i++) {
-      const last = i === parts.length - 1;
-      await this.api("sendMessage", {
+      const isLast = i === parts.length - 1;
+      const sent = await this.api<{ message_id?: number }>("sendMessage", {
         chat_id: chatId,
         text: parts[i],
-        ...(buttons && last
-          ? { reply_markup: { inline_keyboard: [[{ text: "✅ Allow", callback_data: "approve" }, { text: "❌ Deny", callback_data: "deny" }]] } }
+        ...(approval && isLast
+          ? { reply_markup: { inline_keyboard: [[{ text: "✅ Allow", callback_data: `ap:${approval.id}:${approval.nonce}:y` }, { text: "❌ Deny", callback_data: `ap:${approval.id}:${approval.nonce}:n` }]] } }
           : {}),
       });
+      last = sent?.message_id;
     }
+    return last;
   }
 
   private session(userId: number): SessionKey {
@@ -102,12 +107,26 @@ export class TelegramChannel {
     }
   }
 
+  /** Handle one update as if it had arrived from polling. For tests. */
+  dispatchForTest(update: unknown): Promise<void> {
+    return this.dispatch(update as TgUpdate);
+  }
+
   private async dispatch(u: TgUpdate): Promise<void> {
     if (u.callback_query) {
       const cq = u.callback_query;
       if (!this.allowed.has(cq.from.id)) return;
-      const answered = this.o.approvals.answer(this.session(cq.from.id), cq.data === "approve");
-      await this.api("answerCallbackQuery", { callback_query_id: cq.id, text: answered ? (cq.data === "approve" ? "Allowed" : "Denied") : "Nothing to approve" });
+      const session = this.session(cq.from.id);
+      const parsed = /^ap:([A-Za-z0-9_-]{1,32}):([A-Za-z0-9_-]{1,64}):([yn])$/.exec(cq.data ?? "");
+      const result = parsed
+        ? this.o.approvals.resolve({ session, approvalId: parsed[1]!, nonce: parsed[2]!, allow: parsed[3] === "y", resolver: { channel: "telegram", identity: String(cq.from.id) } })
+        : undefined;
+      const text = result?.ok ? (result.status === "approved" ? "Allowed" : "Denied") : result && (result.reason === "expired" || result.reason === "already-resolved") ? "That request is no longer open" : "Nothing to approve";
+      await this.api("answerCallbackQuery", { callback_query_id: cq.id, text });
+      // Whatever the outcome, the old buttons must stop looking usable.
+      if (result?.ok && cq.message?.message_id !== undefined) {
+        await this.api("editMessageReplyMarkup", { chat_id: cq.message.chat.id, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
+      }
       return;
     }
     const m = u.message;
@@ -118,14 +137,15 @@ export class TelegramChannel {
     const chatId = m.chat.id;
 
     if (this.o.approvals.pending(session)) {
-      this.o.approvals.answer(session, isYes(m.text));
+      // Only a message sent after the prompt, and (if it is a reply) one that replies to it, answers it.
+      this.o.approvals.answerText(session, m.text, { sentAt: (m.date ?? 0) * 1000, replyTo: m.reply_to_message?.message_id, resolver: { channel: "telegram", identity: String(m.from.id) } });
       return;
     }
     if (m.text === "/start") {
       await this.send(chatId, "Hi! I am August. Write what you need.");
       return;
     }
-    const approver = this.o.approvals.approverFor((text) => this.send(chatId, text, true));
+    const approver = this.o.approvals.approverFor((text, view) => this.send(chatId, text, view));
     try {
       const { reply } = await this.queue.enqueue(session, () => this.o.handle(session, m.text!, approver));
       await this.send(chatId, reply);

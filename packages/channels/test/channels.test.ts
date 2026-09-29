@@ -1,53 +1,126 @@
 import { describe, expect, test } from "bun:test";
 import { makeSessionKey } from "@august/core";
-import type { ApprovalRequest } from "@august/agent";
+import { ApprovalLedger, type ApprovalRequest } from "@august/agent";
 import { PendingApprovals, TelegramChannel, TelegramError, WEB_HTML, WEB_JS, formatApproval, isYes, splitMessage } from "../src/index.ts";
 
+// Suite category: Safety/security invariant (REQ-SEC-002 bound, non-replayable approvals) and Product behavior (approval UX).
 const session = makeSessionKey({ workspace: "home", channel: "telegram", user: "42" });
-const request = (s = session): ApprovalRequest => ({
+const other = makeSessionKey({ workspace: "home", channel: "telegram", user: "7" });
+const hash = "a".repeat(64);
+/** A request with a real ticket from the ledger, the way the runtime issues it. */
+const request = (ledger: ApprovalLedger, s = session): ApprovalRequest => ({
   session: s,
   tool: "mail.send",
   args: { to: "a@b.c", body: "x".repeat(300) },
   verdict: { decision: "ask", rule: "controlled-effect", reason: "send needs your approval" },
   details: "will send one email",
+  ticket: ledger.open({ session: s, tool: "mail.send", actionHash: hash }),
 });
+const tg42 = { channel: "telegram", identity: "42" };
+const answerOf = (p: PendingApprovals, s = session) => { const v = p.pending(s)!; return { session: s, approvalId: v.id, nonce: v.nonce, resolver: { channel: "telegram", identity: s.split(":")[2]! } }; };
 
 describe("PendingApprovals", () => {
-  test("shows the prompt and resolves with the answer", async () => {
+  test("shows the prompt, resolves once with the displayed id and nonce, and a replay resolves nothing", async () => {
     const p = new PendingApprovals();
     const shown: string[] = [];
-    const result = p.approverFor((t) => void shown.push(t)).approve(request());
-    expect(p.pending(session)?.tool).toBe("mail.send");
+    const result = p.approverFor((t) => void shown.push(t)).approve(request(p.ledger));
+    const view = p.pending(session)!;
+    expect(view).toMatchObject({ tool: "mail.send" });
     expect(shown[0]).toContain("will send one email");
-    expect(p.answer(session, true)).toBe(true);
+    expect(shown[0]).toContain(view.id);
+    expect(p.resolve({ ...answerOf(p), allow: true })).toEqual({ ok: true, status: "approved" });
     expect(await result).toBe(true);
     expect(p.pending(session)).toBeNull();
-    expect(p.answer(session, true)).toBe(false);
+    expect(p.resolve({ session, approvalId: view.id, nonce: view.nonce, allow: true, resolver: tg42 })).toEqual({ ok: false, reason: "already-resolved" });
   });
 
-  test("times out as a no", async () => {
-    const p = new PendingApprovals(20);
-    expect(await p.approverFor(() => {}).approve(request())).toBe(false);
+  test("an approval expires as a no, and an answer after expiry resolves nothing", async () => {
+    let now = 1000; const ledger = new ApprovalLedger({ ttlMs: 50, now: () => now });
+    const p = new PendingApprovals(ledger);
+    const result = p.approverFor(() => {}).approve(request(ledger));
+    const v = p.pending(session)!;
+    now += 60;
+    expect(p.resolve({ session, approvalId: v.id, nonce: v.nonce, allow: true, resolver: tg42 })).toEqual({ ok: false, reason: "expired" });
+    expect(await result).toBe(false);
   });
 
-  test("a failed prompt counts as a no", async () => {
+  test("a failed prompt counts as a no and leaves nothing pending", async () => {
     const p = new PendingApprovals();
-    expect(await p.approverFor(async () => Promise.reject(new Error("send failed"))).approve(request())).toBe(false);
+    expect(await p.approverFor(async () => Promise.reject(new Error("send failed"))).approve(request(p.ledger))).toBe(false);
+    expect(p.pending(session)).toBeNull();
   });
 
-  test("sessions do not answer each other", async () => {
+  test("confused deputy: another session, another channel or user, a wrong nonce or a made-up id resolve nothing", async () => {
     const p = new PendingApprovals();
-    const other = makeSessionKey({ workspace: "home", channel: "telegram", user: "7" });
-    const a = p.approverFor(() => {}).approve(request());
-    expect(p.answer(other, true)).toBe(false);
-    p.answer(session, false);
+    const a = p.approverFor(() => {}).approve(request(p.ledger));
+    const v = p.pending(session)!;
+    const base = { approvalId: v.id, nonce: v.nonce, allow: true };
+    expect(p.resolve({ ...base, session: other, resolver: { channel: "telegram", identity: "7" } })).toEqual({ ok: false, reason: "session" });
+    expect(p.resolve({ ...base, session, resolver: { channel: "telegram", identity: "7" } })).toEqual({ ok: false, reason: "resolver" });
+    expect(p.resolve({ ...base, session, resolver: { channel: "web", identity: "42" } })).toEqual({ ok: false, reason: "resolver" });
+    expect(p.resolve({ ...base, session, nonce: "wrong", resolver: tg42 })).toEqual({ ok: false, reason: "nonce" });
+    expect(p.resolve({ ...base, session, approvalId: "made-up", resolver: tg42 })).toEqual({ ok: false, reason: "unknown" });
+    expect(p.pending(session)?.id).toBe(v.id);
+    p.resolve({ ...base, session, allow: false, resolver: tg42 });
     expect(await a).toBe(false);
+  });
+
+  test("a newer approval supersedes the older one; the old id and nonce can never answer the new action", async () => {
+    const p = new PendingApprovals();
+    const first = p.approverFor(() => {}).approve(request(p.ledger));
+    const old = p.pending(session)!;
+    const second = p.approverFor(() => {}).approve(request(p.ledger));
+    expect(await first).toBe(false);
+    const current = p.pending(session)!;
+    expect(current.id).not.toBe(old.id);
+    expect(p.resolve({ session, approvalId: old.id, nonce: old.nonce, allow: true, resolver: tg42 })).toEqual({ ok: false, reason: "already-resolved" });
+    expect(p.pending(session)?.id).toBe(current.id);
+    p.resolve({ ...answerOf(p), allow: true });
+    expect(await second).toBe(true);
+  });
+
+  test("typed answers count only after the prompt, and only as a reply to that prompt when they are a reply", async () => {
+    let now = 5000; const ledger = new ApprovalLedger({ now: () => now });
+    const p = new PendingApprovals(ledger);
+    const result = p.approverFor(() => 900).approve(request(ledger));
+    await Bun.sleep(1);
+    expect(p.pending(session)).not.toBeNull();
+    const text = (over: { sentAt?: number; replyTo?: number }) => p.answerText(session, "yes", { sentAt: over.sentAt ?? now, replyTo: over.replyTo, resolver: tg42 });
+    expect(text({ sentAt: now - 1 })).toEqual({ ok: false, reason: "expired" });
+    expect(text({ replyTo: 123 })).toEqual({ ok: false, reason: "unknown" });
+    expect(p.pending(session)).not.toBeNull();
+    expect(p.answerText(other, "yes", { sentAt: now, resolver: { channel: "telegram", identity: "7" } })).toBe("ignored");
+    expect(text({ replyTo: 900 })).toEqual({ ok: true, status: "approved" });
+    expect(await result).toBe(true);
+    expect(p.answerText(session, "yes", { sentAt: now, resolver: tg42 })).toBe("ignored");
+  });
+
+  test("anything but an explicit yes typed in answer denies", async () => {
+    const p = new PendingApprovals(); const result = p.approverFor(() => {}).approve(request(p.ledger));
+    expect(p.answerText(session, "sure", { sentAt: Date.now() + 1, resolver: tg42 })).toEqual({ ok: true, status: "denied" });
+    expect(await result).toBe(false);
+  });
+
+  test("the gateway adapter cannot answer channels that have their own transport", async () => {
+    const p = new PendingApprovals(); const gw = p.forGateway(["telegram"]);
+    const result = p.approverFor(() => {}).approve(request(p.ledger));
+    const v = p.pending(session)!;
+    expect(gw.pending(session)).toBeNull();
+    expect(gw.resolve({ session, approvalId: v.id, nonce: v.nonce, allow: true })).toEqual({ ok: false, reason: "resolver" });
+    expect(p.pending(session)?.id).toBe(v.id);
+    const web = makeSessionKey({ workspace: "home", channel: "web", user: "local" });
+    const webResult = p.approverFor(() => {}).approve(request(p.ledger, web));
+    const wv = p.pending(web)!;
+    expect(p.forGateway(["telegram"]).pending(web)?.id).toBe(wv.id);
+    expect(gw.resolve({ session: web, approvalId: wv.id, nonce: wv.nonce, allow: true })).toEqual({ ok: true, status: "approved" });
+    expect(await webResult).toBe(true);
+    p.resolve({ ...answerOf(p), allow: false }); expect(await result).toBe(false);
   });
 
   test("only explicit yes approves; long values are clipped in the prompt", () => {
     for (const y of ["yes", "Да", "y", "+", "ok."]) expect(isYes(y)).toBe(true);
     for (const n of ["no", "yes please do something else", "", "sure"]) expect(isYes(n)).toBe(false);
-    expect(formatApproval({ tool: "t", reason: "r", args: { x: "y".repeat(500) } }).length).toBeLessThan(250);
+    expect(formatApproval({ id: "i", nonce: "n", tool: "t", reason: "r", args: { x: "y".repeat(500) }, createdAt: 0, expiresAt: 1 }).length).toBeLessThan(250);
   });
 });
 
@@ -58,13 +131,13 @@ function fakeTelegram(updates: unknown[][]) {
     const body = JSON.parse(String(init.body));
     calls.push({ method, body });
     if (method === "getUpdates") return new Response(JSON.stringify({ ok: true, result: updates.shift() ?? [] }));
-    return new Response(JSON.stringify({ ok: true, result: {} }));
+    return new Response(JSON.stringify({ ok: true, result: method === "sendMessage" ? { message_id: 1000 + calls.length } : {} }));
   }) as unknown as typeof fetch;
   return { f, calls };
 }
 
 const TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abc";
-const msg = (id: number, from: number, text: string, type = "private") => ({ update_id: id, message: { chat: { id: from, type }, from: { id: from }, text } });
+const msg = (id: number, from: number, text: string, type = "private", extra: Record<string, unknown> = {}) => ({ update_id: id, message: { message_id: id, date: Math.floor(Date.now() / 1000) + 1, chat: { id: from, type }, from: { id: from }, text, ...extra } });
 const tick = () => Bun.sleep(10);
 
 describe("TelegramChannel", () => {
@@ -94,7 +167,7 @@ describe("TelegramChannel", () => {
     const tg = new TelegramChannel({
       token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals,
       handle: async (s, _t, approver) => {
-        decided = await approver.approve(request(s));
+        decided = await approver.approve(request(approvals.ledger, s));
         return { reply: decided ? "sent" : "not sent" };
       },
     });
@@ -102,27 +175,75 @@ describe("TelegramChannel", () => {
     await tick();
     const prompt = calls.find((c) => c.method === "sendMessage")!;
     expect(prompt.body.text).toContain("mail.send");
-    expect(prompt.body.reply_markup.inline_keyboard[0]).toHaveLength(2);
+    const buttons = prompt.body.reply_markup.inline_keyboard[0];
+    expect(buttons).toHaveLength(2);
+    const view = approvals.pending(session)!;
+    expect(buttons.map((b: { callback_data: string }) => b.callback_data)).toEqual([`ap:${view.id}:${view.nonce}:y`, `ap:${view.id}:${view.nonce}:n`]);
+    for (const b of buttons) expect(Buffer.byteLength(b.callback_data)).toBeLessThanOrEqual(64);
     await tg.poll();
     await tick();
     expect(decided).toBe(true);
     expect(calls.filter((c) => c.method === "sendMessage").at(-1)!.body.text).toBe("sent");
   });
 
-  test("inline buttons answer too, but only for allowed users", async () => {
+  const cb = (id: number, from: number, data: string) => ({ update_id: id, callback_query: { id: `c${id}`, from: { id: from }, data, message: { message_id: 1001, chat: { id: from } } } });
+
+  test("inline buttons answer only for the person they were issued to, and a replayed press resolves nothing", async () => {
     const approvals = new PendingApprovals();
-    const cb = (id: number, from: number, data: string) => ({ update_id: id, callback_query: { id: `c${id}`, from: { id: from }, data } });
-    const { f } = fakeTelegram([[msg(1, 42, "go")], [cb(2, 99, "approve")], [cb(3, 42, "deny")]]);
+    const { f, calls } = fakeTelegram([[msg(1, 42, "go")]]);
     let decided: boolean | undefined;
-    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals, handle: async (s, _t, a) => ({ reply: String((decided = await a.approve(request(s)))) }) });
-    await tg.poll();
-    await tick();
-    await tg.poll();
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42, 7], fetch: f, approvals, handle: async (s, _t, a) => ({ reply: String((decided = await a.approve(request(approvals.ledger, s)))) }) });
+    await tg.poll(); await tick();
+    const v = approvals.pending(session)!; const data = (yn: string) => `ap:${v.id}:${v.nonce}:${yn}`;
+    // A different allowed person presses the buttons they were forwarded: not their session.
+    await tg.dispatchForTest(cb(2, 7, data("y"))); await tick();
+    // An outsider (ignored without any answer), a malformed payload and a forged nonce.
+    await tg.dispatchForTest(cb(3, 99, data("y"))); await tg.dispatchForTest(cb(4, 42, "approve")); await tg.dispatchForTest(cb(5, 42, `ap:${v.id}:forged:y`)); await tick();
+    expect(decided).toBeUndefined();
+    expect(approvals.pending(session)?.id).toBe(v.id);
+    await tg.dispatchForTest(cb(6, 42, data("n"))); await tick();
+    expect(decided).toBe(false);
+    // The same button again, after the answer: nothing to resolve, and it says so.
+    await tg.dispatchForTest(cb(7, 42, data("y"))); await tick();
+    const answers = calls.filter((c) => c.method === "answerCallbackQuery").map((c) => c.body.text);
+    expect(answers).toEqual(["Nothing to approve", "Nothing to approve", "Nothing to approve", "Denied", "That request is no longer open"]);
+    expect(calls.some((c) => c.method === "editMessageReplyMarkup" && c.body.reply_markup.inline_keyboard.length === 0)).toBe(true);
+  });
+
+  test("a button from an older request cannot answer the newer one", async () => {
+    const approvals = new PendingApprovals();
+    const { f } = fakeTelegram([[msg(1, 42, "go")]]);
+    const decisions: boolean[] = [];
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals, handle: async (s, _t, a) => {
+      const first = a.approve(request(approvals.ledger, s));
+      await tick();
+      const old = approvals.pending(s)!;
+      const second = a.approve(request(approvals.ledger, s));
+      decisions.push(await first);
+      await tg.dispatchForTest(cb(2, 42, `ap:${old.id}:${old.nonce}:y`)); await tick();
+      const current = approvals.pending(s)!;
+      expect(current.id).not.toBe(old.id);
+      await tg.dispatchForTest(cb(3, 42, `ap:${current.id}:${current.nonce}:y`));
+      decisions.push(await second);
+      return { reply: "done" };
+    } });
+    await tg.poll(); await Bun.sleep(80);
+    expect(decisions).toEqual([false, true]);
+  });
+
+  test("a yes typed before the prompt, or as a reply to something else, does not answer it", async () => {
+    const approvals = new PendingApprovals();
+    const { f } = fakeTelegram([[msg(1, 42, "go")]]);
+    let decided: boolean | undefined;
+    const tg = new TelegramChannel({ token: TOKEN, workspace: "home", allowedUsers: [42], fetch: f, approvals, handle: async (s, _t, a) => ({ reply: String((decided = await a.approve(request(approvals.ledger, s)))) }) });
+    await tg.poll(); await tick();
+    const stale = { ...msg(2, 42, "yes"), message: { ...msg(2, 42, "yes").message, date: 1 } };
+    await tg.dispatchForTest(stale);
+    await tg.dispatchForTest(msg(3, 42, "yes", "private", { reply_to_message: { message_id: 5 } }));
     await tick();
     expect(decided).toBeUndefined();
-    await tg.poll();
-    await tick();
-    expect(decided).toBe(false);
+    await tg.dispatchForTest(msg(4, 42, "yes")); await tick();
+    expect(decided).toBe(true);
   });
 
   test("API errors never include the token", async () => {
@@ -147,5 +268,37 @@ describe("web page", () => {
     expect(WEB_JS).toContain("authorization");
     expect(WEB_HTML).toContain('<script src="/app.js">');
     expect(WEB_HTML).not.toMatch(/https?:\/\//);
+  });
+});
+
+describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
+  // The live keyboard-only journey runs in a real browser against `august serve`; these pin the markup and script it relies on.
+  test("semantic structure: language, landmarks, labelled input, live log", () => {
+    expect(WEB_HTML).toContain('<html lang="en">');
+    expect(WEB_HTML).toMatch(/<main>[\s\S]*<\/main>/);
+    expect(WEB_HTML).toContain('role="log"');
+    expect(WEB_HTML).toContain('aria-live="polite"');
+    expect(WEB_HTML).toMatch(/<label class="sr" for="text">[^<]+<\/label>\s*<input id="text"/);
+    expect(WEB_HTML).toContain(":focus-visible");
+    expect(WEB_HTML).not.toMatch(/outline:\s*none/);
+  });
+
+  test("an approval card is an alertdialog with a title, specific button names, keyboard Escape to deny, and stops being a dialog once answered", () => {
+    expect(WEB_JS).toContain('"alertdialog"');
+    expect(WEB_JS).toContain("aria-labelledby");
+    expect(WEB_JS).toContain("aria-label");
+    expect(WEB_JS).toContain('"Escape"');
+    expect(WEB_JS).toContain('removeAttribute("role")');
+    expect(WEB_JS).toContain("card.focus()");
+    expect(WEB_JS).not.toContain("innerHTML");
+  });
+
+  test("the answer carries the displayed approval id and nonce, not a bare allow", () => {
+    expect(WEB_JS).toContain("approvalId: approval.id");
+    expect(WEB_JS).toContain("nonce: approval.nonce");
+  });
+
+  test("the script is valid JavaScript", () => {
+    expect(() => new Function(WEB_JS)).not.toThrow();
   });
 });

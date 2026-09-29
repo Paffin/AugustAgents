@@ -179,3 +179,21 @@ describe("DurableRuntimeStore", () => {
     expect(store.recordUsage(run.id, { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 }).exhausted).toBeUndefined(); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 2 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 })).toThrow(/invalid provider usage/); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: -1, outputMicrosPerMillion: 0 })).toThrow(/invalid usage pricing/); store.transition(run.id, "failed"); expect(() => store.recordUsage(run.id, { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, { inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 })).toThrow(/terminal/); store.close();
   });
 });
+
+describe("DurableRuntimeStore provenance (Safety/security invariant, REQ-SEC-001)", () => {
+  test("untrusted sources and the highest sensitivity of earlier runs survive for the next run, and corrupt values fail closed", () => {
+    const store = new DurableRuntimeStore();
+    const a = store.startRun({ session, request: "one" }).run; const b = store.startRun({ session, request: "two", idempotencyKey: "k" }).run;
+    const cp = (taint: unknown) => ({ phase: "before_decision" as const, safeToResume: true, history: [], taint, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 });
+    expect(store.provenance(session)).toEqual({ sources: [], sensitivity: "public" });
+    store.checkpoint(a.id, cp({ tainted: false, sources: [], sensitivity: "personal" }));
+    store.checkpoint(b.id, cp({ tainted: true, sources: ["web.fetch"], sensitivity: "secret" }));
+    expect(store.provenance(session)).toEqual({ sources: ["web.fetch"], sensitivity: "secret" });
+    expect(store.taintSources(session)).toEqual(["web.fetch"]);
+    const other = makeSessionKey({ workspace: "home", channel: "test", user: "other" });
+    expect(store.provenance(other)).toEqual({ sources: [], sensitivity: "public" });
+    store.checkpoint(a.id, cp({ tainted: false, sources: [], sensitivity: "top-secret" }));
+    expect(() => store.provenance(session)).toThrow(/invalid persisted checkpoint taint/);
+    store.close();
+  });
+});

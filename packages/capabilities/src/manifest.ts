@@ -9,6 +9,11 @@ export interface ToolDescriptor {
   description: string;
   effects: readonly Effect[];
   producesUntrusted?: boolean;
+  /**
+   * Argument names that hold the path a write or delete lands on. Declared by the
+   * owner (or built in), never inferred: a writing tool without this asks every time.
+   */
+  targetArgs?: readonly string[];
   inputSchema?: unknown;
   /** Extra search words, e.g. in other languages ("файл", "прочитать"). */
   keywords?: readonly string[];
@@ -38,6 +43,7 @@ export function descriptorsHash(tools: readonly ToolDescriptor[]): string {
       description: t.description,
       effects: [...t.effects].sort(),
       producesUntrusted: t.producesUntrusted ?? false,
+      targetArgs: t.targetArgs ? [...t.targetArgs].sort() : null,
       inputSchema: t.inputSchema ?? null,
     }));
   return createHash("sha256").update(stableStringify(canonical)).digest("hex");

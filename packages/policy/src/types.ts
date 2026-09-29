@@ -1,3 +1,5 @@
+import type { Sensitivity } from "./provenance.ts";
+
 export const EFFECTS = ["read", "write", "network", "send", "pay", "delete", "exec"] as const;
 export type Effect = (typeof EFFECTS)[number];
 
@@ -29,6 +31,20 @@ export interface ToolSpec {
 export interface TaintSnapshot {
   tainted: boolean;
   sources: readonly string[];
+  /** Most sensitive content read so far. Absent means public. */
+  sensitivity?: Sensitivity;
+}
+
+/**
+ * Where a write lands, judged by the host from the arguments, never by the model or the server.
+ * `workspace` is the only kind that a clean context may write without asking.
+ * `managed` is a store the host itself writes through its own validated code (installing a skill or a
+ * tool); it is never derived from arguments, only declared by the host for its own tools.
+ */
+export interface WriteTarget {
+  kind: "workspace" | "managed" | "outside" | "protected" | "unknown";
+  /** Safe to show the owner, e.g. a workspace-relative path. */
+  label: string;
 }
 
 export interface PolicyCall {
@@ -36,6 +52,8 @@ export interface PolicyCall {
   taint: TaintSnapshot;
   /** Host, address or payee this call acts on, when the tool has one. */
   destination?: string;
+  /** Targets of the call's write/delete effects. Absent or empty for a writing tool means "unknown". */
+  targets?: readonly WriteTarget[];
   amount?: number;
   currency?: string;
 }
