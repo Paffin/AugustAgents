@@ -179,7 +179,7 @@ describe("external signed audit transport", () => {
 
   test("ATTACK: unsafe endpoints, credentials, alias HTTP and private DNS answers are refused without raw secrets in errors", async () => {
     const token = "private-fixture-token";
-    for (const url of ["http://localhost/anchors", "http://10.0.0.1/anchors", "https://169.254.169.254/anchors", "https://user:password@example.com/anchors", "https://example.com/anchors?token=x", "https://example.com/#x", "http://[::ffff:127.0.0.1]/anchors", "https://[2001::1]/anchors", "https://[3fff::1]/anchors"]) {
+    for (const url of ["http://localhost/anchors", "http://10.0.0.1/anchors", "http://127.0.0.1:0/anchors", "https://169.254.169.254/anchors", "https://user:password@example.com/anchors", "https://example.com/anchors?token=x", "https://example.com/#x", "http://[::ffff:127.0.0.1]/anchors", "https://[2001::1]/anchors", "https://[3fff::1]/anchors"]) {
       expect(() => externalAnchorHttp({ url, token })).toThrow("unavailable");
     }
     for (const addresses of [["127.0.0.1"], ["2001::1"], ["1.1.1.1", "192.168.1.1"]]) {

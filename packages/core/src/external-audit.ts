@@ -80,7 +80,7 @@ export function externalAnchorHttp(options: ExternalAnchorHttpOptions): External
   try { base = new URL(options.url); } catch { throw new ExternalAuditUnavailable(); }
   const host = base.hostname.replace(/^\[|\]$/g, "");
   const local = numericLoopback(host);
-  if (base.username || base.password || base.search || base.hash ||
+  if (base.username || base.password || base.search || base.hash || base.port === "0" ||
       (base.protocol !== "https:" && !(base.protocol === "http:" && local)) ||
       (!local && isIP(host) && !publicAddress(host)) || /[\r\n]/.test(options.token) ||
       !options.token || options.token.length > 8192) throw new ExternalAuditUnavailable();
