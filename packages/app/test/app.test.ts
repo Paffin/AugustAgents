@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage, LlmProvider } from "@august/brain";
+import { AgentCheckpointError } from "@august/agent";
 import { IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
+import { LoopGuard } from "@august/policy";
 import {
   BuiltinExecutor,
   ConfigError,
@@ -272,6 +274,18 @@ describe("createApp", () => {
     app.close();
   });
 
+  test("Safety/reliability invariant: provider failures persist as failed runs", async () => {
+    const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: { name: "broken", complete: async () => { throw new Error("offline"); } } });
+    const reply = await app.handle(runtimeSession, "hello"); expect(reply.error).toBe("Error"); expect(app.getRun(reply.runId)?.state).toBe("failed"); app.close();
+  });
+
+  test("Safety/reliability invariant: a failed post-effect checkpoint leaves the run recovering", async () => {
+    const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: scriptedLlm({ tool: "clock.now", args: {}, reply: "done" }) });
+    const checkpoint = app.runs.checkpoint.bind(app.runs); app.runs.checkpoint = (id, value, now) => { if (value.phase === "tool_finished") throw new Error("disk full"); return checkpoint(id, value, now); };
+    await expect(app.handle(runtimeSession, "what time is it?")).rejects.toBeInstanceOf(AgentCheckpointError);
+    expect(app.listRuns({ session: runtimeSession })[0]?.state).toBe("recovering"); app.close();
+  });
+
   test("Safety/reliability invariant: cooperative pause waits for a model step and resumes the same run", async () => {
     const home = tmp(); let release!: (value: string) => void; let entered!: () => void; let calls = 0;
     const started = new Promise<void>((resolve) => { entered = resolve; });
@@ -289,8 +303,8 @@ describe("createApp", () => {
     let app = createApp(cfg, deps); const safe = app.runs.startRun({ session: runtimeSession, request: "safe" }).run;
     app.runs.transition(safe.id, "running"); app.runs.checkpoint(safe.id, { phase: "before_decision", safeToResume: true, history: [], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 }); app.close();
     app = createApp(cfg, deps); expect(app.getRun(safe.id)?.state).toBe("recovering"); expect((await app.resumeRun(safe.id)).reply).toBe("recovered");
-    const ambiguous = app.runs.startRun({ session: runtimeSession, request: "send" }).run; app.runs.transition(ambiguous.id, "running");
-    app.runs.checkpoint(ambiguous.id, { phase: "tool_started", safeToResume: false, history: [], taint: { tainted: false, sources: [] }, loop: { steps: 1, repeats: [] }, steps: 0, externalEffects: 1 }); app.close();
+    const ambiguous = app.runs.startRun({ session: runtimeSession, request: "send" }).run; app.runs.transition(ambiguous.id, "running"); const loop = new LoopGuard(); loop.record("mail.send", {});
+    app.runs.checkpoint(ambiguous.id, { phase: "tool_started", safeToResume: false, history: [], taint: { tainted: false, sources: [] }, loop: loop.snapshot(), steps: 0, externalEffects: 1 }); app.close();
     app = createApp(cfg, deps); expect(app.resumeRun(ambiguous.id)).rejects.toThrow(/owner resolution/);
     expect(app.resolveRun(ambiguous.id, "confirm_not_executed").state).toBe("paused"); expect((await app.resumeRun(ambiguous.id)).reply).toBe("recovered");
     const cancelled = app.runs.startRun({ session: runtimeSession, request: "retry" }).run; expect((await app.cancelRun(cancelled.id)).state).toBe("cancelled");

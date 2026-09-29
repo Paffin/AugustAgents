@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { EventJournal, makeSessionKey } from "@august/core";
 import { CapabilityRegistry, type ToolDescriptor } from "@august/capabilities";
 import type { ChatMessage, DecisionEngine, LlmProvider } from "@august/brain";
-import { PolicyEngine } from "@august/policy";
-import { AgentRuntime, type AgentRunEvent, type ApprovalRequest, type ToolExecutor } from "../src/index.ts";
+import { LoopGuard, PolicyEngine } from "@august/policy";
+import { AgentCheckpointError, AgentRuntime, type AgentRunEvent, type ApprovalRequest, type ToolExecutor } from "../src/index.ts";
 
 const session = makeSessionKey({ workspace: "home", channel: "cli", user: "dan" });
 
@@ -83,13 +83,20 @@ describe("AgentRuntime", () => {
     expect(llm.prompts.at(-1)!.at(-1)!.content).toContain("NEPTUNE-7429");
   });
 
+  test("Product behavior: StateView role labels alone do not invent a tool match", async () => {
+    const broken: DecisionEngine = { decide: async () => { throw new Error("decision should not run"); } };
+    const { agent } = build({ decision: broken, llm: fakeLlm({}, "привет"), executor: executor() });
+    expect((await agent.handle(session, "как дела?", { priorMessages: ["User: привет", "Assistant: хорошо"] })).reply).toBe("привет");
+  });
+
   test("Safety/reliability invariant: observer checkpoints are bounded and name unsafe tool start", async () => {
     const events: AgentRunEvent[] = [];
-    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor() });
+    const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "checkpoint-secret-7429" } }), executor: executor() });
     await agent.handle(session, "search notes", { priorMessages: Array.from({ length: 12 }, (_, i) => `${i}-${"x".repeat(3000)}`), onEvent: (event) => void events.push(event) });
     const checkpoints = events.filter((event) => event.type === "checkpoint");
     expect(checkpoints.some((event) => event.phase === "tool_started" && !event.safeToResume && event.lastTool === "notes.search")).toBe(true);
     expect(checkpoints.every((event) => event.history.length <= 8 && event.history.join("").length <= 16_000)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("checkpoint-secret-7429");
   });
 
   test("Safety/reliability invariant: cancel, deadline, effect and step budgets stop before another call", async () => {
@@ -102,7 +109,7 @@ describe("AgentRuntime", () => {
     expect(ex.calls).toHaveLength(0);
     const stepEx = executor();
     const stepped = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: stepEx });
-    expect((await stepped.agent.handle(session, "search", { maxSteps: 1 })).reply).toContain("Stopped");
+    expect((await stepped.agent.handle(session, "search", { maxSteps: 1 })).stopReason).toBe("step-budget");
     expect(stepEx.calls).toHaveLength(1);
   });
 
@@ -112,9 +119,34 @@ describe("AgentRuntime", () => {
     const { agent } = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: ex, approver: { approve: async (r) => (asked.push(r), false) } });
     await agent.handle(session, "send", { checkpoint: { history: [], taint: { tainted: true, sources: ["web.fetch"] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } });
     expect(asked[0]?.verdict.rule).toBe("tainted-context");
+    const loop = new LoopGuard(); for (let i = 0; i < 3; i++) loop.record("notes.search", { q: "x" });
     const looped = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: executor() });
-    const reply = await looped.agent.handle(session, "search", { checkpoint: { history: [], taint: { tainted: false, sources: [] }, loop: { steps: 2, repeats: [["notes.search:{\"q\":\"x\"}", 3]] }, steps: 2, externalEffects: 0 } });
+    const reply = await looped.agent.handle(session, "search", { checkpoint: { history: [], taint: { tainted: false, sources: [] }, loop: loop.snapshot(), steps: 3, externalEffects: 0 } });
     expect(reply.reply).toContain("Stopped");
+  });
+
+  test("Safety/reliability invariant: restored prior context and scratch stay separate", async () => {
+    const decision = picks("none"); const llm = fakeLlm({}, "ok");
+    const { agent } = build({ decision, llm, executor: executor() });
+    await agent.handle(session, "search notes", { priorMessages: ["User: durable"], checkpoint: { history: ["Result of notes.search: scratch"], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: 0 } });
+    expect(decision.asked[0]).toContain("durable"); expect(llm.prompts.at(-1)!.at(-1)!.content).toContain("scratch");
+  });
+
+  test("Safety/reliability invariant: malformed counters and checkpoint write failures fail closed", async () => {
+    const ex = executor(); const { agent } = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "secret" } }), executor: ex });
+    await expect(agent.handle(session, "search", { checkpoint: { history: [], taint: { tainted: false, sources: [] }, loop: { steps: 0, repeats: [] }, steps: 0, externalEffects: -1 } })).rejects.toThrow(/invalid AgentCheckpointState/);
+    await expect(agent.handle(session, "search", { onEvent: (event) => { if (event.type === "checkpoint" && event.phase === "tool_finished") throw new Error("disk full"); } })).rejects.toBeInstanceOf(AgentCheckpointError);
+    expect(ex.calls).toHaveLength(1);
+  });
+
+  test("Safety/reliability invariant: cancellation is rechecked before final generation and approval", async () => {
+    const controller = new AbortController(); const llm = fakeLlm({}, "must not run");
+    const decision: DecisionEngine = { decide: async () => (controller.abort(), { choice: "none", probs: { none: 1 }, confidence: 1 }) };
+    const { agent } = build({ decision, llm, executor: executor() });
+    expect((await agent.handle(session, "search notes", { signal: controller.signal })).stopReason).toBe("cancelled"); expect(llm.prompts).toHaveLength(0);
+    const approvalController = new AbortController(); const approvalEx = executor(); approvalEx.describeCall = async () => (approvalController.abort(), "details"); let approvals = 0;
+    const approvalAgent = build({ decision: picks("mail.send"), llm: fakeLlm({ "mail.send": { to: "a@b.c", body: "x" } }), executor: approvalEx, approver: { approve: async () => (++approvals, true) } }).agent;
+    expect((await approvalAgent.handle(session, "send an email", { signal: approvalController.signal })).stopReason).toBe("cancelled"); expect(approvals).toBe(0);
   });
 
   test("answers without a tool when the decision is none", async () => {
@@ -310,5 +342,6 @@ describe("AgentRuntime", () => {
     const r = await agent.handle(session, "secret prompt text");
     expect(r.reply).toContain("could not reach the language model (m: HTTP 503)");
     expect(r.reply).not.toContain("secret prompt");
+    expect(r.error).toBe("m: HTTP 503");
   });
 });

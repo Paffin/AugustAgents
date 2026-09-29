@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Effect, Verdict } from "./types.ts";
 
 /** Effects present in `next` that `prev` did not have. */
@@ -51,10 +52,13 @@ export class LoopGuard {
     if (!snapshot || !Number.isInteger(snapshot.steps) || snapshot.steps < 0 || !Array.isArray(snapshot.repeats)) throw new Error("invalid LoopGuard snapshot");
     this.steps = snapshot.steps;
     this.repeats.clear();
+    const keys = new Set<string>(); let total = 0;
     for (const [key, count] of snapshot.repeats) {
-      if (typeof key !== "string" || !Number.isInteger(count) || count < 1) throw new Error("invalid LoopGuard repeat state");
+      if (typeof key !== "string" || keys.has(key) || !Number.isInteger(count) || count < 1) throw new Error("invalid LoopGuard repeat state");
+      keys.add(key); total += count;
       this.repeats.set(key, count);
     }
+    if (total !== snapshot.steps) throw new Error("inconsistent LoopGuard snapshot");
   }
 
   record(tool: string, args: unknown): Verdict {
@@ -62,7 +66,7 @@ export class LoopGuard {
     if (this.steps > this.maxSteps) {
       return { decision: "deny", rule: "step-limit", reason: `more than ${this.maxSteps} steps in one task` };
     }
-    const key = `${tool}:${stableStringify(args)}`;
+    const key = `${tool}:${createHash("sha256").update(stableStringify(args)).digest("hex")}`;
     const count = (this.repeats.get(key) ?? 0) + 1;
     this.repeats.set(key, count);
     if (count > this.maxRepeats) {

@@ -30,6 +30,12 @@ describe("DurableRuntimeStore", () => {
     store.close();
   });
 
+  test("Safety/reliability invariant: backup copies open read-only without recovery writes", () => {
+    const path = tempDb(); const writer = new DurableRuntimeStore(path); writer.appendMessage(session, "user", "kept"); writer.close();
+    const reader = new DurableRuntimeStore(path, { readOnly: true }); expect(reader.schemaVersion()).toBe(1); expect(reader.messages(session)).toHaveLength(1);
+    expect(() => reader.appendMessage(session, "assistant", "blocked")).toThrow(); reader.close();
+  });
+
   test("Product behavior: StateView keeps newest messages within exact bounds", () => {
     const store = new DurableRuntimeStore();
     for (let i = 1; i <= 45; i++) store.appendMessage(session, i % 2 ? "user" : "assistant", `message-${i}`);

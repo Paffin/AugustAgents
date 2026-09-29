@@ -233,6 +233,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
 
   type Active = { controller: AbortController; desired?: "paused" | "cancelled"; done: Promise<void>; finish: () => void };
   const active = new Map<string, Active>();
+  const priorFor = (run: DurableRun): string[] => { const prior = runs.stateView(run.session); const i = prior.lastIndexOf(`User: ${run.request}`); if (i >= 0) prior.splice(i, 1); return prior; };
   const execute = async (run: DurableRun, perMessage?: Approver, priorMessages?: string[]): Promise<DurableAgentReply> => {
     if (run.state === "recovering" && (!run.checkpoint?.safeToResume || run.checkpoint.phase === "tool_started")) throw new Error("run needs owner resolution before resume");
     const controller = new AbortController(); let finish!: () => void;
@@ -260,6 +261,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       if (reply.stopReason) {
         const target = entry.desired ?? (reply.stopReason === "cancelled" ? "cancelled" : "failed");
         run = current.state === target ? current : runs.transition(run.id, target, { error: reply.stopReason, steps: reply.steps });
+      } else if (reply.error) {
+        runs.appendMessage(run.session, "assistant", reply.reply); run = runs.transition(run.id, "failed", { reply: reply.reply, error: reply.error, steps: reply.steps });
       } else {
         runs.transition(run.id, "verifying", { steps: reply.steps });
         runs.appendMessage(run.session, "assistant", reply.reply);
@@ -267,7 +270,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       }
       return { ...reply, runId: run.id, replayed: false };
     } catch (error) {
-      const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, "failed", { error: (error as Error).message });
+      const current = runs.getRun(run.id); if (current && !["completed", "failed", "cancelled"].includes(current.state)) runs.transition(run.id, current.checkpoint?.phase === "tool_started" && !current.checkpoint.safeToResume ? "recovering" : "failed", { error: (error as Error).message });
       throw error;
     } finally { approver.bySession.delete(run.session); active.delete(run.id); entry.finish(); saveStats(); }
   };
@@ -298,8 +301,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     listRuns: (options = {}) => runs.listRuns(options.session, options.limit).filter((run) => !options.states || options.states.includes(run.state)),
     pauseRun: (id) => stop(id, "paused"),
     cancelRun: (id) => stop(id, "cancelled"),
-    resumeRun: (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage); },
-    retryRun: (id, options = {}, perMessage) => execute(runs.retryRun(id, options).run, perMessage, runs.stateView(runs.getRun(id)!.session)),
+    resumeRun: (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state)) throw new Error("run is not resumable"); return execute(run, perMessage, priorFor(run)); },
+    retryRun: (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     async startServers() {
       const report: StartReport = { started: [], failed: [] };

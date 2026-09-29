@@ -77,7 +77,8 @@ export interface AgentReply {
   reply: string;
   steps: number;
   tainted: boolean;
-  stopReason?: "cancelled" | "deadline" | "external-effect-budget";
+  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget";
+  error?: string;
 }
 
 export interface AgentCheckpointState {
@@ -103,6 +104,7 @@ export interface AgentExecutionContext {
 class RunControlError extends Error {
   constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>) { super(reason); this.name = "RunControlError"; }
 }
+export class AgentCheckpointError extends Error { constructor(cause: unknown) { super(`checkpoint observer failed: ${(cause as Error).message}`); this.name = "AgentCheckpointError"; } }
 
 const DEFAULT_SCHEMA: JsonSchema = { type: "object", additionalProperties: true };
 
@@ -145,7 +147,12 @@ export class AgentRuntime {
     const taint = new TaintState(context.checkpoint?.taint);
     const guard = new LoopGuard({ maxSteps: context.maxSteps ?? this.options.maxSteps ?? 12 });
     if (context.checkpoint) guard.restore(context.checkpoint.loop);
-    const history: string[] = [...(context.checkpoint?.history ?? context.priorMessages ?? [])];
+    if (context.maxSteps !== undefined && (!Number.isInteger(context.maxSteps) || context.maxSteps < 1)) throw new Error("invalid maxSteps");
+    if (context.maxExternalEffects !== undefined && (!Number.isInteger(context.maxExternalEffects) || context.maxExternalEffects < 0)) throw new Error("invalid maxExternalEffects");
+    if (context.checkpoint && (!Array.isArray(context.checkpoint.history) || context.checkpoint.history.some((line) => typeof line !== "string") || !Number.isInteger(context.checkpoint.steps) || context.checkpoint.steps < 0 || !Number.isInteger(context.checkpoint.externalEffects) || context.checkpoint.externalEffects < 0)) throw new Error("invalid AgentCheckpointState");
+    const prior = [...(context.priorMessages ?? [])];
+    const history: string[] = [...(context.checkpoint?.history ?? [])];
+    const allHistory = () => [...prior, ...history];
     let steps = context.checkpoint?.steps ?? 0;
     let externalEffects = context.checkpoint?.externalEffects ?? 0;
     let expansion: string | undefined;
@@ -155,7 +162,8 @@ export class AgentRuntime {
       if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) throw new RunControlError("deadline");
     };
     const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
-      await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra });
+      try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
+      catch (error) { throw new AgentCheckpointError(error); }
     };
 
     log("task.start", { chars: text.length });
@@ -166,21 +174,22 @@ export class AgentRuntime {
         await checkpoint("before_decision", true);
         const tools = this.options.registry.enabledTools();
         const index = new ToolIndex(tools);
-        let shortlist = index.search(`${text}\n${history.join("\n")}`);
+        let shortlist = index.search(`${text}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
         if (this.options.expandQuery && shortlist.length < (this.options.minShortlist ?? 3) && tools.length > shortlist.length) {
           try {
             const before = shortlist.length;
             // Once per task: the request does not change between steps.
             expansion ??= await this.options.expandQuery(text);
             const words = expansion;
-            shortlist = index.search(`${text}\n${words}\n${history.join("\n")}`);
+            shortlist = index.search(`${text}\n${words}\n${allHistory().join("\n")}`);
             log("shortlist.expanded", { before, after: shortlist.length });
           } catch {
             log("shortlist.expand-failed", {});
           }
         }
         // The request goes last: the decision model keeps the end of a long state.
-        const state = `${history.join("\n")}\nRequest: ${text}`.trim();
+        const state = `${allHistory().join("\n")}\nRequest: ${text}`.trim();
+        control();
         const choice = await chooseTool(
           this.options.decision,
           shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })),
@@ -189,15 +198,16 @@ export class AgentRuntime {
         );
         log("decision", { source: choice.decision.source, tool: choice.tool, confidence: choice.decision.confidence });
 
-        if (choice.tool === null) return await this.finish(text, history, undefined, steps, taint, log);
+        if (choice.tool === null) { control(); return await this.finish(text, allHistory(), undefined, steps, taint, log); }
 
         const descriptor = tools.find((t) => t.name === choice.tool);
         if (!descriptor) {
           // The decision model can only pick from the shortlist; anything else is a bug or an attack.
           log("decision.rejected", { tool: choice.tool });
-          return await this.finish(text, history, "I could not find a matching tool.", steps, taint, log);
+          return await this.finish(text, allHistory(), "I could not find a matching tool.", steps, taint, log);
         }
 
+        control();
         const args = await fillArguments(
           this.options.llm,
           {
@@ -205,13 +215,14 @@ export class AgentRuntime {
             description: descriptor.description,
             inputSchema: (descriptor.inputSchema as JsonSchema | undefined) ?? DEFAULT_SCHEMA,
           },
-          text + (history.length ? `\n\nResults so far:\n${history.join("\n")}` : ""),
+          text + (allHistory().length ? `\n\nResults so far:\n${allHistory().join("\n")}` : ""),
         );
 
         const loop = guard.record(descriptor.name, args);
         if (loop.decision === "deny") {
           log("guard.stop", { rule: loop.rule });
-          return await this.finish(text, history, `Stopped: ${loop.reason}.`, steps, taint, log);
+          if (loop.rule === "step-limit") throw new RunControlError("step-budget");
+          return await this.finish(text, allHistory(), `Stopped: ${loop.reason}.`, steps, taint, log);
         }
 
         const capabilityId = descriptor.name.split(".")[0]!;
@@ -241,17 +252,18 @@ export class AgentRuntime {
         log("policy", { tool: descriptor.name, decision: verdict.decision, rule: verdict.rule });
 
         if (verdict.decision === "deny") {
-          return await this.finish(text, history, `Blocked: ${verdict.reason}.`, steps, taint, log);
+          return await this.finish(text, allHistory(), `Blocked: ${verdict.reason}.`, steps, taint, log);
         }
         if (verdict.decision === "ask") {
           control();
           await checkpoint("waiting_approval", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
           const details = await this.options.executor.describeCall?.(descriptor.name, args).catch(() => undefined);
+          control();
           const ok = await this.approver.approve({ session, tool: descriptor.name, args, verdict, details });
           log("approval", { tool: descriptor.name, granted: ok, rule: verdict.rule });
           await checkpoint("before_decision", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
           if (!ok) {
-            return await this.finish(text, history, `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log);
+            return await this.finish(text, allHistory(), `Not done: ${descriptor.name} was not approved (${verdict.reason}).`, steps, taint, log);
           }
         }
 
@@ -285,6 +297,7 @@ export class AgentRuntime {
         await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
       }
     } catch (error) {
+      if (error instanceof AgentCheckpointError) throw error;
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });
@@ -297,7 +310,7 @@ export class AgentRuntime {
         name === "LlmError"
           ? `I could not reach the language model (${(error as Error).message}). Nothing further was done.`
           : "Something went wrong while working on this. Nothing further was done.";
-      return { reply, steps, tainted: taint.snapshot().tainted };
+      return { reply, steps, tainted: taint.snapshot().tainted, error: name === "LlmError" ? (error as Error).message : name };
     }
   }
 

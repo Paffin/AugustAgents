@@ -16,6 +16,7 @@ export interface DurableRun {
   createdAt: number; updatedAt: number;
 }
 export interface StartRunInput { session: SessionKey; request: string; idempotencyKey?: string; budget?: Partial<RunBudget>; retryOf?: string; now?: number }
+export interface DurableRuntimeStoreOptions { readOnly?: boolean }
 
 export class IdempotencyConflictError extends Error { constructor(public readonly runId: string) { super(`idempotency key belongs to another request (${runId})`); this.name = "IdempotencyConflictError"; } }
 export class RunInProgressError extends Error { constructor(public readonly runId: string, public readonly state: RunState) { super(`run ${runId} is already ${state}`); this.name = "RunInProgressError"; } }
@@ -46,25 +47,23 @@ function fingerprint(request: string, budget: RunBudget): string { return create
 
 export class DurableRuntimeStore {
   readonly db: Database;
-  constructor(path = ":memory:") {
-    this.db = new Database(path);
+  constructor(path = ":memory:", options: DurableRuntimeStoreOptions = {}) {
+    this.db = new Database(path, options.readOnly ? { readonly: true } : undefined);
     this.db.run("PRAGMA foreign_keys = ON");
-    if (path !== ":memory:") { this.db.run("PRAGMA journal_mode = WAL"); chmodSync(path, 0o600); }
-    this.db.run("CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    this.db.run("INSERT OR IGNORE INTO runtime_meta VALUES ('schema_version','1')");
+    if (!options.readOnly && path !== ":memory:") { this.db.run("PRAGMA journal_mode = WAL"); chmodSync(path, 0o600); }
+    if (!options.readOnly) { this.db.run("CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); this.db.run("INSERT OR IGNORE INTO runtime_meta VALUES ('schema_version','1')"); }
     const version = this.db.query("SELECT value FROM runtime_meta WHERE key='schema_version'").get() as { value: string } | null;
     if (version?.value !== "1") throw new Error(`unsupported runtime schema ${version?.value ?? "missing"}`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS messages (
+    if (!options.readOnly) this.db.run(`CREATE TABLE IF NOT EXISTS messages (
       session TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(session,seq))`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS runs (
+    if (!options.readOnly) this.db.run(`CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY, session TEXT NOT NULL, state TEXT NOT NULL, request TEXT NOT NULL,
       request_fingerprint TEXT NOT NULL, idempotency_key TEXT, reply TEXT, error TEXT,
       budget_json TEXT NOT NULL, steps INTEGER NOT NULL DEFAULT 0, external_effects INTEGER NOT NULL DEFAULT 0,
       checkpoint_json TEXT, retry_of TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
       UNIQUE(session,idempotency_key))`);
-    this.db.run("CREATE INDEX IF NOT EXISTS runs_session_updated ON runs(session,updated_at DESC)");
-    this.db.run("UPDATE runs SET state='recovering', updated_at=? WHERE state IN ('created','running','waiting_approval','waiting_external','verifying')", [Date.now()]);
+    if (!options.readOnly) { this.db.run("CREATE INDEX IF NOT EXISTS runs_session_updated ON runs(session,updated_at DESC)"); this.db.run("UPDATE runs SET state='recovering', updated_at=? WHERE state IN ('created','running','waiting_approval','waiting_external','verifying')", [Date.now()]); }
   }
 
   schemaVersion(): number { return 1; }
