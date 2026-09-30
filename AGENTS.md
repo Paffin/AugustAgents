@@ -1,8 +1,7 @@
 # AugustAgents contributor instructions
 
 ## Goal and current work
-Implement the full user goal in
-`/Users/mkiktev/Downloads/Агент-платформа на Laya архитектура и подводные камни.md`.
+Implement the full user goal in [USER-GOAL.md](docs/agentic/USER-GOAL.md).
 Use `CONTEXT.md` for current work and `docs/agentic/ROADMAP.md` /
 `PROJECT-BLUEPRINT.md` for requirements and dependencies. Preserve the complete
 goal; individual commits or passing unit tests do not establish completion.

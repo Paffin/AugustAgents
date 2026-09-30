@@ -12,6 +12,7 @@ They are not active approval, planning or implementation prerequisites.
 - `CONTEXT.md`
 - `docs/agentic/AGENTS.md`
 - `docs/agentic/WAYFINDING.md`
+- `docs/agentic/USER-GOAL.md`
 - `docs/agentic/PROJECT-BLUEPRINT.md`
 - `docs/agentic/PRODUCT.md`
 - `docs/agentic/DOMAIN.md`
@@ -79,3 +80,9 @@ current runtime evidence, and outstanding acceptance for every outcome.
 `docs/agentic/SECURITY.md` is required because the product executes untrusted
 capabilities with secrets and external effects; the security contract is too
 large and durable to live as a subsection of architecture.
+
+[USER-GOAL.md](USER-GOAL.md) preserves the supplied original goal verbatim so
+contributors and CI can read it without the owner's filesystem. Requirements
+and source-section links are owned by [PROJECT-BLUEPRINT.md](PROJECT-BLUEPRINT.md).
+The original contains three embedded-diagram placeholders but no diagram assets;
+their absence is preserved, not filled with invented diagrams.

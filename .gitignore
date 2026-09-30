@@ -10,6 +10,8 @@ dist/
 *.sqlite-shm
 models/
 .DS_Store
+__pycache__/
+*.py[cod]
 coverage/
 ci-results/
 /docs/superpowers/
