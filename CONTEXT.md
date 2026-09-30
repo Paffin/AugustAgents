@@ -45,7 +45,11 @@ In-flight HTTP model cancellation and durable owner stop intents are implemented
 live pause took 221 ms; cancel survived an owned gateway SIGKILL/restart.
 Durable model attempts retain immutable quotes and hold unresolved allowance;
 owner reconciliation is labelled explicitly rather than presented as a vendor
-receipt. Configured provider degradation/cooldown remains open under GitHub #3.
+receipt. Configured primary/backup, persistent circuit cooldown and safe web
+provider-wait recovery now exist, with real fallback and non-duplicating
+MCP-write/crash/restart journeys verified. Unknown billing remains held, not
+settled automatically; final issue #3 evidence is being reconciled. The complete
+goal and production/platform/provider invoice qualification remain open.
 External audit App/CLI integration is now implemented: optional configured sink,
 periodic metadata-only publication, outage/conflict UI/doctor warnings and
 strictly read-only verification that cannot re-sign inspected history. Public
@@ -65,7 +69,9 @@ custody, key rotation continuity and the complete OUT-009 remain unqualified.
   the configured endpoint or requires an owner-entered identifier. Reported usage includes decision and empty replies;
   unreported timeout billing remains unknown and held; frozen per-attempt quotes
   prevent resumed tariff changes from repricing old tokens. Automatic provider
-  reconciliation and real vendor invoice evidence remain gaps.
+  reconciliation and real vendor invoice evidence remain gaps. Model circuit
+  admission is not a claim of current inference health; web time budgets include
+  waiting and process downtime.
 - Durable-runtime backup/readback is locally verified only; retained-data
   migration and production recovery remain unverified.
 - MCP execution, output provenance, approvals, skill trust, secrets, and audit

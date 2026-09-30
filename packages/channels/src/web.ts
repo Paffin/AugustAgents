@@ -77,6 +77,7 @@ export const WEB_HTML = `<!doctype html>
   .task-reply { max-height:240px; overflow:auto; padding:12px 0; border-top:1px solid var(--line); }
   .billing-warning { color:var(--warn); padding:12px 0; }
   #audit-status { color:var(--warn); font-size:13px; margin:0; padding:8px 24px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+  #provider-status { overflow-wrap:anywhere; }
   .receipt-form { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
   .receipt-form label { display:block; font-size:13px; }
   .receipt-form input[type=number] { display:block; width:100%; min-width:0; margin-top:4px; }
@@ -119,6 +120,7 @@ export const WEB_HTML = `<!doctype html>
 <details class="credentials" id="tasks" name="owner-controls" hidden><summary>Tasks</summary>
 <section class="task-panel" aria-label="Recent task controls">
 <h2>Recent work</h2>
+<p id="provider-status" class="muted" role="status" aria-live="polite">Provider circuit status is being checked.</p>
 <p class="muted">Latest 20 tasks in this browser session. Stops wait for a safe boundary and do not undo calls already started. Cost is based on your configured estimate, not a vendor bill.</p>
 <button id="task-refresh" type="button" disabled>Refresh tasks</button>
 <p id="task-status" class="muted" role="status" aria-live="polite">Connect to view tasks.</p>
@@ -129,6 +131,8 @@ export const WEB_HTML = `<!doctype html>
 <section class="budgets" aria-label="Optional task limits">
 <label for="token-budget">Token limit<input id="token-budget" inputmode="numeric" placeholder="Default"></label>
 <label for="money-budget">Cost stop threshold (USD estimate)<input id="money-budget" inputmode="decimal" placeholder="Default"></label>
+<label for="time-budget">Time limit (seconds)<input id="time-budget" inputmode="numeric" placeholder="Runtime default" aria-describedby="time-budget-help"></label>
+<p class="muted" id="time-budget-help">Waiting and restart downtime count toward the time limit. Recovery does not reset it.</p>
 </section>
 <form id="form"><label class="sr" for="text">Message to August</label><textarea id="text" rows="2" autocomplete="off" placeholder="Describe a task or ask a question…" aria-describedby="composer-help"></textarea><button type="submit" id="send">Send</button></form>
 <p class="composer-note" id="composer-help">Enter to send · Shift + Enter for a new line. Verify important results.</p>
@@ -177,6 +181,17 @@ export const WEB_JS = `(() => {
     } catch { status.hidden = false; status.textContent = "Audit status unavailable; independent integrity is not established."; }
   }
   setInterval(() => { void loadAudit(); }, 5000);
+  async function loadProviders() {
+    if (!token || !connected) return;
+    const status = document.getElementById("provider-status");
+    try {
+      const response = await fetch("/v1/providers", { headers: headers() }), body = await response.json();
+      if (!response.ok || !Array.isArray(body.providers) || body.providers.some(p => typeof p.provider !== "string" || !["closed","open","half-open"].includes(p.state))) throw new Error();
+      status.title = body.providers.map(p => p.provider).join("; ");
+      status.textContent = body.providers.length ? "Provider admission (not a live health guarantee): " + body.providers.map(p => p.provider.replace(/#[0-9a-f]{32}$/, "") + " · " + p.state + (Number.isSafeInteger(p.retryAt) ? " · next probe " + new Date(p.retryAt).toLocaleTimeString() : "")).join("; ") : "Provider health is unavailable for this adapter.";
+    } catch { status.textContent = "Provider circuit status unavailable; availability is not established."; }
+  }
+  setInterval(() => { void loadProviders(); }, 5000);
   async function verifyConnection() {
     if (!token) return;
     try { const r = await fetch("/v1/runs?channel=" + who.channel + "&user=" + who.user + "&limit=1", { headers: headers() });
@@ -184,7 +199,7 @@ export const WEB_JS = `(() => {
       const ready = r.ok && Array.isArray(body.runs);
       connectionState(ready, ready ? "Runtime connected" : "Connection unavailable");
       hint.textContent = ready ? "Connected to your local runtime." : "Check the gateway and reopen its connection link.";
-      if (ready) void loadAudit();
+      if (ready) { void loadAudit(); void loadProviders(); }
     } catch { connectionState(false, "Runtime unreachable"); hint.textContent = "Start your gateway, then reload this page."; }
   }
   verifyConnection();
@@ -254,13 +269,18 @@ export const WEB_JS = `(() => {
       for (const run of body.runs) {
         const item = document.createElement("li"), title = document.createElement("p"), metrics = document.createElement("p"), request = document.createElement("p");
         title.className = "task-title"; const state = document.createElement("span"), id = document.createElement("span"); state.className = "task-state"; state.textContent = run.state.replaceAll("_", " "); id.className = "task-id"; id.textContent = run.id; title.append(state, id); metrics.className = "muted";
-        metrics.textContent = run.steps + "/" + run.budget.maxSteps + " steps · " + run.usage.totalTokens + "/" + run.budget.maxTokens + " tokens (" + run.usage.inputTokens + " in / " + run.usage.outputTokens + " out) · USD " + usd(run.usage.costMicros) + "/" + usd(run.budget.maxCostMicros) + " estimate";
+        metrics.textContent = run.steps + "/" + run.budget.maxSteps + " steps · " + run.usage.totalTokens + "/" + run.budget.maxTokens + " recorded tokens (" + run.usage.inputTokens + " in / " + run.usage.outputTokens + " out) · USD " + usd(run.usage.costMicros) + "/" + usd(run.budget.maxCostMicros) + " estimate";
         request.className = "task-request"; request.textContent = run.request.slice(0, 600); item.append(title, request, metrics);
         if (run.reply) { const reply = document.createElement("p"); reply.className = "task-reply"; reply.textContent = run.reply; item.appendChild(reply); }
         if (run.accounting?.unresolvedCalls) {
           const warning = document.createElement("p"); warning.className = "billing-warning";
           warning.textContent = "Usage receipt pending for " + run.accounting.unresolvedCalls + " call(s). Held allowance: " + run.accounting.reservedTokens + " tokens / USD " + usd(run.accounting.reservedCostMicros) + ". This is a hold, not a bill or proof of zero charge." + (run.accounting.unknownCalls || !["created","running","waiting_approval","waiting_external","verifying"].includes(run.state) ? " Further generation needs reconciliation." : " Generation is in progress; the receipt will settle this hold.");
           item.appendChild(warning);
+          for (const attempt of run.unresolvedAttempts || []) if (attempt.state === "unknown") {
+            const estimate = document.createElement("p"); estimate.className = "billing-warning";
+            estimate.textContent = (attempt.failure === "timeout" ? "Timed out call: " : "Interrupted call: ") + "estimated upper-bound allowance exposure " + attempt.reservedTokens + " tokens / USD " + usd(attempt.reservedCostMicros) + " is held. Billing is unknown; this estimate is not a usage receipt or a settled charge.";
+            item.appendChild(estimate);
+          }
           if (!["created","running","waiting_approval","waiting_external","verifying"].includes(run.state)) for (const attempt of run.unresolvedAttempts || []) addReconciliation(item, attempt);
         }
         if (run.accounting?.ownerReceipts) { const manual = document.createElement("p"); manual.className = "muted"; manual.textContent = "Includes " + run.accounting.ownerReceipts + " owner-reconciled estimate(s), not provider receipts."; item.appendChild(manual); }
@@ -385,6 +405,12 @@ export const WEB_JS = `(() => {
     const budget = {};
     const tokens = document.getElementById("token-budget").value.trim();
     const dollars = document.getElementById("money-budget").value.trim().replace(",", ".");
+    const seconds = document.getElementById("time-budget").value.trim();
+    if (seconds) {
+      const wallMs = Number(seconds) * 1000;
+      if (!/^[0-9]+$/.test(seconds) || !Number.isSafeInteger(wallMs) || wallMs < 1000) { add("Enter a positive whole time limit in seconds."); return; }
+      budget.maxWallMs = wallMs;
+    }
     if (tokens) {
       const value = Number(tokens);
       if (!/^[0-9]+$/.test(tokens) || !Number.isSafeInteger(value) || value < 1) { add("Enter a positive whole token limit."); return; }

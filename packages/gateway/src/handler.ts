@@ -59,7 +59,7 @@ export interface GatewayRunView {
   id: string; state: RunState; request: string; steps: number; usage: RunUsage;
   budget: RunBudget; canResume: boolean; reply?: string; feedbackId?: string; feedbackRecorded?: boolean; updatedAt: number;
   accounting?: import("@august/core").ModelAccounting;
-  unresolvedAttempts?: Array<Pick<import("@august/core").ModelAttempt, "id" | "provider" | "model" | "state" | "quote" | "reservedTokens" | "reservedCostMicros">>;
+  unresolvedAttempts?: Array<Pick<import("@august/core").ModelAttempt, "id" | "provider" | "model" | "state" | "quote" | "reservedTokens" | "reservedCostMicros" | "failure">>;
 }
 export interface GatewayRuns {
   list(session: SessionKey, limit: number): readonly GatewayRunView[];
@@ -83,6 +83,7 @@ export interface GatewayOptions extends BindConfig {
   runs?: GatewayRuns;
   /** Owner-only status; never includes endpoint credentials or journal contents. */
   audit?: () => { state: "not-configured" | "pending" | "published" | "unavailable" | "conflict"; anchoredThrough: number; localThrough: number; checkedAt?: number };
+  providerHealth?: () => Array<{ provider: string; state: "closed" | "open" | "half-open"; failures: number; retryAt?: number }>;
 }
 
 function json(status: number, body: unknown): Response {
@@ -169,6 +170,11 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       if (!options.audit) return json(404, { error: "audit status unavailable" });
       try { return json(200, options.audit()); }
       catch { return json(503, { error: "audit status unavailable" }); }
+    }
+    if (url.pathname === "/v1/providers" && request.method === "GET") {
+      if (!options.providerHealth) return json(404, { error: "provider status unavailable" });
+      try { return json(200, { providers: options.providerHealth() }); }
+      catch { return json(503, { error: "provider status unavailable" }); }
     }
     if (url.pathname === "/v1/runs" && request.method === "GET") {
       if (!options.runs) return json(404, { error: "run controls unavailable" });

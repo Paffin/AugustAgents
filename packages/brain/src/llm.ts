@@ -27,7 +27,7 @@ export interface LlmProvider {
 }
 
 export class LlmError extends Error {
-  constructor(message: string, public readonly retryable = false) {
+  constructor(message: string, public readonly retryable = false, public readonly retryAfterMs?: number) {
     super(message);
     this.name = "LlmError";
   }
@@ -37,6 +37,10 @@ export class LlmUsageError extends LlmError {
   constructor(message: string) { super(message, false); this.name = "LlmUsageError"; }
 }
 
+export class LlmProvidersUnavailableError extends LlmError {
+  constructor(failures: readonly string[], readonly retryAt: number) { super(`all providers failed: ${failures.join("; ")}`, true); }
+}
+
 export class LlmUsageObserverError extends Error {
   constructor(public readonly observerCause: unknown) { const name = observerCause instanceof Error ? observerCause.name : typeof observerCause; super(`LLM usage observer failed (${name})`); this.name = "LlmUsageObserverError"; }
 }
@@ -44,7 +48,7 @@ export class LlmAttemptObserverError extends Error {
   constructor(public readonly observerCause: unknown) { super("Model attempt persistence failed"); this.name = "LlmAttemptObserverError"; }
 }
 async function notifyAttempt(options: CompleteOptions, event: LlmAttemptEvent): Promise<void> {
-  try { await options.onAttempt?.(event); } catch (error) { throw new LlmAttemptObserverError(error); }
+  try { await options.onAttempt?.(event); } catch (error) { if (error instanceof LlmUsageError) throw error; throw new LlmAttemptObserverError(error); }
 }
 async function invokeProvider(provider: LlmProvider, messages: readonly ChatMessage[], options: CompleteOptions): Promise<string> {
   if (provider.managesAttempts || !options.onAttempt) return provider.complete(messages, options);
@@ -56,7 +60,7 @@ async function invokeProvider(provider: LlmProvider, messages: readonly ChatMess
     options.signal?.throwIfAborted();
     const text = await provider.complete(messages, { ...options, onAttempt: undefined, onUsage: async usage => {
       await notifyAttempt(options, { type: "receipt", id, usage }); reported = true;
-      try { await options.onUsage?.(usage); } catch (error) { throw error instanceof LlmUsageObserverError ? error : new LlmUsageObserverError(error); }
+      try { await options.onUsage?.(usage); } catch (error) { throw error instanceof LlmUsageObserverError || error instanceof LlmUsageError ? error : new LlmUsageObserverError(error); }
     } });
     if (options.requireUsage && !reported) throw new LlmUsageError(`${provider.name}: response had no usage`);
     if (!reported) await notifyAttempt(options, { type: "failed", id, outcome: "unknown", reason: "invalid_response" });
@@ -85,10 +89,29 @@ export class UsageRequiredProvider implements LlmProvider {
   constructor(private readonly inner: LlmProvider) { this.name = inner.name; }
   async complete(messages: readonly ChatMessage[], options: CompleteOptions = {}): Promise<string> {
     const maxTokens = callLimit(options);
-    let reports = 0; let observerError: LlmUsageObserverError | undefined;
-    const text = await invokeProvider(this.inner, messages, { ...options, maxTokens, requireUsage: true, onUsage: async (usage) => { reports += 1; if (reports === 1) { try { await options.onUsage?.(usage); } catch (error) { observerError = new LlmUsageObserverError(error); throw observerError; } } } });
+    let reports = 0, receipt: string | undefined, usageError: LlmUsageError | undefined;
+    const receipts = new Set<string>(); let observerError: LlmUsageObserverError | undefined;
+    const text = await invokeProvider(this.inner, messages, { ...options, maxTokens, requireUsage: true,
+      beforeCall: () => { if (usageError) throw usageError; if (observerError) throw observerError; options.beforeCall?.(); },
+      onAttempt: async event => {
+        if (usageError) throw usageError;
+        if (observerError) throw observerError;
+        if (event.type === "receipt") {
+          if (receipts.has(event.id)) { usageError = new LlmUsageError(`${this.name}: duplicate usage receipt for one attempt`); throw usageError; }
+          receipts.add(event.id); receipt = event.id;
+        }
+        await options.onAttempt?.(event);
+      },
+      onUsage: async usage => {
+        reports += 1;
+        if (!receipt) { usageError = new LlmUsageError(`${this.name}: usage report has no distinct pending receipt`); throw usageError; }
+        receipt = undefined;
+        try { await options.onUsage?.(usage); } catch (error) { observerError = new LlmUsageObserverError(error); throw observerError; }
+      },
+    });
+    if (usageError) throw usageError;
     if (observerError) throw observerError;
-    if (reports !== 1) throw new LlmUsageError(`${this.name}: response reported usage ${reports} times`);
+    if (!reports || receipt) throw new LlmUsageError(`${this.name}: usage must have one report per distinct attempt`);
     return text;
   }
 }
@@ -125,7 +148,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         return await this.once(messages, opts);
       } catch (error) {
         lastError = error;
-        if (!(error instanceof LlmError) || !error.retryable || attempt === retries) break;
+        if (!(error instanceof LlmError) || !error.retryable || attempt === retries || (error.retryAfterMs ?? 0) > 0) break;
         opts.signal?.throwIfAborted();
         await this.retryDelay(250 * 2 ** attempt, opts.signal);
       }
@@ -186,7 +209,10 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     }
     if (!response.ok) {
       const retryable = response.status === 429 || response.status >= 500;
-      throw new LlmError(`${this.name}: HTTP ${response.status}`, retryable);
+      const header = response.headers.get("retry-after");
+      const delay = header === null ? undefined : /^\d+$/.test(header.trim()) ? Number(header) * 1000 : Date.parse(header) - Date.now();
+      const retryAfterMs = delay !== undefined && Number.isSafeInteger(delay) && delay >= 0 ? delay : undefined;
+      throw new LlmError(`${this.name}: HTTP ${response.status}`, retryable, retryAfterMs);
     }
     const json = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown } };
     const content = json.choices?.[0]?.message?.content;
@@ -217,30 +243,86 @@ function parseUsage(value: unknown): LlmUsage | undefined {
 }
 
 /** Tries providers in order; the first one that answers wins. */
+export interface ProviderCircuitState { failures: number; retryAt: number }
+export interface ProviderCircuits {
+  load(): Record<string, ProviderCircuitState>;
+  save(states: Record<string, ProviderCircuitState>): void;
+}
 export class FallbackProvider implements LlmProvider {
   readonly name: string;
   readonly managesAttempts = true;
+  private readonly circuits = new Map<LlmProvider, ProviderCircuitState & { probing?: boolean }>();
+  private readonly cooldownMs: number;
+  private readonly maxCooldownMs: number;
+  private readonly now: () => number;
+  private hydrated = false;
 
-  constructor(private readonly providers: readonly LlmProvider[]) {
+  constructor(private readonly providers: readonly LlmProvider[], private readonly options: { cooldownMs?: number; maxCooldownMs?: number; now?: () => number; circuits?: ProviderCircuits } = {}) {
     if (providers.length === 0) throw new Error("FallbackProvider needs at least one provider");
+    this.cooldownMs = options.cooldownMs ?? 30_000;
+    this.maxCooldownMs = options.maxCooldownMs ?? Math.max(this.cooldownMs, 30 * 60_000);
+    if (!Number.isSafeInteger(this.cooldownMs) || this.cooldownMs < 0) throw new Error("provider cooldown must be a non-negative integer");
+    if (!Number.isSafeInteger(this.maxCooldownMs) || this.maxCooldownMs < this.cooldownMs) throw new Error("maximum provider cooldown must be at least the initial cooldown");
+    this.now = options.now ?? Date.now;
     this.name = providers.map((p) => p.name).join(" -> ");
+  }
+
+  private hydrate(): void {
+    if (this.hydrated) return;
+    try {
+      const saved = this.options.circuits?.load() ?? {};
+      for (const provider of this.providers) {
+        const state = Object.hasOwn(saved, provider.name) ? saved[provider.name] : undefined;
+        if (state) {
+          if (!Number.isSafeInteger(state.failures) || state.failures < 1 || !Number.isSafeInteger(state.retryAt) || state.retryAt < 0) throw new Error("invalid provider circuit state");
+          this.circuits.set(provider, { failures: state.failures, retryAt: state.retryAt });
+        }
+      }
+      this.hydrated = true;
+    } catch (error) { throw new LlmAttemptObserverError(error); }
+  }
+
+  private persist(): void {
+    try { this.options.circuits?.save(Object.fromEntries([...this.circuits].map(([provider, state]) => [provider.name, { failures: state.failures, retryAt: state.retryAt }]))); }
+    catch (error) { throw new LlmAttemptObserverError(error); }
+  }
+
+  health(): Array<{ provider: string; state: "closed" | "open" | "half-open"; failures: number; retryAt?: number }> {
+    this.hydrate();
+    return this.providers.map(provider => {
+      const circuit = this.circuits.get(provider);
+      return { provider: provider.name, state: !circuit ? "closed" : circuit.retryAt > this.now() ? "open" : "half-open", failures: circuit?.failures ?? 0, ...(circuit ? { retryAt: circuit.retryAt } : {}) };
+    });
   }
 
   async complete(messages: readonly ChatMessage[], options?: CompleteOptions): Promise<string> {
     const failures: string[] = [];
+    this.hydrate();
     for (const provider of this.providers) {
       callLimit(options ?? {});
+      const circuit = this.circuits.get(provider);
+      if (circuit && (circuit.retryAt > this.now() || circuit.probing)) { failures.push(`${provider.name}: ${circuit.probing ? "recovery probe in progress" : "cooling down"}`); continue; }
+      if (circuit) circuit.probing = true;
       try {
-        return await invokeProvider(provider, messages, options ?? {});
+        const response = await invokeProvider(provider, messages, options ?? {});
+        this.circuits.delete(provider); this.persist();
+        return response;
       } catch (error) {
+        if (circuit) delete circuit.probing;
         if (error instanceof LlmAttemptObserverError || error instanceof LlmUsageObserverError || error instanceof LlmUsageError) throw error;
         options?.signal?.throwIfAborted();
         if (options?.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw error;
+        const failureCount = Math.min(Number.MAX_SAFE_INTEGER, (circuit?.failures ?? 0) + 1);
+        const backoff = Math.min(this.maxCooldownMs, this.cooldownMs * 2 ** Math.min(failureCount - 1, 52));
+        const delay = Math.max(backoff, error instanceof LlmError ? error.retryAfterMs ?? 0 : 0);
+        const retryAt = this.now() + delay;
+        if (!Number.isSafeInteger(retryAt)) throw new LlmError("provider Retry-After exceeds the supported clock range");
+        this.circuits.set(provider, { failures: failureCount, retryAt }); this.persist();
         options?.beforeCall?.();
         failures.push(`${provider.name}: ${(error as Error).message}`);
       }
     }
-    throw new LlmError(`all providers failed: ${failures.join("; ")}`);
+    throw new LlmProvidersUnavailableError(failures, Math.min(...this.providers.map(provider => { const state = this.circuits.get(provider); return state?.probing ? this.now() + this.cooldownMs : state?.retryAt ?? this.now(); })));
   }
 }
 

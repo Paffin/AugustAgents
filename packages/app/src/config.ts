@@ -8,13 +8,7 @@ export interface AugustConfig {
   workspace: string;
   /** The only folder the built-in file tools may touch. */
   root: string;
-  llm: {
-    baseUrl: string;
-    model: string;
-    /** Name of the environment variable that holds the key. The key itself is never written to disk. */
-    apiKeyEnv?: string;
-    pricing?: LlmPricing;
-  };
+  llm: LlmConnection & { backup?: LlmConnection; cooldownMs?: number; maxCooldownMs?: number };
   gateway: { port: number; token: string };
   /** Where the event journal and the decision log live. */
   dataDir: string;
@@ -44,6 +38,16 @@ export interface MemoryConfig {
   episodicDays?: number;
   /** Put the memories that match a request in front of the model as trusted notes. Default on. */
   recall?: boolean;
+}
+
+export interface LlmConnection {
+  baseUrl: string;
+  model: string;
+  /** Secret reference only; no key value is stored in config. */
+  apiKeyEnv?: string;
+  pricing?: LlmPricing;
+  timeoutMs?: number;
+  retries?: number;
 }
 
 export interface LlmPricing { inputMicrosPerMillion: number; outputMicrosPerMillion: number; source: string; asOf: string }
@@ -168,24 +172,13 @@ export function parseConfig(value: unknown): AugustConfig {
   if (!/^[A-Za-z0-9_.@-]+$/.test(workspace)) throw new ConfigError("workspace may only use letters, digits and _.@-");
   const root = str(c.root, "root");
   const dataDir = str(c.dataDir, "dataDir");
-  const baseUrl = str(c.llm?.baseUrl, "llm.baseUrl");
-  if (typeof c.llm?.model !== "string") throw new ConfigError("llm.model must be a string; choose a model with august setup");
-  const model = c.llm.model;
-
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    throw new ConfigError("llm.baseUrl is not a valid URL");
-  }
-  // A key sent over plain http to a remote host can be read by anyone on the path.
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalUrl(url))) {
-    throw new ConfigError("llm.baseUrl must use https (http is allowed only for localhost)");
-  }
-  if (url.username || url.password || url.search || url.hash) throw new ConfigError("llm.baseUrl must be a base address without credentials, query or fragment");
-  if (c.llm?.apiKeyEnv !== undefined && !/^[A-Z_][A-Z0-9_]*$/.test(c.llm.apiKeyEnv)) {
-    throw new ConfigError("llm.apiKeyEnv must be an environment variable name, not the key itself");
-  }
+  const primary = parseLlmConnection(c.llm, "llm");
+  const backup = c.llm?.backup === undefined ? undefined : parseLlmConnection(c.llm.backup, "llm.backup");
+  if (backup && !backup.model.trim()) throw new ConfigError("llm.backup.model must be selected explicitly");
+  const cooldownMs = c.llm?.cooldownMs;
+  if (cooldownMs !== undefined && (!Number.isSafeInteger(cooldownMs) || cooldownMs < 0 || cooldownMs > 3_600_000)) throw new ConfigError("llm.cooldownMs must be 0-3600000");
+  const maxCooldownMs = c.llm?.maxCooldownMs;
+  if (maxCooldownMs !== undefined && (!Number.isSafeInteger(maxCooldownMs) || maxCooldownMs < (cooldownMs ?? 30_000) || maxCooldownMs > 86_400_000)) throw new ConfigError("llm.maxCooldownMs must be at least the initial cooldown and at most 86400000");
 
   const port = c.gateway?.port;
   if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65535) throw new ConfigError("gateway.port must be 1-65535");
@@ -209,9 +202,23 @@ export function parseConfig(value: unknown): AugustConfig {
     ...(c.memory === undefined ? {} : { memory: parseMemory(c.memory) }),
     ...(c.auditExternal === undefined ? {} : { auditExternal: parseAuditExternal(c.auditExternal) }),
     channels: parseChannels(c.channels),
-    llm: { baseUrl, model, apiKeyEnv: c.llm?.apiKeyEnv, pricing: parsePricing(c.llm?.pricing) },
+    llm: { ...primary, ...(backup ? { backup } : {}), ...(cooldownMs === undefined ? {} : { cooldownMs }), ...(maxCooldownMs === undefined ? {} : { maxCooldownMs }) },
     gateway: { port: port as number, token },
   };
+}
+
+function parseLlmConnection(value: unknown, where: string): LlmConnection {
+  const c = value as Partial<LlmConnection> | null;
+  if (!c || typeof c !== "object" || Array.isArray(c) || typeof c.baseUrl !== "string" || !c.baseUrl) throw new ConfigError(`${where}.baseUrl must be a non-empty string`);
+  if (typeof c.model !== "string") throw new ConfigError(`${where}.model must be a string; choose a model with august setup`);
+  let url: URL;
+  try { url = new URL(c.baseUrl); } catch { throw new ConfigError(`${where}.baseUrl is not a valid URL`); }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalUrl(url))) throw new ConfigError(`${where}.baseUrl must use https (http is allowed only for localhost)`);
+  if (url.username || url.password || url.search || url.hash) throw new ConfigError(`${where}.baseUrl must be a base address without credentials, query or fragment`);
+  if (c.apiKeyEnv !== undefined && (typeof c.apiKeyEnv !== "string" || !/^[A-Z_][A-Z0-9_]*$/.test(c.apiKeyEnv))) throw new ConfigError(`${where}.apiKeyEnv must be an environment variable name, not the key itself`);
+  if (c.timeoutMs !== undefined && (!Number.isSafeInteger(c.timeoutMs) || c.timeoutMs < 1 || c.timeoutMs > 3_600_000)) throw new ConfigError(`${where}.timeoutMs must be 1-3600000`);
+  if (c.retries !== undefined && (!Number.isInteger(c.retries) || c.retries < 0 || c.retries > 4)) throw new ConfigError(`${where}.retries must be 0-4`);
+  return { baseUrl: c.baseUrl, model: c.model, apiKeyEnv: c.apiKeyEnv, pricing: parsePricing(c.pricing), ...(c.timeoutMs === undefined ? {} : { timeoutMs: c.timeoutMs }), ...(c.retries === undefined ? {} : { retries: c.retries }) };
 }
 
 function parseAuditExternal(value: unknown): NonNullable<AugustConfig["auditExternal"]> {

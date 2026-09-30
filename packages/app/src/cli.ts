@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import type { ApprovalRequest, Approver } from "@august/agent";
 import { DecisionCascade, HeuristicEngine, NativeLayaTransport, nativeLayaIdentity } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
-import { LaneQueue, RuntimeOwnerInUseError, makeSessionKey, type DurableRun } from "@august/core";
+import { DurableRuntimeStore, LaneQueue, RuntimeOwnerInUseError, makeSessionKey, type DurableRun } from "@august/core";
 import { startGateway, type GatewayRunView, type RunningGateway } from "@august/gateway";
 import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/memory";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
@@ -356,11 +356,12 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
 function runView(app: App, run: DurableRun): GatewayRunView {
     const feedbackId = run.state === "completed" ? app.learning.latestSegmentId(run.id) : undefined;
     const accounting = app.runs.modelAccounting(run.id);
+    const providerWait = run.error === "provider-unavailable" && run.checkpoint?.providerRetryAt !== undefined;
     return { id: run.id, state: run.state, request: run.request,
-    accounting, unresolvedAttempts: app.runs.modelAttempts(run.id, true).map(({id,provider,model,state,quote,reservedTokens,reservedCostMicros}) => ({id,provider,model,state,quote,reservedTokens,reservedCostMicros})),
+    accounting, unresolvedAttempts: app.runs.modelAttempts(run.id, true).map(({id,provider,model,state,quote,reservedTokens,reservedCostMicros,failure}) => ({id,provider,model,state,quote,reservedTokens,reservedCostMicros,failure})),
     feedbackId, feedbackRecorded: feedbackId ? app.learning.hasOwnerFeedback(feedbackId) : false,
-    steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) ? run.reply : undefined, updatedAt: run.updatedAt,
-    canResume: !accounting.unresolvedCalls && ["paused", "recovering"].includes(run.state) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
+    steps: run.steps, usage: run.usage, budget: run.budget, reply: ["paused", "completed", "failed", "cancelled"].includes(run.state) || providerWait ? run.reply : undefined, updatedAt: run.updatedAt,
+    canResume: !accounting.unresolvedCalls && (["paused", "recovering"].includes(run.state) || (run.state === "waiting_external" && providerWait)) && (!providerWait || Date.now() >= run.checkpoint!.providerRetryAt!) && run.checkpoint?.safeToResume === true && run.checkpoint.phase !== "tool_started" && Boolean(run.checkpoint.taint && run.checkpoint.loop) && run.checkpoint.steps !== undefined && run.checkpoint.externalEffects !== undefined,
   }; }
 
 async function serve(configPath: string, io: CliIo): Promise<CliResult> {
@@ -391,6 +392,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     workspace: config.workspace,
     queue,
     audit: () => app.audit.externalStatus(),
+    providerHealth: () => app.providerHealth(),
     // Telegram answers only through Telegram: a browser token must not be able to answer its approvals.
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
@@ -467,7 +469,22 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     }
   }
 
+  // Only this transport's safe model waits auto-resume; ambiguous effects and owner-paused work never do.
+  let closing = false;
+  const recoveringProviders = new Set<string>();
+  const providerTimer = setInterval(() => {
+    if (closing) return;
+    for (const run of app.listRuns({ states: ["waiting_external", "recovering"], limit: 100 })) {
+      if (run.session.split(":")[1] !== "web" || run.error !== "provider-unavailable" || run.checkpoint?.providerRetryAt === undefined || !runView(app, run).canResume || recoveringProviders.has(run.id)) continue;
+      recoveringProviders.add(run.id);
+      void queue.enqueue(run.session, async () => { if (!closing) await app.resumeRun(run.id, approvals.approverFor(() => {})); })
+        .catch(() => { if (!closing) io.print("Provider recovery did not complete; inspect the task's retained state."); })
+        .finally(() => recoveringProviders.delete(run.id));
+    }
+  }, 1000);
+  providerTimer.unref();
   const stop = () => {
+    closing = true; clearInterval(providerTimer);
     telegram?.stop();
     inner.stop();
     app.close();
@@ -880,9 +897,37 @@ async function doctor(configPath: string, io: CliIo): Promise<CliResult> {
   }
 
   const keyName = config.llm.apiKeyEnv;
-  const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(config.llm.baseUrl).hostname);
-  if (keyName && !local && !resolveSecret(keyName, store, io.env)) bad(`No key for the model: august secret set ${keyName}`);
+  if (keyName && !resolveSecret(keyName, store, io.env)) bad(`No key for the model: august secret set ${keyName}`);
   else ok(`Model: ${config.llm.model} at ${new URL(config.llm.baseUrl).host}`);
+  if (config.llm.backup) {
+    const backup = config.llm.backup;
+    if (backup.apiKeyEnv && !resolveSecret(backup.apiKeyEnv, store, io.env)) bad(`Backup credential missing: august secret set ${backup.apiKeyEnv}`);
+    else ok(`Backup: ${backup.model} at ${new URL(backup.baseUrl).host}`);
+    if (!backup.pricing) bad("Backup pricing missing: configure its own quote or explicit zero");
+  }
+  if (!config.llm.model.trim()) bad("No model selected: august setup");
+  if (!config.llm.pricing) bad("Model pricing missing: configure an owner quote or explicit zero");
+  // A catalog probe is read-only reachability evidence, not a generation or inference-quality claim.
+  if (!io.llm) await Promise.all([config.llm, ...(config.llm.backup ? [config.llm.backup] : [])].map(async (connection, i) => {
+    const label = i === 0 ? "Primary" : "Backup", key = connection.apiKeyEnv ? resolveSecret(connection.apiKeyEnv, store, io.env) : undefined;
+    if (connection.apiKeyEnv && !key) return;
+    try {
+      const response = await (io.fetch ?? fetch)(`${connection.baseUrl.replace(/\/+$/, "")}/models`, { headers: key ? { authorization: `Bearer ${key}` } : {}, redirect: "error", signal: AbortSignal.timeout(3000) });
+      if (response.status === 404 || response.status === 405) warn(`${label} catalog unsupported; inference availability is not established`);
+      else if (!response.ok) bad(`${label} catalog returned HTTP ${response.status}; check endpoint access`);
+      else { await response.body?.cancel(); ok(`${label} endpoint catalog reachable; inference was not probed`); }
+    } catch { bad(`${label} endpoint is unreachable; no generation was sent`); }
+  }));
+  const runtimePath = join(config.dataDir, "runtime.db");
+  if (existsSync(runtimePath)) {
+    let runtime: DurableRuntimeStore | undefined;
+    try {
+      runtime = new DurableRuntimeStore(runtimePath, { readOnly: true });
+      const states = runtime.providerCircuits();
+      for (const [name, circuit] of Object.entries(states)) warn(`Provider ${name}: ${circuit.retryAt > Date.now() ? "open" : "half-open"}, ${circuit.failures} failure(s), next probe after ${new Date(circuit.retryAt).toISOString()}`);
+    } catch { warn("Provider circuit inspection unavailable; use a stopped, checkpointed runtime snapshot"); }
+    finally { runtime?.close(); }
+  }
 
   const sandbox = io.sandboxKind ?? detectSandbox();
   if (sandbox === "none") warn(`No sandbox for MCP servers (${process.platform === "linux" ? "install bubblewrap" : "unsupported here"}); servers run with your rights`);

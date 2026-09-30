@@ -250,6 +250,27 @@ evidence and outstanding Windows portability gaps belong in `VERIFICATION.md`.
 
 ## Integration Shape
 
+### Configured provider degradation, 2026-09-30
+
+`app/providers` composes the configured primary/optional backup and each owner's
+quote. Endpoint/model-derived identities prevent alias/path changes from sharing
+circuit state. `brain/FallbackProvider` owns closed/open/half-open admission,
+bounded exponential cooldown, Retry-After and one recovery probe; `app` persists
+failure/retry snapshots through the existing runtime metadata adapter. No new
+database, schema migration, provider-name preset or tariff table is introduced.
+Transport/usage persistence errors are fatal before another provider is selected.
+The usage wrapper handles one receipt per actual attempt, including a charged
+empty primary followed by a valid backup, without accepting duplicates.
+
+Complete safe checkpoints carry providerRetryAt. A confirmed all-provider refusal
+becomes durable waiting_external rather than a terminal model failure. The web
+transport resumes eligible waits through its existing per-session LaneQueue;
+pause/cancel, unknown billing and ambiguous effects never enter that path. Unknown
+usage may retain a safe owner-reconcilable pause. Time limits are not reset by
+recovery. Circuit status and catalog reachability are separate from inference
+health/quality. Other-channel automation and provider-specific invoice/usage
+reconciliation remain unqualified.
+
 ### External audit adapter, 2026-09-30
 
 `core` owns signed anchor verification, bounded HTTP transport and idempotent

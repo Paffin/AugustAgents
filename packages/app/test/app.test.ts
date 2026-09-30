@@ -360,9 +360,24 @@ describe("createApp", () => {
     app.close();
   });
 
-  test("Safety/reliability invariant: provider failures persist as failed runs", async () => {
+  test("Safety/reliability invariant: unknown provider billing retains a safe pause blocked until reconciliation", async () => {
     const home = tmp(); const app = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: { name: "broken", complete: async () => { throw new Error("offline"); } } });
-    const reply = await app.handle(runtimeSession, "hello"); expect(reply.stopReason).toBe("billing-unknown"); expect(app.getRun(reply.runId)).toMatchObject({ state: "failed", reply: reply.reply }); expect(app.runs.modelAccounting(reply.runId).unresolvedCalls).toBe(1); expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant"]); app.close();
+    const reply = await app.handle(runtimeSession, "hello"); expect(reply.stopReason).toBe("billing-unknown"); expect(app.getRun(reply.runId)).toMatchObject({ state: "paused", reply: reply.reply }); expect(app.runs.modelAccounting(reply.runId).unresolvedCalls).toBe(1); expect(app.runs.messages(runtimeSession).map((m) => m.role)).toEqual(["user", "assistant"]);
+    await expect(app.resumeRun(reply.runId)).rejects.toThrow("resolve safety/billing first"); app.close();
+    const resumed = createApp(defaultConfig(home), { env: { OPENAI_API_KEY: "k" }, llm: scriptedLlm({ tool: "none", args: {}, reply: "continued after owned fixture reconciliation" }) });
+    expect(resumed.getRun(reply.runId)?.state).toBe("paused");
+    const attempt = resumed.runs.modelAttempts(reply.runId, true)[0]!;
+    resumed.runs.reportModelAttempt(attempt.id, { inputTokens: 23, outputTokens: 11, totalTokens: 34 }, "owner");
+    const done = await resumed.resumeRun(reply.runId); expect(done.runId).toBe(reply.runId); expect(resumed.getRun(reply.runId)?.state).toBe("completed");
+    expect(resumed.runs.modelAccounting(reply.runId).ownerReceipts).toBe(1); resumed.close();
+  });
+
+  test("Safety/reliability invariant: pausing recovery cannot launder an ambiguous started effect",async()=>{
+    const home=tmp();let calls=0;
+    const app=createApp(defaultConfig(home),{env:{OPENAI_API_KEY:"k"},llm:{name:"must-not-run",complete:async()=>{calls++;return "no";}}});
+    const run=app.runs.startRun({session:runtimeSession,request:"owned ambiguous effect regression"}).run;
+    app.runs.transition(run.id,"running");app.runs.checkpoint(run.id,{phase:"tool_started",safeToResume:false,history:[],steps:0,externalEffects:1});app.runs.transition(run.id,"recovering");
+    expect((await app.pauseRun(run.id)).state).toBe("paused");await expect(app.resumeRun(run.id)).rejects.toThrow("resolve safety/billing first");expect(calls).toBe(0);app.close();
   });
 
   test("Safety/reliability invariant: token and cost exhaustion stop before another model or tool call", async () => {

@@ -23,11 +23,15 @@
 - **Model attempt:** one recorded generation request, with its own identity and
   tariff snapshot; a transport-aware adapter separates each actual retry.
 - **Billing hold:** reserved allowance while an attempt's usage is unresolved;
-  neither a received charge nor evidence that the call was free.
+  a conservative estimated upper-bound allowance exposure, neither received
+  usage, a settled charge nor evidence that the call was free.
 - **Provider usage receipt:** token quantities received from the configured
   provider, priced as an estimate using that attempt's recorded quote.
 - **Owner reconciliation:** explicitly entered owner receipt/estimate, retained
   as owner-sourced evidence rather than relabelled as a provider receipt.
+- **Provider wait:** a run retained at a complete safe checkpoint after model
+  providers could not accept further work, with no unresolved billing or
+  ambiguous started effect; it is not the same as owner pause or cancellation.
 
 ## Definitions
 
@@ -67,6 +71,8 @@
 - Do not call descriptor hashing "artifact pinning".
 - Do not call a mutable SHA chain "immutable history".
 - Do not call `sandbox: auto` with unrestricted network "contained execution".
+- Do not call an estimated allowance hold "provider-reported usage" or a
+  settled bill; absence of a receipt is not zero cost.
 
 ## Open Domain Risks
 

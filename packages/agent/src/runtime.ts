@@ -14,6 +14,7 @@ import {
   LlmUsageError,
   LlmAttemptObserverError,
   LlmUsageObserverError,
+  LlmProvidersUnavailableError,
   type LlmCallControls,
   type LlmProvider,
   type LlmUsageObserver,
@@ -115,7 +116,7 @@ export interface AgentReply {
   reply: string;
   steps: number;
   tainted: boolean;
-  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget" | "billing-unknown";
+  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget" | "billing-unknown" | "provider-unavailable";
   error?: string;
   /** Decisions and executions of this handle call, for the learning pipeline. */
   trace?: RunTrace;
@@ -185,7 +186,7 @@ export interface AgentCheckpointState {
   externalEffects: number;
 }
 export type AgentRunEvent =
-  | ({ type: "checkpoint"; phase: "before_decision" | "waiting_approval" | "tool_started" | "tool_finished"; safeToResume: boolean; lastTool?: string; argsHash?: string } & AgentCheckpointState)
+  | ({ type: "checkpoint"; phase: "before_decision" | "waiting_approval" | "tool_started" | "tool_finished"; safeToResume: boolean; lastTool?: string; argsHash?: string; providerRetryAt?: number } & AgentCheckpointState)
   | { type: "stopped"; reason: NonNullable<AgentReply["stopReason"]> };
 export interface AgentExecutionContext {
   priorMessages?: readonly string[];
@@ -320,7 +321,7 @@ export class AgentRuntime {
       if (exhausted) throw new RunControlError(exhausted);
     };
     const llmControls = (): LlmCallControls => ({ signal: context.signal, deadlineAt: context.deadlineAt, onAttempt: context.onAttempt, onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: modelControl });
-    const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string } = {}) => {
+    const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string; providerRetryAt?: number } = {}) => {
       try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history, context.redactCheckpoint), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
       catch (error) { throw new AgentCheckpointError(error); }
     };
@@ -455,7 +456,7 @@ export class AgentRuntime {
             shortlist = index.search(`${text}\n${words}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
             log("shortlist.expanded", { before, after: shortlist.length });
           } catch (error) {
-            if (error instanceof RunControlError || error instanceof LlmAttemptObserverError || error instanceof LlmUsageError || error instanceof LlmUsageObserverError) throw error;
+            if (error instanceof RunControlError || error instanceof LlmAttemptObserverError || error instanceof LlmUsageError || error instanceof LlmUsageObserverError || error instanceof LlmProvidersUnavailableError) throw error;
             control();
             log("shortlist.expand-failed", {});
           }
@@ -519,6 +520,13 @@ export class AgentRuntime {
       if (error instanceof AgentCheckpointError || error instanceof LlmAttemptObserverError || error instanceof LlmUsageObserverError) throw error;
       if (context.signal?.aborted) error = new RunControlError("cancelled");
       else if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) error = new RunControlError("deadline");
+      if (error instanceof LlmProvidersUnavailableError) {
+        // Generation did not start an external effect. Keep the exact history/guard/taint before waiting.
+        await checkpoint("before_decision", true, { providerRetryAt: error.retryAt });
+        log("task.provider_wait", { retryAt: error.retryAt });
+        await notify({ type: "stopped", reason: "provider-unavailable" });
+        return { reply: `Waiting for a configured model provider. Next probe after ${new Date(error.retryAt).toISOString()}. Completed effects were retained.`, steps, tainted: taint.snapshot().tainted, stopReason: "provider-unavailable" };
+      }
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });

@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { AgentRuntime, ApprovalLedger, denyAll, type AgentCheckpointState, type AgentReply, type Approver } from "@august/agent";
 import {
   DecisionCascade,
+  FallbackProvider,
   HeuristicEngine,
   LayaEngine,
   fitCalibrationTable,
@@ -10,7 +11,6 @@ import {
   type CalibrationTable,
   LlmChoiceEngine,
   LlmQueryExpander,
-  OpenAiCompatibleProvider,
   UsageRequiredProvider,
   layaHttpTransport,
   NativeLayaTransport,
@@ -37,6 +37,8 @@ import { assertKeyDirectoryOutside, deriveKey, loadMasterKey } from "./masterkey
 import { openSecretStore, resolveSecret, type SecretStore } from "./secrets.ts";
 import { SecretBroker, type DeliveryContext, type EgressMode } from "./broker.ts";
 import { AuditPublisher, type AuditExternalStatus } from "./audit-context.ts";
+import { createLlm, quoteForModelAttempt } from "./providers.ts";
+export { createLlm } from "./providers.ts";
 
 export interface AppDeps {
   env: Record<string, string | undefined>;
@@ -100,6 +102,8 @@ export interface App {
   memory: MemoryStore;
   /** Signed anchors that make a rewrite of the journal detectable. */
   audit: AuditHandle;
+  /** Admission circuit status, not a guarantee that the remote model is currently healthy. */
+  providerHealth(): ReturnType<FallbackProvider["health"]>;
   /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
   feedback(session: SessionKey, feedbackId: string, verdict: "success" | "failure", note?: string): void;
   /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
@@ -118,16 +122,6 @@ export interface App {
   /** Start the MCP servers from the config. One failing server never stops the others. */
   startServers(): Promise<StartReport>;
   close(): void;
-}
-
-export function createLlm(config: AugustConfig, deps: Pick<AppDeps, "env" | "fetch">, secrets?: SecretStore): LlmProvider {
-  if (!config.llm.model.trim()) throw new ConfigError('no model selected; run "august setup"');
-  const keyName = config.llm.apiKeyEnv;
-  const apiKey = keyName ? resolveSecret(keyName, secrets, deps.env) : undefined;
-  if (keyName && !apiKey) {
-    throw new ConfigError(`no API key: run "august secret set ${keyName}" (or export ${keyName})`);
-  }
-  return new OpenAiCompatibleProvider({ baseUrl: config.llm.baseUrl, model: config.llm.model, apiKey, fetch: deps.fetch });
 }
 
 function readStats(path: string): Record<string, number> {
@@ -163,7 +157,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   catch (error) { throw new ConfigError((error as Error).message); }
   const secrets = deps.secrets ?? openSecretStore(dirname(config.dataDir), { env: deps.env, keyDir });
   const pricing = resolveLlmPricing(config);
-  const llm = new UsageRequiredProvider(deps.llm ?? createLlm(config, deps, secrets));
+  const provider = deps.llm ?? createLlm(config, { ...deps, circuits: { load: () => runs.providerCircuits(), save: states => runs.saveProviderCircuits(states) } }, secrets);
+  const llm = new UsageRequiredProvider(provider);
   // Claim before opening the other writable stores or reconstructing runtime state.
   const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"), { exclusiveOwner: true });
   try {
@@ -202,7 +197,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const configured = [...config.mcp];
   const broker = new SecretBroker(secrets, deps.env);
   // Everything that must never appear in a checkpoint: August's own keys by name, and each capability's own secrets.
-  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.channels.telegram?.tokenSecret, config.auditExternal?.tokenEnv].filter((name): name is string => Boolean(name)));
+  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.llm.backup?.apiKeyEnv, config.channels.telegram?.tokenSecret, config.auditExternal?.tokenEnv].filter((name): name is string => Boolean(name)));
   const capabilitySecrets = new Map<string, { trust: DeliveryContext["trust"]; names: Set<string> }>();
   const registerCheckpointSecrets = (entry: McpServerConfig) => {
     const names = [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})];
@@ -443,7 +438,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
         priorMessages: [...noted, ...(priorMessages ?? [])], priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(sensitivity === "public" ? {} : { sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onAttempt: event => {
-          if (event.type === "started") runs.beginModelAttempt(run.id, event, pricing);
+          if (event.type === "started") runs.beginModelAttempt(run.id, event, quoteForModelAttempt(config, event.provider, Boolean(deps.llm)));
           else {
             const attempt = runs.getModelAttempt(event.id);
             if (!attempt || attempt.runId !== run.id) throw new Error("model receipt belongs to another run");
@@ -472,7 +467,8 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       const current = runs.getRun(run.id)!;
       if (entry.desired) reply = { ...reply, reply: `Stopped: ${entry.desired}.`, stopReason: "cancelled" };
       if (reply.stopReason) {
-        const target = entry.desired ?? (reply.stopReason === "cancelled" ? "cancelled" : "failed");
+        const billingPause = reply.stopReason === "billing-unknown" && current.checkpoint?.safeToResume && current.checkpoint.phase !== "tool_started";
+        const target = entry.desired ?? (reply.stopReason === "cancelled" ? "cancelled" : reply.stopReason === "provider-unavailable" ? "waiting_external" : billingPause ? "paused" : "failed");
         run = current.state === target ? current : runs.finishRun(run.id, target, reply.reply, { error: reply.stopReason, steps: reply.steps });
       } else if (reply.error) {
         run = runs.finishRun(run.id, "failed", reply.reply, { error: reply.error, steps: reply.steps });
@@ -528,7 +524,12 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     listRuns: (options = {}) => runs.listRuns(options.session, options.limit, options.states),
     pauseRun: (id) => stop(id, "paused"),
     cancelRun: (id) => stop(id, "cancelled"),
-    resumeRun: async (id, perMessage) => { const run = runs.getRun(id); if (!run || !["paused", "recovering"].includes(run.state) || runs.modelAccounting(id).unresolvedCalls) throw new Error("run is not resumable; resolve safety/billing first"); return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
+    resumeRun: async (id, perMessage) => {
+      const run = runs.getRun(id), providerWait = run?.error === "provider-unavailable" && run.checkpoint?.providerRetryAt !== undefined;
+      if (run?.checkpoint?.safeToResume === false || run?.checkpoint?.phase === "tool_started") throw new Error("run needs owner resolution before resume; resolve safety/billing first");
+      if (!run || !(["paused", "recovering"].includes(run.state) || (run.state === "waiting_external" && providerWait)) || runs.modelAccounting(id).unresolvedCalls || (providerWait && Date.now() < run.checkpoint!.providerRetryAt!)) throw new Error("run is not resumable; resolve safety/billing first, or wait for provider cooldown");
+      return execute(run, perMessage, priorFor(run), runs.provenance(run.session));
+    },
     retryRun: async (id, options = {}, perMessage) => { const run = runs.retryRun(id, options).run; return execute(run, perMessage, priorFor(run), runs.provenance(run.session)); },
     resolveRun: (id, resolution) => runs.resolveRun(id, resolution),
     learning,
@@ -541,6 +542,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     distill,
     memory,
     audit,
+    providerHealth: () => provider instanceof FallbackProvider ? provider.health() : [],
     recalibrate() {
       const samples = calibrationSamples(learning.examples().examples, engineId);
       const table = fitCalibrationTable(samples, { engine: engineId });

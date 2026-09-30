@@ -26,6 +26,20 @@ describe("owner audit status", () => {
   });
 });
 
+describe("owner provider circuit status", () => {
+  test("admission metadata is owner-only and failures reveal no private diagnostics", async () => {
+    let calls = 0;
+    const {handler} = make({providerHealth:()=>{calls++;return [{provider:"owned-endpoint-identity",state:"open",failures:2,retryAt:10000}];}});
+    const request=(headers:Record<string,string>={})=>new Request("http://127.0.0.1:7777/v1/providers",{headers:{host:"127.0.0.1:7777",authorization:`Bearer ${TOKEN}`,...headers}});
+    expect((await handler(request({authorization:"Bearer wrong"}))).status).toBe(401);
+    expect((await handler(request({origin:"https://attacker.example"}))).status).toBe(403);expect(calls).toBe(0);
+    expect(await(await handler(request())).json()).toEqual({providers:[{provider:"owned-endpoint-identity",state:"open",failures:2,retryAt:10000}]});
+    const failing=make({providerHealth:()=>{throw Error("private key material must not be returned");}}).handler;
+    const response=await failing(request());expect(response.status).toBe(503);expect(await response.json()).toEqual({error:"provider status unavailable"});
+    expect((await make().handler(request())).status).toBe(404);
+  });
+});
+
 describe("owner model reconciliation", () => {
   test("requires confirmation/auth, validates counts, and does not expose backend errors", async () => {
     const accepted: unknown[] = [];
