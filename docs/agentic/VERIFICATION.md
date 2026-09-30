@@ -103,6 +103,92 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Configured provider degradation and safe recovery — `5046c8c`, 2026-09-30
+
+- Primary/optional backup come from validated owner configuration, with separate
+  selected IDs, secret references, timeouts/retries and immutable quotes. Full
+  normalized endpoint/model identity keeps different paths out of each other's
+  persisted circuits. Closed/open/half-open admission, bounded exponential
+  cooldown, Retry-After, one recovery probe and fatal persistence/usage boundaries
+  are exercised by physical-socket and durable restart regressions. Configured
+  providers never receive model IDs or tariffs from presets.
+- Real configured fallback (no injected LLM) in owned web run
+  `27281770-5966-45c0-ad72-b110411bc825`: both real model catalogs were inspected,
+  then primary relay physically stopped. Its durable attempt is exactly one
+  not_sent/unreachable across four backup phases and a 3600000ms owner-selected
+  cooldown. Backup completed the real file/arithmetic task: reference
+  `7d6769d0b0463e59`, `56552 + 77 = 56629`, one tool step, four received provider
+  receipts / 3544 tokens (1053 input / 2491 output), no unknown attempts. The
+  original source file was unchanged. Quotes 17/33 are explicit fixture-owner
+  resource allowances, NOT vendor tariffs/invoices. Evidence is retained at
+  `/private/tmp/august-live-cooldown.rwtFbb/`; this initial patch journey is not
+  separately claimed as final-provider latency or invoice qualification.
+- A genuinely useful read/create-file journey with the final configured SDK
+  adapter used an authenticated owned MCP writer, independently listed by both
+  SDK Client and actual App.registry before generation. It creates only supplied
+  content, never performs the requested arithmetic for the model. Overwrite,
+  traversal and symlink protocol checks used separate owned state and are not
+  model acceptance. The helper follows the maintained
+  [v1 SDK server contract](https://raw.githubusercontent.com/modelcontextprotocol/typescript-sdk/v1.x/docs/server.md),
+  using the repository's pinned SDK 1.31.0, without a dependency upgrade.
+- Actual model chose the writer; the browser owner inspected and allowed the
+  exact arguments `{reference:9a4c075ae4599da5,total:31022}`. Original amount
+  `30877 + 145 = 31022` was checked independently. Real output `result.json`
+  contains 46 bytes, SHA256
+  `abe0e8a7644c628e86297386576f381d714194dd0d78040740804b399e2f0ae6`.
+  Only after that file and its safe checkpoint existed did the owned fetch
+  fault-controller physically stop both owned relays; ordinary fetch then
+  recorded two not_sent/unreachable attempts and zero unknown billing holds.
+  No model reply, usage receipt or socket response was manufactured.
+- Run `6d72cddb-c48e-4278-a99c-90971f988d22` became waiting_external with retained
+  history, taint, loop, 2 steps / 1 external effect and providerRetryAt. The watcher
+  inspected the real Tasks state and SIGKILLed validated owned PID 77198 about
+  414ms after the fault. After restoring the owned relays and restarting the
+  same data after cooldown, the web actor automatically resumed the same run
+  without a Continue click. It completed with the correct reference/total;
+  writer calls/created files/journal write calls remained exactly one and the
+  output SHA/source remained unchanged. Six actual provider receipts totalled
+  7348 tokens (2450 input / 4898 output), plus the two not_sent records; no
+  unknown holds remained. Evidence and inspected approval/waiting/recovery/
+  completion screenshots: `/private/tmp/august-live-writer-recovery.dzeeMF/`.
+- Negative boundaries were retained, not replayed as successes: the initial
+  300000ms run failed before writing; a 1200000ms variant lacked a writer in its
+  actual registry and also encountered macOS thermal emergency sleep at
+  03:37:59 +0300 for 918s. It failed/deadline with one read, zero effects, 8705
+  received tokens and an unknown timeout hold of 41295 tokens / USD0.099999.
+  No planned socket fault or crash happened there. The subsequent successful
+  journey selected 3600 seconds explicitly through Web; its original 50000-token
+  and USD0.1 thresholds were unchanged. Downtime counts and recovery never
+  renews wall allowance. Foreign model/processes were not restarted or modified.
+- The retained failed timeout fixture was booted solely for read-only browser
+  inspection: runs/attempts/source/provider counters were unchanged, no new
+  message/resume/reconciliation/generation. Desktop 1280x900 and mobile390x844
+  show failure=timeout and **estimated upper-bound allowance exposure held**,
+  explicitly billing-unknown / not a receipt or settled charge. Received8705 and
+  held41295 were unchanged. Inspected pixels and axe4.12.1 each show 0 violations,
+  0 incomplete / 23 passes; mobile has no horizontal overflow. Doctor with own
+  relays up made two GET /models probes, code0, explicitly inference-not-probed;
+  with relays stopped it returned code1 / both unreachable. Active-WAL immutable
+  circuit inspection warned rather than reporting a stale prefix. Evidence:
+  `/private/tmp/august-timeout-ui-final.2jYtdS/`. All owned processes/ports/browser
+  sessions were subsequently verified stopped; owner OS credentials were untouched.
+- Independent final review reproduced a late duplicate-usage defect (backup1 /
+  forwarded reports2); immediate typed failure plus a remembered admission guard
+  now yields backup0 / reports1, including a bad adapter swallowing the error.
+  Two valid distinct physical receipts (charged empty primary then valid backup)
+  remain accounted separately. The public App resume boundary also rejects
+  laundering tool_started uncertainty through an owner pause before any model call.
+  A legitimate running transition clears stale current error; historical events
+  and model-attempt failures remain retained.
+- Final gate: `bun --no-env-file run typecheck` and `bun --no-env-file test`
+  exited0: 676 pass / 12 Linux-only skip / 0 fail, 2736 assertions / 688 tests /
+  40 files / 19.21s; final host-native build passed. A prior full gate caught
+  only the changed owner-resolution error text (675 pass / 1 fail); that public
+  message was preserved and the affected 150 cases plus this full gate passed.
+  Matrix revalidation on the published revision, Windows/production qualification,
+  vendor invoice/automatic receipt reconciliation, non-web automatic recovery,
+  daily/per-tool budgets and the entire 28-outcome goal remain outstanding.
+
 ### External audit App/CLI and independent-process journey — `f4a2ada`, 2026-09-30
 
 - Configured `auditExternal` resolves only a secret reference and optional owner
