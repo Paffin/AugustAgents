@@ -400,4 +400,24 @@ describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
     expect(WEB_JS).toContain("Remaining allowance is not established");
     expect(WEB_JS).not.toContain("innerHTML"); expect(() => new Function(WEB_JS)).not.toThrow();
   });
+
+  test("Memory owner controls expose labelled editing, explicit deletion and no automatic trust action",()=>{
+    expect(WEB_HTML).toContain('data-view="memory" aria-controls="memory"');
+    expect(WEB_HTML).toContain('aria-label="Owner memory controls"');
+    expect(WEB_HTML).toContain('for="memory-search"');expect(WEB_HTML).toContain('for="memory-class"');
+    expect(WEB_HTML).toContain('id="memory-status" class="muted" role="status" aria-live="polite"');
+    expect(WEB_JS).toContain('entry.trust==="trusted"');expect(WEB_JS).toContain('"Untrusted · read-only"');
+    expect(WEB_JS).toContain('JSON.stringify({text:field.value})');expect(WEB_JS).toContain('JSON.stringify({confirm:true})');
+    expect(WEB_JS).toContain('"Confirm permanent memory deletion"');expect(WEB_JS).toContain('cancel.focus()');expect(WEB_JS).toContain('"Cancel edit"');
+    expect(WEB_JS).toContain('"Discard the unsaved memory edit?"');expect(WEB_JS).toContain('field.onkeydown');
+    expect(WEB_JS).not.toContain('/v1/memory/trust');expect(WEB_JS).not.toContain('origin.source');expect(WEB_JS).not.toContain("innerHTML");
+    expect(()=>new Function(WEB_JS)).not.toThrow();
+  });
+
+  test("Memory response validation rejects invalid identities/trust/oversized notes before rendering",()=>{
+    const source=WEB_JS.slice(WEB_JS.indexOf("function validMemory(entry)"),WEB_JS.indexOf("function memoryControls()"));
+    const valid=new Function("memoryClasses",source+";return validMemory;")(["working","episodic","semantic","procedural"]) as (entry:unknown)=>boolean;
+    const entry={id:"00000000-0000-0000-0000-000000000001",class:"semantic",text:"<script>not executable note text</script>",trust:"trusted",sensitivity:"personal",origin:{kind:"user"},createdAt:1,updatedAt:2};
+    expect(valid(entry)).toBe(true);expect(valid({...entry,trust:"forged-owner"})).toBe(false);expect(valid({...entry,id:"-".repeat(36)})).toBe(false);expect(valid({...entry,text:"a".repeat(2001)})).toBe(false);expect(valid({...entry,origin:null})).toBeFalsy();expect(valid({...entry,updatedAt:NaN})).toBe(false);
+  });
 });

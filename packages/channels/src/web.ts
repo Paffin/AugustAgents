@@ -92,6 +92,21 @@ export const WEB_HTML = `<!doctype html>
   .receipt-form label { display:block; font-size:13px; }
   .receipt-form input[type=number] { display:block; width:100%; min-width:0; margin-top:4px; }
   .receipt-confirm { grid-column:1/-1; }
+  .memory-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:16px 0; }
+  .memory-toolbar label { flex:1; min-width:160px; font-size:13px; }
+  .memory-toolbar input,.memory-toolbar select { width:100%; display:block; margin-top:4px; }
+  .memory-toolbar select { padding:10px; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; font:inherit; }
+  #memory-list { padding:0; list-style:none; }
+  #memory-list > li { padding:16px; margin:12px 0; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  .memory-text { white-space:pre-wrap; overflow-wrap:anywhere; margin:12px 0; }
+  .memory-meta { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+  .memory-actions { display:flex; flex-wrap:wrap; gap:8px; }
+  #memory button,.memory-link { padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); font:inherit; cursor:pointer; }
+  .memory-editor { display:grid; gap:12px; margin-top:12px; }
+  .memory-editor textarea { width:100%; min-height:160px; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; resize:vertical; }
+  .memory-confirm { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; }
+  #memory-tombstones li { overflow-wrap:anywhere; }
+  @media (max-width:480px) { .sidebar { flex-wrap:wrap; } .sidebar nav { flex:1 1 260px; } .sidebar nav button { flex:1; justify-content:center; padding:8px 6px; } }
   @media (max-width:760px) { .sidebar { width:76px; padding:24px 8px; } .brand { padding:0; text-align:center; font-size:17px; } .brand span,.sidebar-note,.nav-label { display:none; } nav button { justify-content:center; padding:12px 4px; } header { padding:20px; } .credentials,#log { padding:20px; } #form { width:calc(100% - 40px); } .budgets { padding:8px 20px 12px; } }
   @media (max-width:480px) { body { flex-direction:column; } .sidebar { width:100%; padding:8px 12px; flex-direction:row; align-items:center; gap:12px; border-right:0; border-bottom:1px solid var(--line); } .brand { font-size:18px; } nav { display:flex; margin-left:auto; gap:4px; } nav button { width:auto; padding:8px 12px; } .nav-label { display:inline; font-size:12px; } .nav-icon { display:none; } header { padding:16px; } #connection { max-width:140px; } .credentials,#log { padding:16px; } #form { width:calc(100% - 24px); gap:4px; } .budgets { padding:8px 12px 12px; gap:8px; } .budgets label { min-width:120px; } .task-title { flex-direction:column; gap:4px; } .welcome h2 { font-size:26px; } }
   :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
@@ -102,9 +117,10 @@ export const WEB_HTML = `<!doctype html>
 <aside class="sidebar" aria-label="August workspace">
 <div class="brand">August<span>Agent workspace</span></div>
 <nav aria-label="Workspace sections">
-<button type="button" data-view="chat" aria-current="page" aria-controls="chat"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 4z"/></svg><span class="nav-label">Chat</span></button>
-<button type="button" data-view="tasks" aria-controls="tasks"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 6 1 1 2-2m-3 7 1 1 2-2m-3 7 1 1 2-2M11 6h9M11 12h9M11 18h9"/></svg><span class="nav-label">Tasks</span></button>
-<button type="button" data-view="credentials" aria-controls="credentials"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 15v2"/></svg><span class="nav-label">Secrets</span></button>
+<button type="button" data-view="chat" aria-current="page" aria-controls="chat" aria-label="Chat"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 4z"/></svg><span class="nav-label">Chat</span></button>
+<button type="button" data-view="tasks" aria-controls="tasks" aria-label="Tasks"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 6 1 1 2-2m-3 7 1 1 2-2m-3 7 1 1 2-2M11 6h9M11 12h9M11 18h9"/></svg><span class="nav-label">Tasks</span></button>
+<button type="button" data-view="memory" aria-controls="memory" aria-label="Memory"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span class="nav-label">Memory</span></button>
+<button type="button" data-view="credentials" aria-controls="credentials" aria-label="Secrets"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 15v2"/></svg><span class="nav-label">Secrets</span></button>
 </nav>
 <p class="sidebar-note">Your runtime.<br>Your permissions.<br>Your decisions.</p>
 </aside>
@@ -141,6 +157,19 @@ export const WEB_HTML = `<!doctype html>
 <p id="task-status" class="muted" role="status" aria-live="polite">Connect to view tasks.</p>
 <ul id="task-list" aria-label="Recent tasks"></ul>
 </section></details>
+<details class="credentials" id="memory" name="owner-controls" hidden><summary>Memory</summary>
+<section aria-label="Owner memory controls">
+<h2>Notes your agent can recall</h2>
+<p class="muted">Manage this owner's notes and profile. Trusted notes can be edited. Imported, untrusted notes are read-only; editing never grants trust. Secrets belong in Secrets, not memory.</p>
+<div class="memory-toolbar">
+<label for="memory-search">Find a note<input id="memory-search" type="search" autocomplete="off" placeholder="Search these notes"></label>
+<label for="memory-class">Memory class<select id="memory-class"><option value="">All classes</option><option value="semantic">Profile &amp; facts</option><option value="procedural">Procedures</option><option value="episodic">Episodes</option><option value="working">Working notes</option></select></label>
+<button id="memory-refresh" type="button">Refresh notes</button>
+</div>
+<p id="memory-status" class="muted" role="status" aria-live="polite">Open Memory to read your notes.</p>
+<ul id="memory-list" aria-label="Owner memory notes"></ul>
+<details><summary>Deletion records</summary><p class="muted">Tombstones retain identity and deletion time, never the deleted text. Physical removal covers the memory database, search indexes and synced memory files, not older chat messages.</p><ul id="memory-tombstones" aria-label="Memory deletion records"></ul></details>
+</section></details>
 <section id="chat" aria-label="Agent chat">
 <div id="log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" tabindex="0"><div class="welcome" id="welcome"><h2>What are we working on?</h2><p>Describe the result you need. Review permissions before sensitive actions, then track real progress in Tasks.</p><p class="muted" id="hint"></p></div></div>
 <section class="budgets" aria-label="Optional task limits">
@@ -150,7 +179,7 @@ export const WEB_HTML = `<!doctype html>
 <p class="muted" id="time-budget-help">Waiting and restart downtime count toward the time limit. Recovery does not reset it.</p>
 </section>
 <form id="form"><label class="sr" for="text">Message to August</label><textarea id="text" rows="2" autocomplete="off" placeholder="Describe a task or ask a question…" aria-describedby="composer-help"></textarea><button type="submit" id="send">Send</button></form>
-<p class="composer-note" id="composer-help">Enter to send · Shift + Enter for a new line. Verify important results.</p>
+<p class="composer-note" id="composer-help">Enter to send · Shift + Enter for a new line. Verify important results. <button class="memory-link" type="button" data-view="memory" aria-controls="memory">Review saved memory</button></p>
 </section>
 </main>
 <script src="/app.js"></script>
@@ -174,9 +203,12 @@ export const WEB_JS = `(() => {
     document.getElementById("reconnect").hidden = ready || !token;
   }
   connectionState(false, token ? "Checking connection…" : "Not connected");
-  const views = { chat: ["Chat", "Work with your agent. Stay in control."], tasks: ["Tasks", "Progress, usage and safe continuation."], credentials: ["Secrets", "Credentials stay out of your conversation."] };
+  let memoryEditing = false;
+  const views = { chat: ["Chat", "Work with your agent. Stay in control."], tasks: ["Tasks", "Progress, usage and safe continuation."], memory: ["Memory", "Inspect what is retained. Edit your notes, not their trust."], credentials: ["Secrets", "Credentials stay out of your conversation."] };
   function showView(view) {
     if (!Object.hasOwn(views, view)) return;
+    if (memoryBusy && view !== "memory") return;
+    if (memoryEditing && view !== "memory") { if (!confirm("Discard the unsaved memory edit?")) return; memoryEditing = false; }
     for (const id of Object.keys(views)) { const panel = document.getElementById(id); panel.hidden = id !== view; if (panel.tagName === "DETAILS") panel.open = id === view; }
     for (const button of document.querySelectorAll("[data-view]")) { if (button.dataset.view === view) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current"); }
     document.getElementById("view-title").textContent = views[view][0]; document.getElementById("view-description").textContent = views[view][1];
@@ -264,6 +296,77 @@ export const WEB_JS = `(() => {
     finally { credentialBusy = false; credentialFields.disabled = !credentialAvailable; if (credentialAvailable) field.focus(); }
   };
   const add = (text, cls) => { document.getElementById("welcome")?.remove(); const d = document.createElement("div"); d.className = "msg " + (cls || ""); d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
+  const memoryPanel=document.getElementById("memory"),memoryList=document.getElementById("memory-list"),memoryStatus=document.getElementById("memory-status"),memoryRefresh=document.getElementById("memory-refresh"),memorySearch=document.getElementById("memory-search"),memoryClass=document.getElementById("memory-class");
+  let memoryData=[],memoryBusy=false;
+  const memoryClasses=["working","episodic","semantic","procedural"];
+  function validMemory(entry) {
+    return entry && typeof entry.id==="string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(entry.id) && memoryClasses.includes(entry.class) && typeof entry.text==="string" && entry.text.length<=2000 && ["trusted","untrusted"].includes(entry.trust) && typeof entry.sensitivity==="string" && entry.origin && typeof entry.origin.kind==="string" && Number.isSafeInteger(entry.createdAt) && Number.isSafeInteger(entry.updatedAt) && (entry.expiresAt===undefined || Number.isSafeInteger(entry.expiresAt));
+  }
+  function memoryControls() {
+    memoryRefresh.disabled=!token||memoryBusy||memoryEditing;memorySearch.disabled=memoryBusy||memoryEditing;memoryClass.disabled=memoryBusy||memoryEditing;
+    memoryList.setAttribute("aria-busy",String(memoryBusy));
+  }
+  function renderMemory() {
+    memoryList.replaceChildren();
+    const query=memorySearch.value.toLocaleLowerCase(),entries=memoryData.filter(entry=>(!memoryClass.value||entry.class===memoryClass.value)&&entry.text.toLocaleLowerCase().includes(query));
+    for(const entry of entries) {
+      const item=document.createElement("li"),title=document.createElement("h3"),text=document.createElement("p"),meta=document.createElement("p"),actions=document.createElement("div");
+      title.textContent=entry.class==="semantic"?"Profile & facts":entry.class==="procedural"?"Procedure":entry.class==="episodic"?"Episode":"Working note";
+      text.className="memory-text";text.textContent=entry.text;meta.className="memory-meta";
+      meta.textContent=(entry.trust==="trusted"?"Trusted · editable":"Untrusted · read-only")+" · origin: "+entry.origin.kind+" · "+entry.sensitivity+" · updated "+new Date(entry.updatedAt).toLocaleString()+(entry.expiresAt===undefined?" · no expiry":" · expires "+new Date(entry.expiresAt).toLocaleString());
+      actions.className="memory-actions";item.append(title,text,meta,actions);
+      const remove=document.createElement("button");remove.type="button";remove.textContent="Delete";remove.setAttribute("aria-label","Delete note "+entry.id);
+      const label="Note text "+entry.id;
+      if(entry.trust==="trusted") {
+        const edit=document.createElement("button");edit.type="button";edit.textContent="Edit note";edit.setAttribute("aria-label","Edit note "+entry.id);actions.append(edit);
+        edit.onclick=()=>{
+          if(memoryBusy||memoryEditing)return;memoryEditing=true;memoryControls();actions.hidden=true;
+          const editor=document.createElement("form"),field=document.createElement("textarea"),fieldLabel=document.createElement("label"),buttons=document.createElement("div"),save=document.createElement("button"),cancel=document.createElement("button");
+          editor.className="memory-editor";field.id="memory-edit-"+entry.id;field.value=entry.text;field.maxLength=2000;field.required=true;fieldLabel.htmlFor=field.id;fieldLabel.textContent=label;buttons.className="memory-actions";save.type="submit";save.textContent="Save note";cancel.type="button";cancel.textContent="Cancel edit";buttons.append(save,cancel);editor.append(fieldLabel,field,buttons);item.append(editor);field.focus();
+          const discard=()=>{editor.remove();actions.hidden=false;memoryEditing=false;memoryControls();edit.focus();};cancel.onclick=discard;
+          field.onkeydown=event=>{if(event.key==="Escape"){event.preventDefault();discard();}};
+          editor.onsubmit=async event=>{
+            event.preventDefault();if(memoryBusy||!field.value.trim())return;memoryBusy=true;memoryControls();save.disabled=true;cancel.disabled=true;field.disabled=true;memoryStatus.textContent="Saving owner note…";
+            try {
+              const response=await fetch("/v1/memory/"+entry.id,{method:"PATCH",headers:headers(),body:JSON.stringify({text:field.value})}),body=await response.json();
+              if(!response.ok||!validMemory(body.entry)||body.entry.id!==entry.id)throw Error();
+              memoryData=memoryData.map(old=>old.id===entry.id?body.entry:old);memoryEditing=false;memoryBusy=false;renderMemory();memoryControls();memoryStatus.textContent="Note saved. The old text was removed from memory search indexes.";memoryRefresh.focus();
+            }catch{memoryStatus.textContent="Could not confirm the edit. Your draft is retained; refresh the authoritative note before retrying.";save.disabled=false;cancel.disabled=false;field.disabled=false;field.focus();}
+            finally{memoryBusy=false;memoryControls();}
+          };
+        };
+      }
+      remove.onclick=()=>{
+        if(memoryBusy||memoryEditing)return;memoryEditing=true;memoryControls();actions.hidden=true;
+        const panel=document.createElement("div"),warning=document.createElement("p"),buttons=document.createElement("div"),yes=document.createElement("button"),cancel=document.createElement("button");
+        panel.className="memory-confirm";panel.setAttribute("role","group");panel.setAttribute("aria-label","Confirm permanent memory deletion");warning.textContent="Permanently remove this note and its memory lineage from the database, search indexes and synced memory files? This cannot be undone. Older chat messages are not erased.";buttons.className="memory-actions";yes.type="button";yes.textContent="Permanently delete";cancel.type="button";cancel.textContent="Keep note";buttons.append(yes,cancel);panel.append(warning,buttons);item.append(panel);cancel.focus();
+        const keep=()=>{panel.remove();actions.hidden=false;memoryEditing=false;memoryControls();remove.focus();};cancel.onclick=keep;panel.onkeydown=event=>{if(event.key==="Escape"){event.preventDefault();keep();}};
+        yes.onclick=async()=>{
+          if(memoryBusy)return;memoryBusy=true;memoryControls();yes.disabled=true;cancel.disabled=true;memoryStatus.textContent="Removing memory and its indexes…";
+          try {
+            const response=await fetch("/v1/memory/"+entry.id,{method:"DELETE",headers:headers(),body:JSON.stringify({confirm:true})}),body=await response.json();if(!response.ok||body.deleted!==true)throw Error();
+            memoryData=memoryData.filter(old=>old.id!==entry.id);memoryEditing=false;memoryBusy=false;renderMemory();memoryControls();
+            if(await loadMemory())memoryStatus.textContent="Deleted physically from memory storage, search indexes and synced memory files. A text-free tombstone remains.";memoryRefresh.focus();
+          }catch{memoryStatus.textContent="Deletion could not be confirmed. Refresh authoritative memory before retrying.";yes.disabled=false;cancel.disabled=false;cancel.focus();}
+          finally{memoryBusy=false;memoryControls();}
+        };
+      };actions.append(remove);memoryList.append(item);
+    }
+    if(!entries.length){const empty=document.createElement("li");empty.textContent=memoryData.length?"No notes match these filters.":"No saved notes. Ask your agent in Chat to remember something you want retained.";memoryList.append(empty);}
+  }
+  async function loadMemory() {
+    if(!token||memoryBusy||memoryEditing)return false;memoryBusy=true;memoryControls();memoryStatus.textContent="Reading owner memory…";
+    try {
+      const response=await fetch("/v1/memory",{headers:headers()}),body=await response.json();
+      if(!response.ok||!Array.isArray(body.entries)||body.entries.length>200||body.entries.some(entry=>!validMemory(entry))||!Array.isArray(body.tombstones)||body.tombstones.length>200||body.tombstones.some(t=>!t||typeof t.id!=="string"||!memoryClasses.includes(t.class)||!Number.isSafeInteger(t.deletedAt)))throw Error();
+      memoryData=body.entries;renderMemory();const tombstones=document.getElementById("memory-tombstones");tombstones.replaceChildren();
+      for(const tombstone of body.tombstones){const row=document.createElement("li");row.textContent=tombstone.class+" · "+tombstone.id+" · deleted "+new Date(tombstone.deletedAt).toLocaleString();tombstones.append(row);}
+      if(!body.tombstones.length){const row=document.createElement("li");row.textContent="No deletion records.";tombstones.append(row);}
+      memoryStatus.textContent=body.entries.length+(body.entries.length===1?" retained note.":" retained notes.")+(body.truncated?" Showing the latest 200 records; use CLI for older memory.":"");return true;
+    }catch{memoryData=[];memoryList.replaceChildren();document.getElementById("memory-tombstones").replaceChildren();memoryStatus.textContent="Memory unavailable. Check the connection and refresh; no storage state was inferred.";return false;}
+    finally{memoryBusy=false;memoryControls();}
+  }
+  memoryRefresh.onclick=()=>void loadMemory();memorySearch.oninput=renderMemory;memoryClass.onchange=renderMemory;memoryPanel.ontoggle=()=>{if(memoryPanel.open)void loadMemory();};memoryControls();
   const taskPanel = document.getElementById("tasks"), taskList = document.getElementById("task-list"), taskStatus = document.getElementById("task-status");
   let taskTimer = null, taskLoading = false, taskFingerprint = "";
   const controlling = new Set();
