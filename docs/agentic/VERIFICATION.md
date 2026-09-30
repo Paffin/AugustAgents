@@ -103,6 +103,27 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Owner-day calendar groundwork — issue #4 remains open, 2026-09-30
+
+`ownerDay` computes inclusive/exclusive UTC boundaries in the selected owner
+IANA zone without a fixed 24-hour reset. Four deterministic regressions cover
+Moscow midnight, New York 23/25-hour DST days, Kathmandu fractional offset,
+Apia's skipped civil date and invalid input rejection. Typecheck and all four
+cases pass. This is calendar geometry, NOT daily/per-tool admission, persistent
+budget accounting, zero-cost compiled-work or live reset acceptance. Those
+explicit issue #4 requirements still need implementation and verification.
+
+### Published `cb533be` matrix, exact run `36655836010`
+
+Linux: 688 pass / 0 fail, 2795 assertions / 40 files / 17.67s. macOS: 676 pass /
+12 Linux-only skips / 0 fail, 2736 assertions / 22.47s. Sidecar succeeded.
+Windows: 24 observed failure records followed by Bun1.4.2 SEGFAULT
+`0x6800000000`, with missing JUnit and no complete counts. One new provider test
+reached afterEach EBUSY on its owned temporary directory; that is NOT a Windows
+pass. Artifact IDs 11072766097/11073045564/11073105458 bind the exact revision.
+No rerun or timeout/skip weakening was used. Overall matrix is NOT green;
+Windows/platform/release qualification and the complete goal remain open.
+
 ### Configured provider degradation and safe recovery — `5046c8c`, 2026-09-30
 
 - Primary/optional backup come from validated owner configuration, with separate

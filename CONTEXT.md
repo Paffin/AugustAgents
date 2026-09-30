@@ -48,12 +48,16 @@ owner reconciliation is labelled explicitly rather than presented as a vendor
 receipt. Configured primary/backup, persistent circuit cooldown and safe web
 provider-wait recovery now exist, with real fallback and non-duplicating
 MCP-write/crash/restart journeys verified. Unknown billing remains held, not
-settled automatically; final issue #3 evidence is being reconciled. The complete
+  settled automatically; issue #3 is closed with published scoped evidence. The complete
 goal and production/platform/provider invoice qualification remain open.
 External audit App/CLI integration is now implemented: optional configured sink,
 periodic metadata-only publication, outage/conflict UI/doctor warnings and
 strictly read-only verification that cannot re-sign inspected history. Public
 custody, key rotation continuity and the complete OUT-009 remain unqualified.
+Next implementation is daily/per-tool budget admission and durable accounting
+(GitHub #4). Owner-day boundaries now use explicit IANA timezone/Intl calendar
+geometry, including DST and skipped dates; that helper is not yet a delivered
+daily/per-tool ledger or its live acceptance.
 
 ## Active Risks
 
