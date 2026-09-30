@@ -104,6 +104,68 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Daily/per-tool budgets — bounded macOS live acceptance, 2026-09-30
+
+The owned `august-live-daily-ledger.pfoP6A` harness retained both earlier negatives
+and nine subsequent genuinely useful, independently verified clock tasks on
+`feddc4e`. No pattern state, choices or timestamps were seeded. Public CLI
+`patterns list/show` read back real pattern `84dd95d7d6b060fe` as reflex after
+3 LLM / 3 skill / 3 workflow runs. Each workflow still paid for its final
+generation; it was not falsely reported as zero-LLM work.
+
+The current owner day received 17651 actual provider tokens, priced as a
+one-micro owner estimate using raw quote numerators (not the sum of individually
+rounded run costs). After setting limits to those received totals and restarting
+only the owned gateway, an unrelated web request failed `daily-budget` with
+0 steps/usage/new generation. Then the same learned clock request
+`8b650952…` actually executed its reflex, returned fresh timestamp
+`2026-09-30T02:42:52.614Z`, passed the host verifier with 0s skew, and used
+0 model calls/tokens/cost. The physical receiver and model-attempt rows stayed
+at 37 requests / 37 finished / 0 interrupted. Pattern stats became 3/3/3/1.
+
+With `clock.now.calls` set to its observed 10 calls, another real web request
+`9bfa2f41…` failed `tool-budget` before any effect or model request. SQLite
+clock calls stayed 10, held calls 0; the reflex state/stats/last-change stayed
+exactly unchanged. The source repair skips rewards and demotion for benign
+owner/resource stops, while loop/actual execution failures still demote; 12
+public ladder tests / 112 assertions cover both branches. The complete current
+working-tree no-env-file gate, including ongoing #5 source, passed 727 tests /
+12 Linux-only skips / 0 fail / 3150 assertions / 46 files in 21.06s. Typecheck
+and host-native build passed. This is not an immutable clean release gate.
+
+The earlier natural reset used the same actual ledger: before
+`2026-09-30T02:27:51.023Z`, owner day Sep 29/St_Johns had 7598 received tokens,
+zero holds and no allowance. After natural midnight, at `02:30:26.550Z`, Sep 30
+had zero received/held and restored 7598 tokens / one-micro allowance. All ten
+prior receipts and historical tasks remained; no OS/injected clock change or
+record rewrite occurred. That earlier spend came from retained negative tasks,
+not useful training. SQL, authenticated snapshot and rendered UI matched.
+
+Final desktop closed-disclosure axe 4.12.1: 0 violations / 0 incomplete /
+24 passes. Expanded mobile: 0 violations / 1 incomplete rule for two offscreen
+contrast nodes / 24 passes, no horizontal overflow at 390px; console empty.
+Root inspected the live UI, natural reset and final screenshot. The complete
+private evidence is retained under that owned harness. Its gateway/relay/listeners
+52410/52411 and both owned browser sessions were stopped; foreign models and
+user files were not changed. Issue #4's bounded local criteria are satisfied;
+strict prompt-input/vendor invoice ceilings, all-platform and full-outcome
+production readiness remain explicitly unqualified.
+
+### Published context/guard revisions — exact hosted matrix observations
+
+`6479a77` / run 36659221726: Linux 713 pass / 0 fail / 2988 assertions / 19.04s;
+macOS 701 pass / 12 skips / 0 fail / 2929 assertions / 22.09s. `f14d770` /
+run 36659730030: Linux 714 pass / 0 fail / 2997 assertions / 20.56s; macOS
+702 pass / 12 skips / 0 fail / 2938 assertions / 23.79s. Windows hit the
+existing 20-minute bound, was cancelled and produced no full JUnit/counts.
+
+`feddc4e` / run 36660113134: Linux 715 pass / 0 fail / 3005 assertions /
+15.63s; macOS 703 pass / 12 skips / 0 fail / 2946 assertions / 20.84s. Sidecar
+passed. Windows retained 27 observed failures then Bun SEGFAULT, with missing
+JUnit/full totals. Exact artifact IDs: Linux 11073394206, macOS 11073782978,
+Windows 11073718523. No reruns, timeout changes or new skips selected a green
+result. Windows and the overall release matrix remain NOT_QUALIFIED.
+
 ### Current-run context separation — source verified, real model check pending
 
 The subsequent plain clock task `fcbc9473-134f-472b-807f-4c13fe76021d` was

@@ -26,7 +26,7 @@ are product/verification prerequisites, not documentation ceremonies.
 **Dependencies:** OUT-001
 **Readiness:** Blocked
 **State:** Implementing
-**Completion Note:** Historical integration 227fa56 supplied Phase A/schema-v2 but did not establish acceptance. Schema-v3 supplied durable model attempts, tariff snapshots, unresolved holds and explicit owner reconciliation; actual pause/reconcile/same-run continuation and cancel/crash journeys pass locally. Current schema-v4 adds daily/per-tool SQLite admission, host tool attribution and unresolved tool holds. Its real budget/compiled-free/midnight qualification is in progress (#4). Configured provider cooldown and one non-duplicating MCP-write/crash/restart journey pass; broader platform/production recovery and complete outcome acceptance remain open. Do not treat this increment as completion of OUT-002 or the full goal.
+**Completion Note:** Historical integration 227fa56 supplied Phase A/schema-v2 but did not establish acceptance. Schema-v3 supplied durable model attempts, tariff snapshots, unresolved holds and explicit owner reconciliation; actual pause/reconcile/same-run continuation and cancel/crash journeys pass locally. Current schema-v4 adds daily/per-tool SQLite admission, host tool attribution and unresolved tool holds. Its bounded local day refusal/restart/natural-midnight, genuinely learned free reflex and per-tool denial/no-demotion pass live (#4). Configured provider cooldown and one non-duplicating MCP-write/crash/restart journey also pass; strict prompt-input/invoice ceilings, broader platform/production recovery and complete outcome acceptance remain open. Do not treat this increment as completion of OUT-002 or the full goal.
 
 ### OUT-003: Content provenance and replay-safe approvals
 

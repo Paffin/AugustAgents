@@ -99,6 +99,8 @@ export class DistillationEngine {
   observe(o: { runId: string; request: string; reply: AgentReply; route: Route }): void {
     const { reply, route } = o;
     const trace = reply.trace;
+    // Owner/resource admission stopped the run, not the procedure. It earns nothing and loses nothing.
+    if (reply.stopReason && reply.stopReason !== "loop-guard" && !reply.error && !reply.compiled?.fellBack && !trace?.executions.some(e => e.isError)) return;
     const failedRun = Boolean(reply.error || reply.stopReason || reply.compiled?.fellBack || trace?.executions.some((e) => e.isError));
     if (route.patternId && failedRun) { this.failure(route.patternId); }
     if (!trace || trace.executions.length === 0 || failedRun) return;

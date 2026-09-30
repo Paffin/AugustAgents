@@ -86,6 +86,43 @@ describe("DistillationEngine", () => {
     expect(engine.report().patterns[0]!.lastChange).toContain("demoted");
   });
 
+  test("control/resource stops before or after a partial plan never reward or demote the learned procedure", () => {
+    const reasons: Array<NonNullable<AgentReply["stopReason"]>> = ["cancelled", "deadline", "step-budget", "external-effect-budget", "token-budget", "cost-budget", "billing-unknown", "provider-unavailable", "daily-budget", "tool-budget"];
+    for (const reason of reasons) {
+      const store = new PatternStore(), engine = new DistillationEngine({ store });
+      learn(engine, Array.from({ length: 9 }, (_, i) => `topic${i}x`));
+      const route = engine.route("find my notes about qq", tools); expect(route.stage).toBe("reflex");
+      const before = engine.report();
+      for (const partial of [false, true]) {
+        const id = `stopped-${reason}-${partial}`;
+        engine.observe({ runId: id, request: "find my notes about qq", reply: reply(partial ? [search("qq")] : [], { stopReason: reason, compiled: { steps: partial ? 1 : 0, completed: false } }), route });
+        expect(store.observation(id)).toBeUndefined();
+        engine.settle(id, "verified"); engine.settle(id, "failed");
+        expect(engine.report()).toEqual(before);
+        expect(engine.route("find my notes about qq", tools).stage).toBe("reflex");
+      }
+      store.close();
+    }
+  });
+
+  test("loop guards and actual execution failures still demote, even alongside a resource stop", () => {
+    const failures: AgentReply[] = [
+      reply([search("qq")], { stopReason: "loop-guard" }),
+      reply([search("qq")], { stopReason: "daily-budget", error: "actual execution failure" }),
+      reply([{ ...search("qq"), isError: true }], { stopReason: "tool-budget" }),
+      reply([search("qq")], { stopReason: "cost-budget", compiled: { steps: 0, completed: false, fellBack: "step-failed" } }),
+    ];
+    for (const failure of failures) {
+      const store = new PatternStore(), engine = new DistillationEngine({ store });
+      learn(engine, Array.from({ length: 9 }, (_, i) => `topic${i}x`));
+      const route = engine.route("find my notes about qq", tools); expect(route.stage).toBe("reflex");
+      engine.observe({ runId: "real-failure", request: "find my notes about qq", reply: failure, route });
+      expect(engine.route("find my notes about qq", tools).stage).toBe("workflow");
+      expect(engine.report().patterns[0]!.lastChange).toContain("demoted");
+      expect(store.observation("real-failure")).toBeUndefined(); store.close();
+    }
+  });
+
   test("a plan whose tool is gone, or whose arguments the tool would refuse, is offered only as advice", () => {
     const engine = new DistillationEngine({ store: new PatternStore() });
     learn(engine, ["aa1", "aa2", "aa3", "aa4", "aa5", "aa6"]);

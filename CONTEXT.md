@@ -59,9 +59,13 @@ existing SQLite runtime, with IANA owner-day boundaries, shared atomic model/too
 holds, per-provider output caps, a web accounting panel and CLI `/budgets`.
 Schema v4 retains exact v3 receipts through a checksum-verified backup/migration.
 Unknown tool transport outcomes preserve an unsafe recovery checkpoint rather
-than permitting a model retry. Real budget/compiled-free/midnight acceptance is
-in progress; source regressions alone do not close #4. Prompt-input quantities
+than permitting a model retry. Bounded local day-cap/restart/natural-midnight,
+nine verified tasks to real reflex, zero-LLM execution under exhausted budget and
+per-tool refusal/no-demotion now pass live (#4). Full outcome/platform acceptance
+is not established. Prompt-input quantities
 and vendor invoices remain unknown before receipt, not a strict billing ceiling.
+Next implementation is editable memory files and opt-in local hybrid semantic
+retrieval (#5); source is under verification, not yet delivered live.
 
 ## Active Risks
 
