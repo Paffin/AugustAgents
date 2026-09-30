@@ -421,6 +421,13 @@ describe("createApp", () => {
     const llm=contextualLlm(()=>{calls++;return "unused";});let app=createApp(cfg,{env:{},llm});const first=await app.handle(runtimeSession,"hello");expect(first.stopReason).toBe("daily-budget");expect(first.steps).toBe(0);app.close();
     app=createApp(cfg,{env:{},llm:{name:"must-not-dispatch",complete:async()=>{calls++;return "unused";}}});const rejected=await app.handle(runtimeSession,"new request");expect(rejected.stopReason).toBe("daily-budget");expect(calls).toBe(1);expect(app.runs.modelAttempts(rejected.runId)).toHaveLength(0);app.close();
   });
+  test("Safety/product: a loop stop is persisted failed, is not rated as completed or learned as a pattern",async()=>{
+    const home=tmp();let answers=0;
+    const app=createApp(defaultConfig(home),{env:{},llm:{name:"owned-loop-regression",complete:async(messages,options)=>{await options?.onUsage?.({inputTokens:1,outputTokens:1,totalTokens:2});if(options?.jsonSchema?.name==="decision")return JSON.stringify({choice:"clock.now"});if(options?.jsonSchema?.name==="arguments")return "{}";if(messages[0]?.content.startsWith("Answer the user's request"))answers++;return "clock current time";}}});
+    const reply=await app.handle(runtimeSession,"what time is it forever");
+    expect(reply).toMatchObject({stopReason:"loop-guard",steps:3});expect(app.getRun(reply.runId)).toMatchObject({state:"failed",error:"loop-guard"});expect(reply.feedbackId).toBeUndefined();expect(app.distill.report().patterns).toHaveLength(0);expect(answers).toBe(0);app.close();
+    const reopened=createApp(defaultConfig(home),{env:{},llm:contextualLlm(()=>"unused")});expect(reopened.getRun(reply.runId)?.state).toBe("failed");expect(reopened.distill.report().patterns).toHaveLength(0);reopened.close();
+  });
 
   test("Safety/reliability invariant: missing usage fails and accounting persistence errors propagate", async () => {
     const missing = createApp(defaultConfig(tmp()), { env: { OPENAI_API_KEY: "k" }, llm: { name: "missing", complete: async () => JSON.stringify({ choice: "none" }) } }); const reply = await missing.handle(runtimeSession, "missing"); expect(reply.error).toBe("LlmUsageError"); expect(missing.getRun(reply.runId)).toMatchObject({ state: "failed", usage: { totalTokens: 0 } }); missing.close();

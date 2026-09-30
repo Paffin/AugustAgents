@@ -314,10 +314,12 @@ describe("AgentRuntime", () => {
 
   test("the loop guard stops a task that repeats the same call", async () => {
     const ex = executor();
-    const { agent } = build({ decision: picks("notes.search"), llm: fakeLlm({ "notes.search": { q: "x" } }), executor: ex });
+    const llm=fakeLlm({ "notes.search": { q: "x" } });
+    const { agent } = build({ decision: picks("notes.search"), llm, executor: ex });
     const r = await agent.handle(session, "search notes forever");
     expect(r.reply).toContain("Stopped");
     expect(ex.calls).toHaveLength(3);
+    expect(r.stopReason).toBe("loop-guard");expect(llm.prompts).toHaveLength(4); // Argument attempts only, no paid final answer after stop.
   });
 
   test("a decision outside the shortlist is rejected", async () => {

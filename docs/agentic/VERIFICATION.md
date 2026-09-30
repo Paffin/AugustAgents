@@ -104,7 +104,26 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
-### Daily/per-tool schema-v4 source increment — live qualification in progress
+### Loop-stop classification repair — source verified, real replay pending
+
+The real clock negative below exposed a guard stop without a typed `stopReason`;
+App therefore persisted Completed and offered answer ratings. The runtime now
+emits `loop-guard`, retaining the host guard's reason, and App persists failed
+through its existing stop path. Distillation's existing stopReason exclusion
+prevents a failed sequence from becoming a learned success even if individual
+tool calls were verified. No stored historical run is rewritten and no model
+choice, loop threshold or clock verifier is changed.
+
+On macOS arm64/Bun 1.4.2, typecheck/build passed and the full no-env-file suite
+recorded 702 pass / 12 Linux-only skips / 0 fail, 2938 assertions / 714 tests /
+44 files, 23.51s. The public App regression reopens the same failed run, checks
+no completed-answer rating identity and no learned pattern. Agent coverage
+checks three executed calls, no fourth effect and no final generation after
+the stop. The prior fixedReply also sent no final generation; the fix corrects
+status/learning, not an invented reduction in the old call count. A fresh live
+loop stop on the new revision remains to be observed before runtime acceptance.
+
+### Daily/per-tool schema-v4 source increment — `6479a77`, live qualification in progress
 
 On macOS arm64/Bun 1.4.2, `bun --no-env-file run typecheck` and
 `bun --no-env-file scripts/build.ts` passed. Full `bun --no-env-file test`:

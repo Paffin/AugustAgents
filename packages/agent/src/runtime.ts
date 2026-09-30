@@ -118,7 +118,7 @@ export interface AgentReply {
   reply: string;
   steps: number;
   tainted: boolean;
-  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget" | "billing-unknown" | "provider-unavailable" | "daily-budget" | "tool-budget";
+  stopReason?: "cancelled" | "deadline" | "step-budget" | "loop-guard" | "external-effect-budget" | "token-budget" | "cost-budget" | "billing-unknown" | "provider-unavailable" | "daily-budget" | "tool-budget";
   error?: string;
   /** Decisions and executions of this handle call, for the learning pipeline. */
   trace?: RunTrace;
@@ -249,7 +249,7 @@ function clipParts(parts: readonly ContentPart[], max: number): ContentPart[] {
 }
 
 export class RunControlError extends Error {
-  constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>) { super(reason); this.name = "RunControlError"; }
+  constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>, readonly detail?: string) { super(detail ?? reason); this.name = "RunControlError"; }
 }
 export class AgentCheckpointError extends Error { constructor(cause: unknown) { super(`checkpoint observer failed: ${(cause as Error).message}`); this.name = "AgentCheckpointError"; } }
 export class UncertainToolError extends Error {
@@ -341,7 +341,7 @@ export class AgentRuntime {
         if (loop.decision === "deny") {
           log("guard.stop", { rule: loop.rule });
           if (loop.rule === "step-limit") throw new RunControlError("step-budget");
-          return { terminal: await this.finish(text, allHistory(), `Stopped: ${loop.reason}.`, steps, taint, log, llmControls(), control) };
+          throw new RunControlError("loop-guard",loop.reason);
         }
 
         const capabilityId = descriptor.name.split(".")[0]!;
@@ -553,7 +553,7 @@ export class AgentRuntime {
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });
-        const reason = error.reason === "cost-budget" ? "the configured cost allowance cannot admit another model request" : error.reason === "token-budget" ? "the configured token threshold was reached" : error.reason === "daily-budget" ? "the owner-day allowance is exhausted, reserved or insufficient; no further model request was sent" : error.reason === "tool-budget" ? "this tool's allowance is exhausted, reserved, unquoted or insufficient; no further call was sent" : error.reason;
+        const reason = error.detail ?? (error.reason === "cost-budget" ? "the configured cost allowance cannot admit another model request" : error.reason === "token-budget" ? "the configured token threshold was reached" : error.reason === "daily-budget" ? "the owner-day allowance is exhausted, reserved or insufficient; no further model request was sent" : error.reason === "tool-budget" ? "this tool's allowance is exhausted, reserved, unquoted or insufficient; no further call was sent" : error.reason);
         return { reply: `Stopped: ${reason}.`, steps, tainted: taint.snapshot().tainted, stopReason: error.reason };
       }
       const name = (error as Error).name;
