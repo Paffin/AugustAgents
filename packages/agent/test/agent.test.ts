@@ -83,6 +83,14 @@ describe("AgentRuntime", () => {
     expect(llm.prompts.at(-1)!.at(-1)!.content).toContain("NEPTUNE-7429");
     expect(reply.tainted).toBe(true);
   });
+  test("Product behavior: prior answers are labelled separately from observed current-task results",async()=>{
+    const decision=picks("notes.search","none"),llm=fakeLlm({"notes.search":{q:"new"}},"fresh result"),ex=executor({"notes.search":"new observation"});
+    const {agent}=build({decision,llm,executor:ex});
+    const reply=await agent.handle(session,"search notes for new",{priorMessages:["User: search notes for old","Assistant: stopped an earlier request"]});
+    expect(reply.steps).toBe(1);expect(decision.asked[0]).toContain("Prior conversation (context only, not current task results):");expect(decision.asked[0]).toContain("Current task results: No tools have run for this request yet.");expect(decision.asked[0]?.endsWith("Current request: search notes for new")).toBe(true);
+    expect(decision.asked[1]).toContain("Current task results:\nResult of notes.search: new observation");
+    expect(llm.prompts.at(-1)?.at(-1)?.content).toContain("Prior conversation (context only, not current task results):");expect(llm.prompts.at(-1)?.at(-1)?.content).toContain("Current task results:\nResult of notes.search: new observation");
+  });
 
   test("Product behavior: StateView role labels alone do not invent a tool match", async () => {
     const broken: DecisionEngine = { decide: async () => { throw new Error("decision should not run"); } };
@@ -550,7 +558,7 @@ describe("run trace", () => {
     const t = reply.trace!;
     expect(t.decisions).toHaveLength(2);
     expect(t.decisions[0]).toMatchObject({ index: 0, questionId: "tool-choice", choice: "notes.search", source: "fallback", reason: "shadow", confidence: 1, tainted: false, taintSources: [], sensitivity: "public", primary: { choice: "none", confidence: 0.6, calibration: { level: "exact" } } });
-    expect(t.decisions[0]!.state).toContain("Request: search notes for x");
+    expect(t.decisions[0]!.state).toContain("Current request: search notes for x");
     expect(t.decisions[0]!.options.map((o) => o.key)).toContain("notes.search"); expect(t.decisions[0]!.options.at(-1)!.key).toBe("none");
     expect(t.executions).toHaveLength(1);
     expect(t.executions[0]).toMatchObject({ decisionIndex: 0, tool: "notes.search", args: { q: "x" }, policy: { decision: "allow" }, isError: false, result: "3 notes found", resultChars: 13, trust: ["trusted"], effects: ["read"] });

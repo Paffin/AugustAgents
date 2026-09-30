@@ -104,6 +104,43 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Current-run context separation — source verified, real model check pending
+
+The subsequent plain clock task `fcbc9473-134f-472b-807f-4c13fe76021d` was
+another retained negative: 3175 received tokens, zero clock calls, and an answer
+without a current host timestamp. The actual decision had seven tools plus
+none, with clock first; fallback selected none despite an available tool. It
+was not an empty shortlist. Its state merged a previous loop stop with the new
+request without a current-task/results boundary. Misinterpretation is an
+inference, not a claim to know the model's motive.
+
+Generic context now separates prior conversation from current-run observed
+results in decision/argument/final-answer calls. The current request remains
+last and lexical search still uses original data rather than marker words.
+Choice instructions require current results, not earlier answers, to justify
+completion. No tool-specific choice, model-name exception or answer substitute
+was added. Typecheck/build pass; full macOS no-env-file suite: 703 pass /
+12 Linux-only skips / 0 fail, 2946 assertions / 715 tests / 44 files, 21.07s.
+Existing trace/learning and concurrent-install fixtures were updated for the
+new explicit marker, preserving their behavioral assertions. Model quality,
+held-out calibration/activation and a useful clock sequence remain unqualified.
+
+### Real daily-cap refusal after restart — partial issue #4 acceptance
+
+The same owned live ledger retained 7598 provider-received tokens from the two
+negative tasks and a one-micro owner-quoted estimate, with no unresolved holds.
+The owner fixture set daily limits to those observed totals, stopped/restarted
+only its gateway, and submitted a new file-read request through the web form.
+Run `faa1ef98-7d08-4677-8900-46cd2bdf1d2c` failed with `daily-budget`, zero steps
+and zero tokens before any new generation request. Physical receiver counters
+stayed at 10 requests / 10 finished / 0 interrupted; model-attempt rows stayed
+at 10. Web figures 7598 recorded / 0 held / 0 remaining and USD 0.000001
+estimate / 0 held / 0 remaining match SQLite. Historical negative runs were not
+rewritten. Root independently inspected the rendered Tasks panel and captured
+`root-day-cap-blocked.png` in the owned `august-live-daily-ledger.pfoP6A` evidence.
+Natural owner midnight and learned zero-LLM work are still pending. This proves
+the bounded rejection/restart branch, not useful-task success or full #4.
+
 ### Loop-stop classification repair — source verified, real replay pending
 
 The real clock negative below exposed a guard stop without a typed `stopReason`;

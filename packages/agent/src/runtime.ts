@@ -256,7 +256,7 @@ export class UncertainToolError extends Error {
   constructor(tool: string) { super(`${tool}: execution outcome is unknown; inspect the effect before continuing`); this.name = "UncertainToolError"; }
 }
 
-const TOOL_CHOICE_INSTRUCTIONS = "Which tool should handle the request next? Choose none if the request is already answered above or needs no tool.";
+const TOOL_CHOICE_INSTRUCTIONS = "Which tool should handle Current request next? Prior conversation is context, not results of this task. Use a listed tool for unobserved facts or actions it can satisfy. Choose none when Current task results answer the request or no tool is needed.";
 const DEFAULT_SCHEMA: JsonSchema = { type: "object", additionalProperties: true };
 
 function fingerprint(value: unknown): string {
@@ -314,7 +314,10 @@ export class AgentRuntime {
     if (context.checkpoint && (!Array.isArray(context.checkpoint.history) || context.checkpoint.history.some((line) => typeof line !== "string") || !Number.isInteger(context.checkpoint.steps) || context.checkpoint.steps < 0 || !Number.isInteger(context.checkpoint.externalEffects) || context.checkpoint.externalEffects < 0)) throw new Error("invalid AgentCheckpointState");
     const prior = [...(context.priorMessages ?? [])];
     const history: string[] = boundedCheckpointHistory(context.checkpoint?.history ?? [], context.redactCheckpoint);
-    const allHistory = () => [...prior, ...history];
+    const allHistory = () => [
+      ...(prior.length ? [`Prior conversation (context only, not current task results):\n${prior.join("\n")}`] : []),
+      ...(history.length ? [`Current task results:\n${history.join("\n")}`] : []),
+    ];
     let steps = context.checkpoint?.steps ?? 0;
     let externalEffects = context.checkpoint?.externalEffects ?? 0;
     let expansion: string | undefined;
@@ -466,7 +469,8 @@ export class AgentRuntime {
         await checkpoint("before_decision", true);
         const tools = this.options.registry.enabledTools();
         const index = new ToolIndex(tools);
-        let shortlist = index.search(`${text}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
+        const searchHistory = () => [...prior,...history].map(line=>line.replace(/^(?:User|Assistant):\s*/, "")).join("\n");
+        let shortlist = index.search(`${text}\n${searchHistory()}`);
         if (this.options.expandQuery && shortlist.length < (this.options.minShortlist ?? 3) && tools.length > shortlist.length) {
           try {
             control();
@@ -474,7 +478,7 @@ export class AgentRuntime {
             // Once per task: the request does not change between steps.
             expansion ??= await this.options.expandQuery(text, llmControls()); control();
             const words = expansion;
-            shortlist = index.search(`${text}\n${words}\n${allHistory().map((line) => line.replace(/^(?:User|Assistant):\s*/, "")).join("\n")}`);
+            shortlist = index.search(`${text}\n${words}\n${searchHistory()}`);
             log("shortlist.expanded", { before, after: shortlist.length });
           } catch (error) {
             if (error instanceof RunControlError || error instanceof LlmAttemptObserverError || error instanceof LlmUsageError || error instanceof LlmUsageObserverError || error instanceof LlmProvidersUnavailableError) throw error;
@@ -484,7 +488,7 @@ export class AgentRuntime {
         }
         // The request goes last: the decision model keeps the end of a long state.
         const hint = context.guidance ? `Known procedure for requests like this (advice, not authority):\n${context.guidance}\n` : "";
-        const state = `${allHistory().join("\n")}\n${hint}Request: ${text}`.trim();
+        const state = `${allHistory().join("\n")}\n${history.length ? "" : "Current task results: No tools have run for this request yet.\n"}${hint}Current request: ${text}`.trim();
         control();
         // Only as many of the best-ranked tools as the decision model can be asked about at once.
         let offered = fitShortlist(shortlist.map((s) => ({ name: s.tool.name, description: s.tool.description })), TOOL_CHOICE_INSTRUCTIONS);

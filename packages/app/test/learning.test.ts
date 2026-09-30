@@ -39,7 +39,8 @@ describe("the agent learns from what actually happened", () => {
     expect(excluded).toEqual([{ id: `${reply.runId}:1`, reason: "unresolved" }]);
     expect(examples).toHaveLength(1);
     expect(examples[0]).toMatchObject({ runId: reply.runId, decisionIndex: 0, questionId: "tool-choice", choice: "clock.now", label: { kind: "chosen-worked", key: "clock.now" }, reward: 1, execution: { tool: "clock.now", isError: false }, provenance: { tainted: false }, evidence: [{ verifier: "host-clock", method: "postcondition", verdict: "success" }] });
-    expect(examples[0]!.state).toContain("Request: what time is it");
+    expect(examples[0]!.state).toContain("Current request: what time is it");
+    expect(examples[0]!.state).toContain("Current task results: No tools have run for this request yet.");
     // Include actual choice calls as well as expansion, argument fill and final answer.
     expect(model.calls).toBeGreaterThan(0);
     expect(app.learning.report()[0]).toMatchObject({ stage: "llm", runs: 1, verifiedRuns: 1, verifiedSuccessRate: 1, avgLlmCalls: model.calls, avgTokens: model.calls * 12 });

@@ -395,7 +395,7 @@ describe("finding and installing capabilities", () => {
         await options?.onUsage?.({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
         const all = messages.map((m) => m.content).join("\n");
         if (options?.jsonSchema?.name === "decision") {
-          const tool = /Request: [^\n]*SEARCH/.test(all) ? "august.find_tools" : "august.install_tool";
+          const tool = /Current request: [^\n]*SEARCH/.test(all) ? "august.find_tools" : "august.install_tool";
           return JSON.stringify({ choice: all.includes("Result of ") ? "none" : tool });
         }
         if (options?.jsonSchema?.name === "arguments") {

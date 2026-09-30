@@ -131,9 +131,18 @@ bypass it so they can interrupt a busy message loop at its next safe boundary.
 
 The browser polls real state while the panel is open. Long control requests do
 not disable unrelated stop actions. Paused/cancelled replies are not offered
-as independently verified successful answers. This is not a durable control-
-intent protocol: in-flight stop requests and crash/budget edge cases still need
-qualification before long-mission and team-control completion.
+as independently verified successful answers. Durable owner stop intents are
+persisted before an in-flight signal is sent; one live pause/cancel/crash path
+passes locally. A repeated-call guard emits a typed failed stop, not Completed,
+and is ineligible for distillation. Broader crash/budget/platform edge cases
+still need qualification before long-mission and team-control completion.
+
+Model context labels prior conversation as context only, separately from
+observed results in the current run; the current request remains last for
+bounded decision-state readers. Argument/final-answer context carries the same
+separation. Choice instructions do not infer completion from an earlier answer
+or guard stop. This is a generic prompt boundary, not a tool/model-specific
+route, not independent verification and not native activation qualification.
 
 ### Owner-day and per-tool budget admission
 
