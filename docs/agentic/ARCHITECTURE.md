@@ -14,8 +14,8 @@
   Backend loading is lazy; invalid/unavailable native assets yield primary errors
   and the cascade uses its LLM fallback. Native activation and local training
   remain subject to independently verified, engine-specific outcomes (OUT-011).
-- Bun SQLite `runtime.db` schema v3/WAL stores messages/runs/checkpoints, received
-  usage and durable model attempts with tariff snapshots and unresolved holds.
+- Bun SQLite `runtime.db` schema v4/WAL stores messages/runs/checkpoints, received
+  usage and durable model/tool attempts with tariff snapshots and unresolved holds.
   Earlier Phase A evidence remains historical.
 - Maintained MCP SDK 1.31.0 is pinned behind the existing August adapter.
 - Local filesystem and journal persistence; current storage contracts are
@@ -135,6 +135,39 @@ as independently verified successful answers. This is not a durable control-
 intent protocol: in-flight stop requests and crash/budget edge cases still need
 qualification before long-mission and team-control completion.
 
+### Owner-day and per-tool budget admission
+
+The optional validated `budgets` policy selects an IANA `timeZone`, daily
+token/cost limits and exact tool-ID call/token/cost limits. Absent limits mean
+not configured, not zero. `BudgetLedger` reads `model_attempts`, `tool_attempts`
+and legacy received totals from the existing runtime database; there is no
+independent in-memory spend counter or new accounting service. Admission and
+reservation share the same IMMEDIATE transaction. Snapshots use one read
+transaction across all rows.
+
+Actual argument-generation requests carry a host-selected tool ID. Expansion,
+selection and final-answer usage are daily/run spend without invented tool
+attribution. Each provider's refreshed output-price cap reaches its actual
+request body, including retries/fallbacks. The transaction rejects known output
+exposure beyond run/day/tool allowance instead of clipping the hold. Prompt
+token quantities are not known before the receipt; quotes, held allowance and
+provider token reports are not guarantees of an invoice ceiling.
+
+`callCostMicros` is an optional owner flat estimate, not a fee inferred from MCP
+output. Missing tool fees fail closed under a configured monetary cap; explicit
+zero permits a free compiled call after model-budget exhaustion. Tool-call limits
+still apply to compiled work. Unknown/in-flight model and tool holds survive
+restart and carry across owner midnight; reported usage belongs to the request's
+owner day. Legacy totals have no reconstructed per-tool provenance.
+
+GET `/v1/budgets` projects this owner-wide snapshot under the existing gateway
+authentication/Host/Origin guards. Web Tasks and CLI `/budgets` distinguish
+received estimates, unresolved holds, missing quotes and unconfigured limits.
+No model is used to route the CLI command. A dispatched tool transport exception
+or uncertain MCP error response keeps `tool_started/safeToResume=false` and
+stops further model/tool execution. Owner effect resolution does not silently
+release an unresolved fee hold.
+
 ### Owner credential controls
 
 The configured web gateway has a direct `GatewaySecrets` adapter to the secure
@@ -220,11 +253,14 @@ evidence and outstanding Windows portability gaps belong in `VERIFICATION.md`.
 - Repository source and tests are Git-managed.
 - `~/.august` may contain retained configuration, decisions, journal, secrets,
   capability configuration, and future run/memory state.
-- `dataDir/runtime.db` schema v3 owns messages, runs, transitions, budgets,
-  usage, checkpoints, model attempts and idempotency; source includes v1→v2→v3
+- `dataDir/runtime.db` schema v4 owns messages, runs, transitions, budgets,
+  usage, checkpoints, model/tool attempts and idempotency; source includes v1→v2→v3→v4
   verified backup/migration paths. App refuses live-owner migration, and busy
   WAL checkpoints refuse migration before creating an incomplete backup. Read-only
   image inspection is restricted to stopped/checkpointed snapshots, not live WAL.
+  The v3 backup retains exact receipts, quotes, conversations and run IDs with
+  owner-only permissions and a SHA-256 sidecar. A foreign-key failure rolls the
+  v4 schema transaction back; no data reset or destructive downgrade is used.
   Migration has been exercised only on process-owned temporary state; unknown
   external retained datasets and production rollback are not qualified. No reset
   is authorized. Evaluate consumer/data/support-window evidence before extending

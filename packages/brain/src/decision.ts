@@ -1,6 +1,6 @@
 import { tokenize } from "@august/capabilities";
 import { optionBucket, scriptOf, segmentId, temperatureFor, temperatureScale, type CalibrationTable, type SegmentKey } from "./calibration.ts";
-import type { LlmAttemptEvent, LlmUsageObserver } from "./usage.ts";
+import type { LlmAttemptEvent, LlmCallControls, LlmUsageObserver } from "./usage.ts";
 
 /** Laya reads `choice` questions best with at most this many options. */
 export const LAYA_MAX_OPTIONS = 16;
@@ -32,6 +32,7 @@ export interface DecisionInput {
   maxCompletionTokens?: number;
   beforeCall?: () => void;
   remainingTokens?: () => number;
+  completionLimit?: LlmCallControls["completionLimit"];
 }
 
 export interface DecisionResult {

@@ -115,17 +115,17 @@ export class McpHost implements ToolExecutor {
     const server = this.servers.get(id);
     if (!server) {
       if (this.options.fallback) return this.options.fallback.call(tool, args, context);
-      return { content: `unknown tool ${tool}`, isError: true };
+      return { content: `unknown tool ${tool}`, isError: true, outcome: "not_sent" };
     }
     const original = server.originals.get(tool);
-    if (!original) return { content: `unknown tool ${tool}`, isError: true };
-    if (!server.connection.alive) return { content: `${id} is not running`, isError: true };
+    if (!original) return { content: `unknown tool ${tool}`, isError: true, outcome: "not_sent" };
+    if (!server.connection.alive) return { content: `${id} is not running`, isError: true, outcome: "not_sent" };
     try {
       const r = await server.connection.callTool(original, args);
-      return { content: r.content, isError: r.isError, parts: partsFor(tool, r, server.trustedText.has(tool), server.policy.sensitivity ?? "personal") };
+      return { content: r.content, isError: r.isError, ...(r.isError ? { outcome: "unknown" as const } : {}), parts: partsFor(tool, r, server.trustedText.has(tool), server.policy.sensitivity ?? "personal") };
     } catch (error) {
       // The message names the server and the failure, never the arguments.
-      return { content: (error as Error).message, isError: true };
+      return { content: (error as Error).message, isError: true, outcome: "unknown" };
     }
   }
 

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { validateNativeLayaBundle, type NativeLayaBundle } from "@august/brain";
+import type { BudgetPolicy } from "@august/core";
 
 export interface AugustConfig {
   /** Workspace part of session keys. */
@@ -9,6 +10,8 @@ export interface AugustConfig {
   /** The only folder the built-in file tools may touch. */
   root: string;
   llm: LlmConnection & { backup?: LlmConnection; cooldownMs?: number; maxCooldownMs?: number };
+  /** Owner-day and exact-tool allowances; prices are explicit owner quotes, not vendor invoices. */
+  budgets?: BudgetPolicy;
   gateway: { port: number; token: string };
   /** Where the event journal and the decision log live. */
   dataDir: string;
@@ -201,10 +204,43 @@ export function parseConfig(value: unknown): AugustConfig {
     laya: parseLaya(c.laya),
     ...(c.memory === undefined ? {} : { memory: parseMemory(c.memory) }),
     ...(c.auditExternal === undefined ? {} : { auditExternal: parseAuditExternal(c.auditExternal) }),
+    ...(c.budgets === undefined ? {} : { budgets: parseBudgets(c.budgets) }),
     channels: parseChannels(c.channels),
     llm: { ...primary, ...(backup ? { backup } : {}), ...(cooldownMs === undefined ? {} : { cooldownMs }), ...(maxCooldownMs === undefined ? {} : { maxCooldownMs }) },
     gateway: { port: port as number, token },
   };
+}
+
+function parseBudgets(value: unknown): BudgetPolicy {
+  const record = (input: unknown, where: string, keys?: readonly string[]): Record<string, unknown> => {
+    if (!input || typeof input !== "object" || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new ConfigError(`${where} must be an object`);
+    const fields = input as Record<string, unknown>;
+    if (keys && Object.keys(fields).some(key => !keys.includes(key))) throw new ConfigError(`${where} has an unknown setting`);
+    return fields;
+  };
+  const limits = (input: unknown, where: string, keys: readonly string[]): Record<string, number> => {
+    const fields = record(input, where, keys), out: Record<string, number> = {};
+    for (const [key, amount] of Object.entries(fields)) {
+      if (!Number.isSafeInteger(amount) || (amount as number) < 0) throw new ConfigError(`${where}.${key} must be a safe non-negative integer`);
+      out[key] = amount as number;
+    }
+    return out;
+  };
+  const fields = record(value, "budgets", ["timeZone", "daily", "tools"]);
+  if (fields.timeZone !== undefined && (typeof fields.timeZone !== "string" || !fields.timeZone || fields.timeZone !== fields.timeZone.trim())) throw new ConfigError("budgets.timeZone must be an explicit valid timezone");
+  let timeZone: string;
+  try { timeZone = new Intl.DateTimeFormat("en", { timeZone: fields.timeZone as string | undefined }).resolvedOptions().timeZone; }
+  catch { throw new ConfigError("budgets.timeZone is not a supported timezone"); }
+  const policy: BudgetPolicy = { timeZone };
+  if (fields.daily !== undefined) policy.daily = limits(fields.daily, "budgets.daily", ["tokens", "costMicros"]);
+  if (fields.tools !== undefined) {
+    policy.tools = {};
+    for (const [id, input] of Object.entries(record(fields.tools, "budgets.tools"))) {
+      if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+$/.test(id) || id.length > 512) throw new ConfigError("budgets.tools keys must be exact namespace.tool IDs, without wildcards");
+      Object.defineProperty(policy.tools, id, { enumerable: true, value: limits(input, `budgets.tools.${id}`, ["calls", "tokens", "costMicros", "callCostMicros"]) });
+    }
+  }
+  return policy;
 }
 
 function parseLlmConnection(value: unknown, where: string): LlmConnection {

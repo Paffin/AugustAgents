@@ -289,7 +289,7 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
   await reportServers(app, io);
   const session = makeSessionKey({ workspace: config.workspace, channel: "cli", user: "local" });
   io.print(`\nAugust · ${config.workspace}\nModel: ${config.llm.model}\nDescribe the result you need. /help shows controls; /exit leaves the chat.`);
-  const help = '/tasks — recent task state and usage\n/resume ID — continue a safely paused task\n/good or /bad [why] — assess the last completed answer\n/exit — leave the chat\nApprovals require an explicit y. Use august secret set for credentials, never chat.';
+  const help = '/tasks — recent task state and usage\n/budgets — owner-day allowance and per-tool usage\n/resume ID — continue a safely paused task\n/good or /bad [why] — assess the last completed answer\n/exit — leave the chat\nApprovals require an explicit y. Use august secret set for credentials, never chat.';
   const report = (run: DurableRun) => {
     io.print(`  ${run.id} · ${run.state}\n  ${run.steps}/${run.budget.maxSteps} steps · ${run.usage.totalTokens}/${run.budget.maxTokens} tokens · ${run.usage.costMicros} µUSD estimate (not a vendor bill)`);
     const accounting = app.runs.modelAccounting(run.id);
@@ -303,6 +303,15 @@ async function chat(configPath: string, io: CliIo): Promise<CliResult> {
     if (line === null || ["exit", "/exit"].includes(line.trim())) break;
     if (line.trim() === "") continue;
     if (line.trim() === "/help") { io.print(help); continue; }
+    if (line.trim() === "/budgets") {
+      const {period,daily,tools}=app.budgetSnapshot();
+      io.print(`Owner day ${period.key} · ${period.timeZone}\nResets ${new Date(period.endsAt).toISOString()}`);
+      io.print(`Tokens: ${daily.tokens} received + ${daily.heldTokens} held · remaining ${daily.remainingTokens??"not configured"}`);
+      io.print(`Quoted estimate: ${daily.costMicros} µUSD + ${daily.heldCostMicros} µUSD held · remaining ${daily.remainingCostMicros??"not configured"}`);
+      if(daily.unpricedCalls)io.print(`${daily.unpricedCalls} tool fee(s) unknown, not free. Estimates/holds are not provider invoices.`);
+      for(const [tool,t] of Object.entries(tools))io.print(`${tool}: ${t.calls} call(s) + ${t.heldCalls} held · calls remaining ${t.remainingCalls??"not configured"} · ${t.tokens} tokens + ${t.heldTokens} held · ${t.costMicros} µUSD + ${t.heldCostMicros} held${t.unpricedCalls?" · fee unknown":""}`);
+      continue;
+    }
     if (line.trim() === "/tasks") {
       const runs = app.listRuns({ session, limit: 10 });
       if (!runs.length) io.print("No tasks yet. Describe the result you need.");
@@ -393,6 +402,7 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     queue,
     audit: () => app.audit.externalStatus(),
     providerHealth: () => app.providerHealth(),
+    budgets:()=>app.budgetSnapshot(),
     // Telegram answers only through Telegram: a browser token must not be able to answer its approvals.
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,

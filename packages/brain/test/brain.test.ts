@@ -333,6 +333,12 @@ describe("OpenAiCompatibleProvider", () => {
     expect(await provider.complete([], { maxTokens: 300, remainingTokens: () => remaining })).toBe("done");
     expect(limits).toEqual([120, 70]);
   });
+  test("Safety/reliability (REQ-REL-002): each actual request applies a fresh provider-specific quoted output cap",async()=>{
+    let available=3;const limits:number[]=[],identities:string[][]=[];
+    const provider=new OpenAiCompatibleProvider({baseUrl:"https://llm.example",model:"owned-model",name:"owned-provider",sleep:async()=>{available=2;},fetch:(async(_url,init)=>{limits.push(JSON.parse(String(init?.body)).max_tokens);return limits.length===1?new Response("",{status:429}):used("done");}) as typeof fetch});
+    expect(await provider.complete([],{maxTokens:100,completionLimit:(name,model)=>{identities.push([name,model]);return available;}})).toBe("done");
+    expect(limits).toEqual([3,2]);expect(identities).toEqual([["owned-provider","owned-model"],["owned-provider","owned-model"]]);
+  });
 
   test("Safety/reliability (REQ-REL-002): cancellation during backoff starts no retry or fallback", async () => {
     let stopped = false, calls = 0;

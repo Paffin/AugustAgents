@@ -3,7 +3,7 @@ import { EventJournal, makeSessionKey } from "@august/core";
 import { CapabilityRegistry, type ToolDescriptor } from "@august/capabilities";
 import type { ChatMessage, DecisionEngine, LlmProvider } from "@august/brain";
 import { LoopGuard, PolicyEngine, type ContentPart } from "@august/policy";
-import { AgentCheckpointError, AgentRuntime, ApprovalLedger, actionHash, type AgentRunEvent, type ApprovalRequest, type Approver, type ToolExecutor } from "../src/index.ts";
+import { AgentCheckpointError, AgentRuntime, ApprovalLedger, UncertainToolError, actionHash, type AgentRunEvent, type ApprovalRequest, type Approver, type ToolExecutor } from "../src/index.ts";
 
 const session = makeSessionKey({ workspace: "home", channel: "cli", user: "dan" });
 
@@ -294,6 +294,14 @@ describe("AgentRuntime", () => {
     const { agent } = build({ decision: picks("notes.search", "none"), llm: fakeLlm({ "notes.search": { q: "x" } }, "could not search"), executor: ex });
     const r = await agent.handle(session, "search notes");
     expect(r).toMatchObject({ reply: "could not search", steps: 1 });
+  });
+  test("an unknown durable tool outcome keeps the unsafe checkpoint and never falls back or retries",async()=>{
+    for(const ex of [executor({"notes.search":"THROW"}),{call:async()=>({content:"transport disconnected",isError:true,outcome:"unknown" as const})}]) {
+      const decision=picks("none"),llm=fakeLlm({}),events:AgentRunEvent[]=[],dispositions:string[]=[];
+      const {agent}=build({decision,llm,executor:ex});
+      await expect(agent.handle(session,"search notes",{plan:[{tool:"notes.search",args:{q:"x"}}],beforeTool:()=>"owned-attempt",afterTool:(_id,state)=>{dispositions.push(state);},onEvent:event=>{events.push(event);}})).rejects.toBeInstanceOf(UncertainToolError);
+      expect(dispositions).toEqual(["unknown"]);expect(events.at(-1)).toMatchObject({type:"checkpoint",phase:"tool_started",safeToResume:false});expect(decision.asked).toHaveLength(0);expect(llm.prompts).toHaveLength(0);
+    }
   });
 
   test("invalid arguments from the LLM never reach the tool", async () => {

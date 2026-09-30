@@ -52,7 +52,7 @@ export class MemoryExecutor implements ToolExecutor {
         case "memory.remember": return this.remember(scope, args, context);
         case "memory.forget": {
           const n = this.store.forget(scope, String(args.id), "forgotten at the owner's request");
-          return n > 0 ? { content: `Forgot it${n > 1 ? ` and ${n - 1} earlier version(s) of it` : ""}.` } : fail("no such memory");
+          return n > 0 ? { content: `Forgot it${n > 1 ? ` and ${n - 1} earlier version(s) of it` : ""}.` } : { ...fail("no such memory"), outcome: "not_sent" };
         }
       }
     } catch (error) {

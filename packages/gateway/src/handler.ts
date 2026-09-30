@@ -84,6 +84,8 @@ export interface GatewayOptions extends BindConfig {
   /** Owner-only status; never includes endpoint credentials or journal contents. */
   audit?: () => { state: "not-configured" | "pending" | "published" | "unavailable" | "conflict"; anchoredThrough: number; localThrough: number; checkedAt?: number };
   providerHealth?: () => Array<{ provider: string; state: "closed" | "open" | "half-open"; failures: number; retryAt?: number }>;
+  /** Owner-global budget accounting; holds and quotes are not settled vendor charges. */
+  budgets?: () => import("@august/core").BudgetSnapshot;
 }
 
 function json(status: number, body: unknown): Response {
@@ -175,6 +177,11 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       if (!options.providerHealth) return json(404, { error: "provider status unavailable" });
       try { return json(200, { providers: options.providerHealth() }); }
       catch { return json(503, { error: "provider status unavailable" }); }
+    }
+    if (url.pathname === "/v1/budgets" && request.method === "GET") {
+      if (!options.budgets) return json(404, { error: "budget accounting unavailable" });
+      try { return json(200, options.budgets()); }
+      catch { return json(503, { error: "budget accounting unavailable" }); }
     }
     if (url.pathname === "/v1/runs" && request.method === "GET") {
       if (!options.runs) return json(404, { error: "run controls unavailable" });

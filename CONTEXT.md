@@ -54,10 +54,14 @@ External audit App/CLI integration is now implemented: optional configured sink,
 periodic metadata-only publication, outage/conflict UI/doctor warnings and
 strictly read-only verification that cannot re-sign inspected history. Public
 custody, key rotation continuity and the complete OUT-009 remain unqualified.
-Next implementation is daily/per-tool budget admission and durable accounting
-(GitHub #4). Owner-day boundaries now use explicit IANA timezone/Intl calendar
-geometry, including DST and skipped dates; that helper is not yet a delivered
-daily/per-tool ledger or its live acceptance.
+Daily/per-tool admission and accounting (GitHub #4) are now implemented in the
+existing SQLite runtime, with IANA owner-day boundaries, shared atomic model/tool
+holds, per-provider output caps, a web accounting panel and CLI `/budgets`.
+Schema v4 retains exact v3 receipts through a checksum-verified backup/migration.
+Unknown tool transport outcomes preserve an unsafe recovery checkpoint rather
+than permitting a model retry. Real budget/compiled-free/midnight acceptance is
+in progress; source regressions alone do not close #4. Prompt-input quantities
+and vendor invoices remain unknown before receipt, not a strict billing ceiling.
 
 ## Active Risks
 

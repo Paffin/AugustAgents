@@ -130,7 +130,7 @@ export class MetaExecutor implements ToolExecutor {
         case "august.install_tool": {
           const name = String(args.name);
           const plan = this.plans.get(name);
-          if (!plan) throw new Error(`"${name}" has no prepared plan; search with august.find_tools first`);
+          if (!plan) return { content: `"${name}" has no prepared plan; search with august.find_tools first`, isError: true, outcome: "not_sent" };
           // Take before the first await: only one concurrent caller can consume
           // the exact plan that was rendered in the approval preview.
           this.plans.delete(name);

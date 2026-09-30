@@ -32,6 +32,12 @@
 - **Provider wait:** a run retained at a complete safe checkpoint after model
   providers could not accept further work, with no unresolved billing or
   ambiguous started effect; it is not the same as owner pause or cancellation.
+- **Owner day:** the civil date in the configured IANA timezone, with inclusive
+  UTC start and exclusive UTC end; DST days need not contain 24 hours.
+- **Tool-call estimate:** an explicit owner `callCostMicros` quote retained with
+  a host tool reservation. It is not a vendor usage receipt or an MCP assertion.
+- **Budget availability:** configured allowance less received estimates and
+  unresolved holds. Unconfigured limits and unpriced fees are not free usage.
 
 ## Definitions
 
@@ -52,6 +58,8 @@
   provenance state.
 - Every run transition is persistent before the next externally visible effect.
 - Tainted or unresolved outcomes cannot promote learning or distillation.
+- Unknown prior-day holds do not disappear at midnight or on process restart.
+- A tool transport failure cannot create a safe checkpoint or prove no effect.
 - Compatibility and migration mechanisms have a real consumer and sunset.
 
 ## Relationships

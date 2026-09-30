@@ -390,4 +390,14 @@ describe("web page accessibility and approval binding (REQ-ACC-001)", () => {
     expect(WEB_JS).toContain('label.textContent = name');
     expect(WEB_JS).not.toContain("innerHTML");
   });
+
+  test("Public budget UI contract: owner-day boundaries, recorded/held and unpriced estimates stay distinct", () => {
+    expect(WEB_HTML).toContain('aria-label="Daily and per-tool budget accounting"');
+    expect(WEB_JS).toContain('"/v1/budgets"');
+    for (const field of ["period.timeZone", "period.endsAt", "body.daily.tokens", "body.daily.heldTokens", "body.daily.costMicros", "body.daily.heldCostMicros", "tool.unpricedCalls", "tool.limits.callCostMicros"]) expect(WEB_JS).toContain(field);
+    expect(WEB_JS).toContain("Limit not configured"); expect(WEB_JS).toContain("API fees are unknown");
+    expect(WEB_JS).toContain("not vendor invoices"); expect(WEB_JS).toContain("not settled charges");
+    expect(WEB_JS).toContain("Remaining allowance is not established");
+    expect(WEB_JS).not.toContain("innerHTML"); expect(() => new Function(WEB_JS)).not.toThrow();
+  });
 });

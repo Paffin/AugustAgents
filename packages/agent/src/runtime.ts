@@ -34,6 +34,8 @@ import {
 export interface ToolResult {
   content: string;
   isError?: boolean;
+  /** Host transport classification. A server's error reply is not proof that no effect occurred. */
+  outcome?: "unknown" | "not_sent";
   /**
    * The result as fragments with their own origin, trust and sensitivity. When present it is
    * authoritative and `content` is only its plain-text rendering; when absent the whole
@@ -116,7 +118,7 @@ export interface AgentReply {
   reply: string;
   steps: number;
   tainted: boolean;
-  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget" | "billing-unknown" | "provider-unavailable";
+  stopReason?: "cancelled" | "deadline" | "step-budget" | "external-effect-budget" | "token-budget" | "cost-budget" | "billing-unknown" | "provider-unavailable" | "daily-budget" | "tool-budget";
   error?: string;
   /** Decisions and executions of this handle call, for the learning pipeline. */
   trace?: RunTrace;
@@ -198,10 +200,14 @@ export interface AgentExecutionContext {
   maxExternalEffects?: number;
   onUsage?: LlmUsageObserver;
   onAttempt?: LlmCallControls["onAttempt"];
-  remainingTokens?: () => number;
+  remainingTokens?: (tool?:string) => number;
+  completionLimit?: (provider: string, model: string, tool?: string) => number;
   usageExhaustion?: () => "token-budget" | "cost-budget" | undefined;
   /** Admission check for a billable model call; zero-cost compiled work can still run. */
-  modelBudgetExhaustion?: () => "token-budget" | "cost-budget" | "billing-unknown" | undefined;
+  modelBudgetExhaustion?: (tool?:string) => "token-budget" | "cost-budget" | "billing-unknown" | "daily-budget" | "tool-budget" | undefined;
+  toolBudgetExhaustion?: (tool:string) => "daily-budget" | "tool-budget" | undefined;
+  beforeTool?: (tool:string,argsHash:string) => Promise<string> | string;
+  afterTool?: (attemptId:string,disposition:"estimated"|"unknown"|"not_sent") => Promise<void> | void;
   redactCheckpoint?: (text: string) => string;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
   /**
@@ -242,10 +248,13 @@ function clipParts(parts: readonly ContentPart[], max: number): ContentPart[] {
   return out;
 }
 
-class RunControlError extends Error {
+export class RunControlError extends Error {
   constructor(public readonly reason: NonNullable<AgentReply["stopReason"]>) { super(reason); this.name = "RunControlError"; }
 }
 export class AgentCheckpointError extends Error { constructor(cause: unknown) { super(`checkpoint observer failed: ${(cause as Error).message}`); this.name = "AgentCheckpointError"; } }
+export class UncertainToolError extends Error {
+  constructor(tool: string) { super(`${tool}: execution outcome is unknown; inspect the effect before continuing`); this.name = "UncertainToolError"; }
+}
 
 const TOOL_CHOICE_INSTRUCTIONS = "Which tool should handle the request next? Choose none if the request is already answered above or needs no tool.";
 const DEFAULT_SCHEMA: JsonSchema = { type: "object", additionalProperties: true };
@@ -315,12 +324,12 @@ export class AgentRuntime {
       if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) throw new RunControlError("deadline");
       const exhausted = context.usageExhaustion?.(); if (exhausted) throw new RunControlError(exhausted);
     };
-    const modelControl = (): void => {
+    const modelControl = (tool?:string): void => {
       control();
-      const exhausted = context.modelBudgetExhaustion?.();
+      const exhausted = context.modelBudgetExhaustion?.(tool);
       if (exhausted) throw new RunControlError(exhausted);
     };
-    const llmControls = (): LlmCallControls => ({ signal: context.signal, deadlineAt: context.deadlineAt, onAttempt: context.onAttempt, onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(), remainingTokens: context.remainingTokens, beforeCall: modelControl });
+    const llmControls = (tool?:string): LlmCallControls => ({ tool,signal: context.signal, deadlineAt: context.deadlineAt, onAttempt: context.onAttempt, onUsage: context.onUsage, requireUsage: context.onUsage !== undefined, maxTokens: context.remainingTokens?.(tool), remainingTokens: context.remainingTokens?()=>context.remainingTokens!(tool):undefined, completionLimit:context.completionLimit?(provider,model)=>context.completionLimit!(provider,model,tool):undefined, beforeCall: ()=>modelControl(tool) });
     const checkpoint = async (phase: Extract<AgentRunEvent, { type: "checkpoint" }>["phase"], safeToResume: boolean, extra: { lastTool?: string; argsHash?: string; providerRetryAt?: number } = {}) => {
       try { await notify({ type: "checkpoint", phase, safeToResume, history: boundedCheckpointHistory(history, context.redactCheckpoint), taint: taint.snapshot(), loop: guard.snapshot(), steps, externalEffects, ...extra }); }
       catch (error) { throw new AgentCheckpointError(error); }
@@ -374,23 +383,30 @@ export class AgentRuntime {
         }
 
         control();
+        const toolExhausted=context.toolBudgetExhaustion?.(descriptor.name);if(toolExhausted)throw new RunControlError(toolExhausted);
         const hasExternalEffect = descriptor.effects.some((effect) => effect !== "read");
         if (hasExternalEffect && externalEffects >= (context.maxExternalEffects ?? Number.MAX_SAFE_INTEGER)) throw new RunControlError("external-effect-budget");
+        let toolAttempt:string|undefined;
+        try{toolAttempt=await context.beforeTool?.(descriptor.name,createHash("sha256").update(JSON.stringify(args)).digest("hex"));}catch(error){if(error instanceof RunControlError)throw error;throw new AgentCheckpointError(error);}
         if (hasExternalEffect) externalEffects += 1;
-        await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });
-        control();
+        try {await checkpoint("tool_started", false, { lastTool: descriptor.name, argsHash: fingerprint(args) });control();}
+        catch(error){if(toolAttempt)await context.afterTool?.(toolAttempt,"not_sent");throw error;}
         const startedAt = this.now();
         log("tool.call", { tool: descriptor.name, argKeys: Object.keys(args).sort(), argsHash: fingerprint(args) });
         let parts: ContentPart[];
         let failed = false;
+        let toolDisposition:"estimated"|"unknown"|"not_sent"="estimated";
         try {
           const r = await this.options.executor.call(descriptor.name, args, { session, taint: taint.snapshot() });
           parts = resultParts(descriptor, r);
           failed = r.isError === true;
+          toolDisposition = r.outcome ?? (failed && hasExternalEffect ? "unknown" : "estimated");
         } catch (error) {
           parts = resultParts(descriptor, { content: `tool failed: ${(error as Error).message}` });
           failed = true;
+          toolDisposition="unknown";
         }
+        if(toolAttempt){try{await context.afterTool?.(toolAttempt,toolDisposition);}catch(error){throw new AgentCheckpointError(error);}}
         steps += 1;
         // Results are trimmed before entering the context; a huge page must not bury the request.
         const clipped = clipParts(parts, this.maxResultChars);
@@ -405,6 +421,11 @@ export class AgentRuntime {
         });
         for (const part of parts) taint.absorbPart(part);
         history.push(`Result of ${descriptor.name}:${clipped.some((part) => part.trust === "untrusted") ? "\n" : " "}${renderParts(clipped)}`);
+        if(toolDisposition==="unknown"&&(toolAttempt||hasExternalEffect)) {
+          log("tool.unknown", { tool: descriptor.name });
+          // Retain tool_started/safeToResume=false: neither a retry nor a model may launder the uncertain effect.
+          throw new UncertainToolError(descriptor.name);
+        }
         await checkpoint("tool_finished", true, { lastTool: descriptor.name, argsHash: fingerprint(args) });
         return { failed };
     };
@@ -475,7 +496,7 @@ export class AgentRuntime {
         const choice = await chooseTool(
           this.options.decision,
           offered,
-          { state, tainted: taint.snapshot().tainted, signal: controls.signal, deadlineAt: controls.deadlineAt, onAttempt: controls.onAttempt, onUsage: controls.onUsage, requireUsage: controls.requireUsage, maxCompletionTokens: controls.maxTokens, remainingTokens: controls.remainingTokens, beforeCall: controls.beforeCall },
+          { state, tainted: taint.snapshot().tainted, signal: controls.signal, deadlineAt: controls.deadlineAt, onAttempt: controls.onAttempt, onUsage: controls.onUsage, requireUsage: controls.requireUsage, maxCompletionTokens: controls.maxTokens, remainingTokens: controls.remainingTokens, completionLimit: controls.completionLimit, beforeCall: controls.beforeCall },
           TOOL_CHOICE_INSTRUCTIONS,
         );
         control();
@@ -500,6 +521,7 @@ export class AgentRuntime {
         }
 
         control();
+        const toolExhausted=context.toolBudgetExhaustion?.(descriptor.name);if(toolExhausted)throw new RunControlError(toolExhausted);
         const args = await fillArguments(
           this.options.llm,
           {
@@ -509,7 +531,7 @@ export class AgentRuntime {
           },
           text + (allHistory().length ? `\n\nResults so far:\n${allHistory().join("\n")}` : ""),
           3,
-          llmControls(),
+          llmControls(descriptor.name),
         );
         control();
 
@@ -517,7 +539,8 @@ export class AgentRuntime {
         if (done.terminal) return done.terminal;
       }
     } catch (error) {
-      if (error instanceof AgentCheckpointError || error instanceof LlmAttemptObserverError || error instanceof LlmUsageObserverError) throw error;
+      if(error instanceof LlmAttemptObserverError&&error.observerCause instanceof RunControlError)error=error.observerCause;
+      if (error instanceof AgentCheckpointError || error instanceof UncertainToolError || error instanceof LlmAttemptObserverError || error instanceof LlmUsageObserverError) throw error;
       if (context.signal?.aborted) error = new RunControlError("cancelled");
       else if (context.deadlineAt !== undefined && this.now() >= context.deadlineAt) error = new RunControlError("deadline");
       if (error instanceof LlmProvidersUnavailableError) {
@@ -530,7 +553,7 @@ export class AgentRuntime {
       if (error instanceof RunControlError) {
         log("task.stop", { reason: error.reason });
         await notify({ type: "stopped", reason: error.reason });
-        const reason = error.reason === "cost-budget" ? "the configured cost threshold was reached" : error.reason === "token-budget" ? "the configured token threshold was reached" : error.reason;
+        const reason = error.reason === "cost-budget" ? "the configured cost allowance cannot admit another model request" : error.reason === "token-budget" ? "the configured token threshold was reached" : error.reason === "daily-budget" ? "the owner-day allowance is exhausted, reserved or insufficient; no further model request was sent" : error.reason === "tool-budget" ? "this tool's allowance is exhausted, reserved, unquoted or insufficient; no further call was sent" : error.reason;
         return { reply: `Stopped: ${reason}.`, steps, tainted: taint.snapshot().tainted, stopReason: error.reason };
       }
       const name = (error as Error).name;

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import type { SessionKey } from "./session.ts";
+import { BudgetAdmissionError, BudgetLedger, TOOL_ATTEMPTS_SQL, type BudgetPolicy, type BudgetSnapshot } from "./budget-ledger.ts";
 
 export type MessageRole = "user" | "assistant";
 export type RunState = "created" | "running" | "waiting_approval" | "waiting_external" | "paused" | "recovering" | "verifying" | "completed" | "failed" | "cancelled";
@@ -14,7 +15,7 @@ export interface UsageDelta { inputTokens: number; outputTokens: number; totalTo
 export interface UsagePricing { inputMicrosPerMillion: number; outputMicrosPerMillion: number }
 export interface ModelQuote extends UsagePricing { source?: string; asOf?: string }
 export interface ModelAttempt {
-  id: string; runId: string; provider: string; model: string; requestHash: string;
+  id: string; runId: string; provider: string; model: string; requestHash: string; tool?: string;
   quote: ModelQuote; state: "in_flight" | "reported" | "unknown" | "not_sent";
   reservedTokens: number; reservedCostMicros: number; usage?: UsageDelta;
   receiptSource?: "provider" | "owner"; failure?: string; createdAt: number; updatedAt: number;
@@ -34,6 +35,7 @@ export interface DurableRuntimeStoreOptions {
   readOnly?: boolean;
   /** Runtime owners recover interrupted work; ordinary storage handles never do. Local host only. */
   exclusiveOwner?: boolean;
+  budgetPolicy?: BudgetPolicy;
 }
 
 export class RuntimeOwnerInUseError extends Error {
@@ -67,7 +69,7 @@ function schema(db: Database): number {
   const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('runtime_meta','messages','runs') ORDER BY name").all() as Array<{ name: string }>).map(({ name }) => name);
   if (tables.join(",") !== "messages,runs,runtime_meta") throw new Error("runtime schema is incomplete");
   const row = db.query("SELECT value FROM runtime_meta WHERE key='schema_version'").get() as { value: string } | null;
-  const version = Number(row?.value); if (![1, 2, 3].includes(version)) throw new Error(`unsupported runtime schema ${row?.value ?? "missing"}`); return version;
+  const version = Number(row?.value); if (![1, 2, 3, 4].includes(version)) throw new Error(`unsupported runtime schema ${row?.value ?? "missing"}`); return version;
 }
 /**
  * Read-only opens load a private in-memory image: the SQLite URI `immutable=1` flag is not honored by every
@@ -138,10 +140,26 @@ function migrateV2(path: string): void {
   }).immediate(); } finally { db.close(); }
 }
 
+/** Forward-only v3→v4; restore only the checksum-verified stopped v3 backup. */
+function migrateV3(path:string):void {
+  let db=new Database(path);try{assertOwnerInactive(db);checkpointForMigration(db);}finally{db.close();}
+  const backup=`${path}.v3.backup`,digestPath=`${backup}.sha256`,digest=fileDigest(path);
+  if(!existsSync(backup)){copyFileSync(path,backup);chmodSync(backup,0o600);const fd=openSync(backup,"r+");try{fsyncSync(fd);}finally{closeSync(fd);}writeFileSync(digestPath,`sha256:${digest}\n`,{flag:"wx",mode:0o600});}
+  if(!existsSync(digestPath)||readFileSync(digestPath,"utf8").trim()!==`sha256:${digest}`||fileDigest(backup)!==digest||inspectRuntimeSchema(backup)!==3)throw Error("invalid runtime v3 backup or digest");
+  db=new Database(path);try{db.run("PRAGMA foreign_keys = ON");db.transaction(()=>{
+    assertOwnerInactive(db);db.run("ALTER TABLE model_attempts ADD COLUMN tool_id TEXT");
+    db.run("CREATE INDEX model_attempts_day ON model_attempts(created_at)");db.run(TOOL_ATTEMPTS_SQL);db.run("CREATE INDEX tool_attempts_day ON tool_attempts(created_at,tool)");
+    if(db.query("PRAGMA foreign_key_check").get())throw Error("budget migration foreign-key violation");
+    db.run("UPDATE runtime_meta SET value='4' WHERE key='schema_version'");
+  }).immediate();}finally{db.close();}
+}
+
 export class DurableRuntimeStore {
   private readonly db: Database;
   private ownerReceipt?: string;
   private closed = false;
+  private readonly budgetPolicy: BudgetPolicy;
+  private readonly budgets: BudgetLedger;
   constructor(path = ":memory:", options: DurableRuntimeStoreOptions = {}) {
     if (options.readOnly && options.exclusiveOwner) throw new Error("read-only storage cannot own a runtime");
     const fresh = path === ":memory:" || !existsSync(path);
@@ -149,29 +167,33 @@ export class DurableRuntimeStore {
       const probe = new Database(path); let version: number;
       try { version = schema(probe); } finally { probe.close(); }
       if (version! === 1) { migrateV1(path); version = 2; }
-      if (version! === 2) migrateV2(path);
+      if (version! === 2) {migrateV2(path);version=3;}
+      if(version === 3)migrateV3(path);
     }
     this.db = options.readOnly && path !== ":memory:" ? openImmutable(path) : new Database(path);
     this.db.run("PRAGMA foreign_keys = ON");
     if (fresh && !options.readOnly) {
-      this.db.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); this.db.run("INSERT INTO runtime_meta VALUES ('schema_version','3')");
+      this.db.run("CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"); this.db.run("INSERT INTO runtime_meta VALUES ('schema_version','4')");
       this.db.run(`CREATE TABLE messages (session TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(session,seq))`);
       this.db.run(`CREATE TABLE runs (id TEXT PRIMARY KEY, session TEXT NOT NULL, state TEXT NOT NULL, request TEXT NOT NULL, request_fingerprint TEXT NOT NULL, idempotency_key TEXT, reply TEXT, error TEXT, budget_json TEXT NOT NULL, steps INTEGER NOT NULL DEFAULT 0, external_effects INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens >= 0), output_tokens INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens >= 0), cost_micros INTEGER NOT NULL DEFAULT 0 CHECK(cost_micros >= 0), checkpoint_json TEXT, retry_of TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(session,idempotency_key))`);
       this.db.run("CREATE INDEX runs_session_updated ON runs(session,updated_at DESC)");
       this.db.run("ALTER TABLE runs ADD COLUMN cost_numerator TEXT NOT NULL DEFAULT '0'");
       this.db.run(MODEL_ATTEMPTS_SQL); this.db.run("CREATE INDEX model_attempts_run ON model_attempts(run_id,created_at)");
       this.db.run("CREATE UNIQUE INDEX model_attempts_pending ON model_attempts(run_id) WHERE state IN ('in_flight','unknown')");
+      this.db.run("ALTER TABLE model_attempts ADD COLUMN tool_id TEXT");this.db.run("CREATE INDEX model_attempts_day ON model_attempts(created_at)");this.db.run(TOOL_ATTEMPTS_SQL);this.db.run("CREATE INDEX tool_attempts_day ON tool_attempts(created_at,tool)");
     }
     const version = schema(this.db);
-    if (version !== 3 && !(options.readOnly && version === 2)) throw new Error("runtime schema requires writable migration");
+    if (version !== 4 && !(options.readOnly && [2,3].includes(version))) throw new Error("runtime schema requires writable migration");
     const columns = (this.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map(({ name }) => name); for (const name of ["input_tokens", "output_tokens", "cost_micros"]) if (!columns.includes(name)) throw new Error("runtime schema v2 is incomplete");
     for (const row of this.db.query("SELECT budget_json FROM runs").all() as Array<{ budget_json: string }>) parseBudget(row.budget_json);
     if (this.db.query("SELECT id FROM runs WHERE input_tokens < 0 OR output_tokens < 0 OR cost_micros < 0 LIMIT 1").get()) throw new Error("invalid persisted run usage");
-    if (version === 3) {
+    if (version >= 3) {
       if (!columns.includes("cost_numerator")) throw new Error("runtime schema v3 is incomplete");
       this.db.query("SELECT id,run_id,provider,model,request_hash,quote_json,state,reserved_tokens,reserved_cost_micros,usage_json,receipt_source,failure,created_at,updated_at FROM model_attempts LIMIT 0").all();
       if (this.db.query("PRAGMA foreign_key_check").get()) throw new Error("runtime foreign-key violation");
     }
+    if(version===4){this.db.query("SELECT tool_id FROM model_attempts LIMIT 0").all();this.db.query("SELECT id,run_id,tool,args_hash,state,quote_micros,created_at,updated_at FROM tool_attempts LIMIT 0").all();}
+    this.budgetPolicy=options.budgetPolicy??{timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone};this.budgets=new BudgetLedger(this.db);
     if (!options.readOnly && path !== ":memory:") { this.db.run("PRAGMA journal_mode = WAL"); chmodSync(path, 0o600); }
     if (options.exclusiveOwner) {
       try {
@@ -181,6 +203,7 @@ export class DurableRuntimeStore {
           this.db.query("INSERT OR REPLACE INTO runtime_meta (key,value) VALUES ('runtime_owner',?)").run(receipt);
           this.db.run("UPDATE runs SET state='recovering', updated_at=? WHERE state IN ('created','running','waiting_approval','waiting_external','verifying')", [Date.now()]);
           this.db.run("UPDATE model_attempts SET state='unknown',failure='interrupted',updated_at=? WHERE state='in_flight'", [Date.now()]);
+          this.db.run("UPDATE tool_attempts SET state='unknown',updated_at=? WHERE state='in_flight'",[Date.now()]);
           // A durable owner stop wins over restart's generic interrupted classification.
           for (const intent of this.db.query("SELECT key,value FROM runtime_meta WHERE key GLOB 'run_stop:*'").all() as Array<{ key: string; value: string }>) {
             const id = intent.key.slice("run_stop:".length), desired = this.requestedStop(id);
@@ -285,21 +308,35 @@ export class DurableRuntimeStore {
   modelAttempts(id: string, unresolvedOnly = false): ModelAttempt[] { return (this.db.query(`SELECT * FROM model_attempts WHERE run_id=?${unresolvedOnly ? " AND state IN ('in_flight','unknown')" : ""} ORDER BY created_at,id LIMIT 200`).all(id) as ModelAttemptRow[]).map(toAttempt); }
   getModelAttempt(id: string): ModelAttempt | undefined { const row = this.db.query("SELECT * FROM model_attempts WHERE id=?").get(id) as ModelAttemptRow | null; return row ? toAttempt(row) : undefined; }
   /** Hold the remaining allowance until a receipt proves what was spent. A hold is not a bill. */
-  beginModelAttempt(runId: string, input: { id: string; provider: string; model: string; requestHash: string }, quote: ModelQuote, now = Date.now()): ModelAttempt {
+  beginModelAttempt(runId: string, input: { id: string; provider: string; model: string; requestHash: string;tool?:string;completionTokens?:number }, quote: ModelQuote, now = Date.now()): ModelAttempt {
     validatePricing(quote);
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(input.id) || !/^[a-f0-9]{64}$/.test(input.requestHash) || [input.provider, input.model].some(value => !value || value.length > 512)) throw new Error("invalid model attempt");
     return this.db.transaction(() => {
       const run = this.getRun(runId); if (!run || !["running","waiting_approval"].includes(run.state)) throw new Error("run is not executing");
       if (this.getModelAttempt(input.id)) throw new Error("model attempt already exists");
       if (this.modelAccounting(runId).unresolvedCalls) throw new Error("model billing is unresolved; reconcile before another call");
-      const tokens = Math.max(0, run.budget.maxTokens - run.usage.totalTokens), money = Math.max(0, run.budget.maxCostMicros - run.usage.costMicros);
-      if (!tokens || (!money && (quote.inputMicrosPerMillion > 0 || quote.outputMicrosPerMillion > 0))) throw new Error("model budget exhausted");
+      const runTokens=Math.max(0,run.budget.maxTokens-run.usage.totalTokens),tokens=input.completionTokens??runTokens;
+      if(!Number.isSafeInteger(tokens)||tokens<1||tokens>runTokens)throw Error("invalid requested completion allowance");
+      const paid=quote.inputMicrosPerMillion>0||quote.outputMicrosPerMillion>0;
+      // Check known output exposure, not a clipped hold. Prompt-token usage is still unknown until a receipt.
+      const completionCost=(BigInt(tokens)*BigInt(quote.outputMicrosPerMillion)+999_999n)/1_000_000n;
+      const completionCostMicros=Number(completionCost);
+      if(!Number.isSafeInteger(completionCostMicros)||completionCostMicros>Math.max(0,run.budget.maxCostMicros-run.usage.costMicros))throw new BudgetAdmissionError("cost-budget","quoted completion exposure exceeds the remaining run allowance");
+      const admitted=this.budgets.admitModel(this.budgetPolicy,tokens,paid,completionCostMicros,input.tool,now);
+      const money = Math.max(0,Math.min(run.budget.maxCostMicros-run.usage.costMicros,admitted.costMicros??Number.MAX_SAFE_INTEGER));
+      if (!money && paid) throw new BudgetAdmissionError("cost-budget","model cost allowance is exhausted");
       const snapshot: ModelQuote = { inputMicrosPerMillion: quote.inputMicrosPerMillion, outputMicrosPerMillion: quote.outputMicrosPerMillion, ...(quote.source !== undefined ? { source: quote.source } : {}), ...(quote.asOf !== undefined ? { asOf: quote.asOf } : {}) };
-      this.db.query("INSERT INTO model_attempts (id,run_id,provider,model,request_hash,quote_json,state,reserved_tokens,reserved_cost_micros,created_at,updated_at) VALUES (?,?,?,?,?,?,'in_flight',?,?,?,?)")
-        .run(input.id, runId, input.provider, input.model, input.requestHash, JSON.stringify(snapshot), tokens, quote.inputMicrosPerMillion > 0 || quote.outputMicrosPerMillion > 0 ? money : 0, now, now);
+      this.db.query("INSERT INTO model_attempts (id,run_id,provider,model,request_hash,quote_json,state,reserved_tokens,reserved_cost_micros,created_at,updated_at,tool_id) VALUES (?,?,?,?,?,?,'in_flight',?,?,?,?,?)")
+        .run(input.id, runId, input.provider, input.model, input.requestHash, JSON.stringify(snapshot), tokens, paid ? money : 0, now, now,input.tool??null);
       return this.getModelAttempt(input.id)!;
     }).immediate();
   }
+  budgetSnapshot(now=Date.now()):BudgetSnapshot{if(this.schemaVersion()<4)throw Error("budget inspection requires schema v4");return this.db.transaction(()=>this.budgets.snapshot(this.budgetPolicy,now)).deferred();}
+  beginToolAttempt(runId:string,id:string,tool:string,argsHash:string,now=Date.now()):void {
+    if(!/^[a-f0-9]{64}$/.test(argsHash)||!id||!tool||id.length>200||tool.length>512)throw Error("invalid tool attempt");
+    this.db.transaction(()=>{const run=this.getRun(runId);if(!run||!["running","waiting_approval"].includes(run.state))throw Error("tool run is not executing");this.budgets.beginTool(runId,id,tool,argsHash,this.budgetPolicy,now);}).immediate();
+  }
+  finishToolAttempt(id:string,disposition:"estimated"|"unknown"|"not_sent",now=Date.now()):void{this.db.transaction(()=>this.budgets.finishTool(id,disposition,now)).immediate();}
   finishModelAttempt(id: string, state: "unknown" | "not_sent", failure: string, now = Date.now()): ModelAttempt {
     if (!["unknown","not_sent"].includes(state) || !/^[A-Za-z0-9_-]{1,64}$/.test(failure)) throw new Error("invalid model attempt disposition");
     return this.db.transaction(() => {
@@ -375,11 +412,11 @@ export class DurableRuntimeStore {
 }
 
 interface MessageRow { session: string; seq: number; role: MessageRole; content: string; created_at: number }
-interface ModelAttemptRow { id: string; run_id: string; provider: string; model: string; request_hash: string; quote_json: string; state: ModelAttempt["state"]; reserved_tokens: number; reserved_cost_micros: number; usage_json: string | null; receipt_source: ModelAttempt["receiptSource"] | null; failure: string | null; created_at: number; updated_at: number }
+interface ModelAttemptRow { id: string; run_id: string; provider: string; model: string; request_hash: string; quote_json: string; state: ModelAttempt["state"]; reserved_tokens: number; reserved_cost_micros: number; usage_json: string | null; receipt_source: ModelAttempt["receiptSource"] | null; failure: string | null; created_at: number; updated_at: number;tool_id?:string|null }
 function toAttempt(row: ModelAttemptRow): ModelAttempt {
   const quote = JSON.parse(row.quote_json) as ModelQuote; validatePricing(quote);
   const usage = row.usage_json ? JSON.parse(row.usage_json) as UsageDelta : undefined; if (usage) validateUsage(usage);
-  return { id: row.id, runId: row.run_id, provider: row.provider, model: row.model, requestHash: row.request_hash, quote, state: row.state, reservedTokens: row.reserved_tokens, reservedCostMicros: row.reserved_cost_micros, usage, receiptSource: row.receipt_source ?? undefined, failure: row.failure ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, runId: row.run_id, provider: row.provider, model: row.model, requestHash: row.request_hash, quote, state: row.state, reservedTokens: row.reserved_tokens, reservedCostMicros: row.reserved_cost_micros, usage, receiptSource: row.receipt_source ?? undefined, failure: row.failure ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at,tool:row.tool_id??undefined };
 }
 interface RunRow { id: string; session: string; state: RunState; request: string; request_fingerprint: string; idempotency_key: string | null; reply: string | null; error: string | null; budget_json: string; steps: number; external_effects: number; input_tokens: number; output_tokens: number; cost_micros: number; checkpoint_json: string | null; retry_of: string | null; created_at: number; updated_at: number }
 function parseBudget(json: string): RunBudget { try { const b = JSON.parse(json) as Partial<RunBudget>; if (![b.maxSteps, b.maxWallMs, b.maxExternalEffects, b.maxTokens].every((v) => Number.isSafeInteger(v) && (v as number) > 0) || !Number.isSafeInteger(b.maxCostMicros) || (b.maxCostMicros as number) < 0) throw new Error(); return b as RunBudget; } catch { throw new Error("invalid persisted run budget"); } }

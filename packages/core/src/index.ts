@@ -5,3 +5,4 @@ export * from "./durable-runtime.ts";
 export * from "./audit.ts";
 export * from "./external-audit.ts";
 export * from "./budget-period.ts";
+export * from "./budget-ledger.ts";

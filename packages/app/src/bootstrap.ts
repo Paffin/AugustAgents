@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { AgentRuntime, ApprovalLedger, denyAll, type AgentCheckpointState, type AgentReply, type Approver } from "@august/agent";
+import { AgentRuntime, ApprovalLedger, RunControlError, denyAll, type AgentCheckpointState, type AgentReply, type Approver } from "@august/agent";
+import { randomUUID } from "node:crypto";
 import {
   DecisionCascade,
   FallbackProvider,
@@ -19,7 +20,7 @@ import {
   type LlmProvider,
 } from "@august/brain";
 import { CapabilityRegistry } from "@august/capabilities";
-import { DurableRuntimeStore, type DurableRun, type RunBudgetRequest, type RunState, AnchorLog, AuditAnchorer, AuditKey, EventJournal, makeSessionKey, verifyAudit, type AuditAnchor, type AuditReport, type SessionKey } from "@august/core";
+import { BudgetAdmissionError, DurableRuntimeStore, type BudgetSnapshot, type DurableRun, type RunBudgetRequest, type RunState, AnchorLog, AuditAnchorer, AuditKey, EventJournal, makeSessionKey, verifyAudit, type AuditAnchor, type AuditReport, type SessionKey } from "@august/core";
 import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
 import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
 import { MemoryExecutor, MemoryStore, memoryManifest } from "@august/memory";
@@ -104,6 +105,7 @@ export interface App {
   audit: AuditHandle;
   /** Admission circuit status, not a guarantee that the remote model is currently healthy. */
   providerHealth(): ReturnType<FallbackProvider["health"]>;
+  budgetSnapshot(): BudgetSnapshot;
   /** The owner's verdict on a run they saw: an independent outcome. Only their own session's runs can be judged. */
   feedback(session: SessionKey, feedbackId: string, verdict: "success" | "failure", note?: string): void;
   /** Refits Laya's segmented calibration from verified outcomes and applies it now. */
@@ -160,7 +162,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const provider = deps.llm ?? createLlm(config, { ...deps, circuits: { load: () => runs.providerCircuits(), save: states => runs.saveProviderCircuits(states) } }, secrets);
   const llm = new UsageRequiredProvider(provider);
   // Claim before opening the other writable stores or reconstructing runtime state.
-  const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"), { exclusiveOwner: true });
+  const runs = new DurableRuntimeStore(join(config.dataDir, "runtime.db"), { exclusiveOwner: true,budgetPolicy:config.budgets });
   try {
 
   // Native/sidecar Laya is explicit; until then a heuristic stands in.
@@ -438,7 +440,10 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
         priorMessages: [...noted, ...(priorMessages ?? [])], priorTaint: { tainted: priorProvenance.sources.length > 0, sources: priorProvenance.sources, ...(sensitivity === "public" ? {} : { sensitivity }) }, checkpoint, signal: controller.signal, deadlineAt: run.createdAt + run.budget.maxWallMs,
         maxSteps: run.budget.maxSteps, maxExternalEffects: run.budget.maxExternalEffects, redactCheckpoint,
         onAttempt: event => {
-          if (event.type === "started") runs.beginModelAttempt(run.id, event, quoteForModelAttempt(config, event.provider, Boolean(deps.llm)));
+          if (event.type === "started") {
+            try{runs.beginModelAttempt(run.id, event, quoteForModelAttempt(config, event.provider, Boolean(deps.llm)));}
+            catch(error){if(error instanceof BudgetAdmissionError)throw new RunControlError(error.reason);throw error;}
+          }
           else {
             const attempt = runs.getModelAttempt(event.id);
             if (!attempt || attempt.runId !== run.id) throw new Error("model receipt belongs to another run");
@@ -447,13 +452,36 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
           }
         },
         onUsage: async () => { if (!receivedAttempt) throw new Error("model usage has no durable attempt"); receivedAttempt = undefined; llmCalls += 1; },
-        remainingTokens: () => { const current = runs.getRun(run.id)!; return Math.max(1, current.budget.maxTokens - current.usage.totalTokens); },
+        remainingTokens: (tool) => {
+          const current=runs.getRun(run.id)!,s=runs.budgetSnapshot(),t=tool?s.tools[tool]:undefined;
+          return Math.max(1,Math.min(current.budget.maxTokens-current.usage.totalTokens,s.daily.remainingTokens??Number.MAX_SAFE_INTEGER,t?.remainingTokens??Number.MAX_SAFE_INTEGER));
+        },
+        completionLimit: (provider, _model, tool) => {
+          const quote=quoteForModelAttempt(config,provider,Boolean(deps.llm));
+          const current=runs.getRun(run.id)!,s=runs.budgetSnapshot(),t=tool?s.tools[tool]:undefined;
+          const available=[{reason:"cost-budget" as const,micros:Math.max(0,current.budget.maxCostMicros-current.usage.costMicros)},
+            ...(s.daily.remainingCostMicros===undefined?[]:[{reason:"daily-budget" as const,micros:s.daily.remainingCostMicros}]),
+            ...(t?.remainingCostMicros===undefined?[]:[{reason:"tool-budget" as const,micros:t.remainingCostMicros}])].sort((a,b)=>a.micros-b.micros)[0]!;
+          if(quote.outputMicrosPerMillion===0)return Number.MAX_SAFE_INTEGER;
+          const limit=Number(BigInt(available.micros)*1_000_000n/BigInt(quote.outputMicrosPerMillion));
+          if(limit<1)throw new RunControlError(available.reason);
+          return Math.min(Number.MAX_SAFE_INTEGER,limit);
+        },
         usageExhaustion: () => usageStop,
-        modelBudgetExhaustion: () => {
+        modelBudgetExhaustion: (tool) => {
           if (runs.modelAccounting(run.id).unknownCalls) return "billing-unknown";
           const current = runs.getRun(run.id)!;
+          const s=runs.budgetSnapshot(),t=tool?s.tools[tool]:undefined;
+          const primaryPaid=pricing.inputMicrosPerMillion>0||pricing.outputMicrosPerMillion>0;
+          const backupPaid=config.llm.backup?.pricing?config.llm.backup.pricing.inputMicrosPerMillion>0||config.llm.backup.pricing.outputMicrosPerMillion>0:true;
+          const paid=primaryPaid&&backupPaid; // Exact per-provider admission still occurs before its network request.
+          if(s.daily.remainingTokens===0||paid&&s.daily.remainingCostMicros!==undefined&&(s.daily.remainingCostMicros===0||s.daily.unpricedCalls>0))return "daily-budget";
+          if(t?.remainingCalls===0||t?.remainingTokens===0||paid&&t?.remainingCostMicros!==undefined&&(t.remainingCostMicros===0||t.unpricedCalls>0))return "tool-budget";
           return (pricing.inputMicrosPerMillion > 0 || pricing.outputMicrosPerMillion > 0) && current.usage.costMicros >= current.budget.maxCostMicros ? "cost-budget" : undefined;
         },
+        toolBudgetExhaustion:(tool)=>{const s=runs.budgetSnapshot(),t=s.tools[tool];return t?.remainingCalls===0?"tool-budget":undefined;},
+        beforeTool:(tool,argsHash)=>{const id=randomUUID();try{runs.beginToolAttempt(run.id,id,tool,argsHash);}catch(error){if(error instanceof BudgetAdmissionError)throw new RunControlError(error.reason);throw error;}return id;},
+        afterTool:(id,disposition)=>runs.finishToolAttempt(id,disposition),
         onEvent: (event) => {
           if (event.type !== "checkpoint") return;
           runs.checkpoint(run.id, event);
@@ -543,6 +571,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     memory,
     audit,
     providerHealth: () => provider instanceof FallbackProvider ? provider.health() : [],
+    budgetSnapshot: () => runs.budgetSnapshot(),
     recalibrate() {
       const samples = calibrationSamples(learning.examples().examples, engineId);
       const table = fitCalibrationTable(samples, { engine: engineId });

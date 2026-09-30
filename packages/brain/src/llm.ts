@@ -51,10 +51,12 @@ async function notifyAttempt(options: CompleteOptions, event: LlmAttemptEvent): 
   try { await options.onAttempt?.(event); } catch (error) { if (error instanceof LlmUsageError) throw error; throw new LlmAttemptObserverError(error); }
 }
 async function invokeProvider(provider: LlmProvider, messages: readonly ChatMessage[], options: CompleteOptions): Promise<string> {
-  if (provider.managesAttempts || !options.onAttempt) return provider.complete(messages, options);
+  if (provider.managesAttempts) return provider.complete(messages, options);
+  options = { ...options, maxTokens: callLimit(options, provider.name, provider.name) };
+  if (!options.onAttempt) return provider.complete(messages, options);
   // An opaque adapter is tracked as one invocation; transport-aware providers track their own retries.
-  const id = randomUUID(); const requestHash = createHash("sha256").update(JSON.stringify([messages, options.jsonSchema])).digest("hex");
-  await notifyAttempt(options, { type: "started", id, provider: provider.name, model: provider.name, requestHash });
+  const id = randomUUID(); const requestHash = createHash("sha256").update(JSON.stringify([messages, options.jsonSchema, options.maxTokens])).digest("hex");
+  await notifyAttempt(options, { type: "started", id, provider: provider.name, model: provider.name, requestHash,tool:options.tool,completionTokens:options.maxTokens });
   let reported = false;
   try {
     options.signal?.throwIfAborted();
@@ -71,12 +73,16 @@ async function invokeProvider(provider: LlmProvider, messages: readonly ChatMess
   }
 }
 
-function callLimit(controls: LlmCallControls): number | undefined {
+function callLimit(controls: LlmCallControls, provider?: string, model?: string): number | undefined {
   controls.signal?.throwIfAborted();
   controls.beforeCall?.();
   if (controls.deadlineAt !== undefined && Date.now() >= controls.deadlineAt) throw new DOMException("Run deadline exceeded", "TimeoutError");
   const remaining = controls.remainingTokens?.();
-  const limit = remaining === undefined ? controls.maxTokens : Math.min(controls.maxTokens ?? remaining, remaining);
+  let limit = remaining === undefined ? controls.maxTokens : Math.min(controls.maxTokens ?? remaining, remaining);
+  if (provider !== undefined && model !== undefined && controls.completionLimit) {
+    const quotedLimit = controls.completionLimit(provider, model);
+    limit = Math.min(limit ?? quotedLimit, quotedLimit);
+  }
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     throw new LlmUsageError("no valid completion budget remains");
   }
@@ -166,7 +172,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   }
 
   private async once(messages: readonly ChatMessage[], opts: CompleteOptions): Promise<string> {
-    const maxTokens = callLimit(opts);
+    const maxTokens = callLimit(opts, this.name, this.options.model);
     const body: Record<string, unknown> = {
       model: this.options.model,
       messages,
@@ -183,7 +189,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     if (this.options.apiKey) headers.authorization = `Bearer ${this.options.apiKey}`;
 
     const id = randomUUID(), requestHash = createHash("sha256").update(JSON.stringify([this.options.baseUrl, body])).digest("hex");
-    await notifyAttempt(opts, { type: "started", id, provider: this.name, model: this.options.model, requestHash });
+    await notifyAttempt(opts, { type: "started", id, provider: this.name, model: this.options.model, requestHash,tool:opts.tool,completionTokens:maxTokens });
     let dispatched = false, finalized = false;
     try {
     opts.signal?.throwIfAborted();
@@ -361,7 +367,7 @@ export class LlmChoiceEngine implements DecisionEngine {
       },
     ];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const controls = { signal: input.signal, deadlineAt: input.deadlineAt, onAttempt: input.onAttempt, maxTokens: input.maxCompletionTokens, onUsage: input.onUsage, requireUsage: input.requireUsage, beforeCall: input.beforeCall, remainingTokens: input.remainingTokens };
+      const controls = { signal: input.signal, deadlineAt: input.deadlineAt, onAttempt: input.onAttempt, maxTokens: input.maxCompletionTokens, onUsage: input.onUsage, requireUsage: input.requireUsage, beforeCall: input.beforeCall, remainingTokens: input.remainingTokens, completionLimit: input.completionLimit };
       const text = await this.provider.complete(messages, { ...controls, maxTokens: callLimit(controls), jsonSchema: { name: "decision", schema } });
       const value = parseJson(text);
       if (validateArgs(schema, value).length === 0) {

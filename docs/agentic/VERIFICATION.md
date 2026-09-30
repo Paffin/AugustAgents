@@ -55,13 +55,14 @@ is recorded below. Account for every skip; platform-inapplicable is not a pass.
 
 ## Required Commands
 
-- Dependency restore: `bun install --frozen-lockfile` after `OUT-001` creates
-  and policy-accepts the lockfile contract.
-- Type checking: `bun run typecheck`.
-- Full suite: `bun test`.
-- Combined gate: `bun run check`.
+- Dependency restore: `bun --no-env-file install --frozen-lockfile`.
+- Type checking: `bun --no-env-file run typecheck`.
+- Full suite: `bun --no-env-file test`.
+- Combined gate: run those explicit typecheck/test commands; do not use a parent
+  `bun run check` which can autoload owner `.env` into fixture child processes.
+- Host-native build: `bun --no-env-file scripts/build.ts`.
 - Security changes: focused affected test plus
-  `bun test packages/app/test/redteam.test.ts` and the full suite.
+  `bun --no-env-file test packages/app/test/redteam.test.ts` and the full suite.
 - Python sidecar: a real-model integration command remains unresolved and must
   be designed before its release gate.
 - Platform sandbox/egress and packaging commands remain unresolved until the
@@ -103,15 +104,57 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
-### Owner-day calendar groundwork — issue #4 remains open, 2026-09-30
+### Daily/per-tool schema-v4 source increment — live qualification in progress
+
+On macOS arm64/Bun 1.4.2, `bun --no-env-file run typecheck` and
+`bun --no-env-file scripts/build.ts` passed. Full `bun --no-env-file test`:
+701 pass / 12 Linux-only skips / 0 fail, 2929 assertions / 713 tests / 44 files,
+21.82s. Owned fixtures verify shared atomic holds, known output exposure admission
+(10 quoted micros cannot fit 1 remaining), provider-specific cap refresh on
+retry, durable day/token rejection before a new adapter dispatch, per-tool
+attribution/calls, free quoted tool admission, old unknown holds across midnight,
+and exact v3 backup/FK/WAL/live-owner migration refusal. These are regression and
+temporary-migration evidence, not real-model acceptance. Fixture paths/keys are
+process-owned; owner `.env` and OS credentials are excluded.
+
+The real-model frontend harness `august-live-daily-ledger.pfoP6A` uses the loaded
+catalog model, an owned encrypted home and owner quotes, with no injected model
+adapter, seeded patterns or forced routes. Initial desktop Tasks showed 1667
+received + 48333 held tokens, USD 0.000001 received estimate + 0.099999 held,
+owner day 2026-09-29 in America/St_Johns. Desktop axe 4.12.1 found 0 violations /
+0 incomplete / 34 passes. Mobile 390×844 has no horizontal overflow and 0 axe
+violations, but one incomplete color-contrast rule for partially obscured or
+offscreen nodes remains a manual-review item; this is not full WCAG acceptance.
+
+The first extended clock request was a retained negative: 8 actual generation
+requests/receipts, 3 clock calls and 4423 tokens; the model repeated the call until
+the loop guard stopped it. Distillation retained failed/stage-0/streak-0 state,
+not a qualified reflex. The UI incorrectly labelled the loop stop Completed;
+that separately discovered status bug is being repaired. Daily exhaustion,
+learned zero-LLM work, restart/readback and natural midnight are still under live
+verification. Issue #4 and the complete outcome remain open. Prompt-input costs
+are unknown before receipt; owner estimates are not strict vendor-invoice caps.
+
+### Owner-day calendar groundwork — `8f36919`, 2026-09-30
 
 `ownerDay` computes inclusive/exclusive UTC boundaries in the selected owner
 IANA zone without a fixed 24-hour reset. Four deterministic regressions cover
 Moscow midnight, New York 23/25-hour DST days, Kathmandu fractional offset,
 Apia's skipped civil date and invalid input rejection. Typecheck and all four
-cases pass. This is calendar geometry, NOT daily/per-tool admission, persistent
-budget accounting, zero-cost compiled-work or live reset acceptance. Those
-explicit issue #4 requirements still need implementation and verification.
+cases pass. This revision establishes calendar geometry, NOT daily/per-tool
+admission, persistent accounting, zero-cost compiled-work or live reset acceptance.
+The subsequent schema-v4 implementation is undergoing those live checks; #4
+remains open until they pass.
+
+### Published `8f36919` matrix, exact run `36656466742`
+
+Linux: 692 pass / 0 fail, 2810 assertions / 41 files / 17.05s. macOS: 680 pass /
+12 Linux-only skips / 0 fail, 2751 assertions / 24.38s. Sidecar succeeded.
+Windows was cancelled at the workflow's existing 20-minute bound after 28
+observed failure records; JUnit/full counts are missing and unknown. No rerun,
+manual cancellation or timeout/skip weakening was used. Exact-revision artifact
+IDs: 11073106352 / 11072107532 / 11072854873. Windows remains NOT_QUALIFIED;
+neither this matrix nor the optional Docker runner establishes 3-OS readiness.
 
 ### Published `cb533be` matrix, exact run `36655836010`
 

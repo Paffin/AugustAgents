@@ -78,6 +78,16 @@ export const WEB_HTML = `<!doctype html>
   .billing-warning { color:var(--warn); padding:12px 0; }
   #audit-status { color:var(--warn); font-size:13px; margin:0; padding:8px 24px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
   #provider-status { overflow-wrap:anywhere; }
+  .budget-panel { margin:16px 0; padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  .budget-panel h3 { margin:0 0 4px; font-size:15px; }
+  .budget-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:12px 0; }
+  .budget-grid dt { font-size:12px; color:var(--muted); }
+  .budget-grid dd { margin:4px 0 0; overflow-wrap:anywhere; }
+  .budget-tools { margin-top:12px; }
+  .budget-tools ul { list-style:none; padding:0; }
+  .budget-tools li { padding:8px 0; border-top:1px solid var(--line); overflow-wrap:anywhere; }
+  .budget-tools p { margin:4px 0; }
+  @media (max-width:480px) { .budget-grid { grid-template-columns:minmax(0,1fr); } }
   .receipt-form { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
   .receipt-form label { display:block; font-size:13px; }
   .receipt-form input[type=number] { display:block; width:100%; min-width:0; margin-top:4px; }
@@ -121,6 +131,11 @@ export const WEB_HTML = `<!doctype html>
 <section class="task-panel" aria-label="Recent task controls">
 <h2>Recent work</h2>
 <p id="provider-status" class="muted" role="status" aria-live="polite">Provider circuit status is being checked.</p>
+<section class="budget-panel" aria-label="Daily and per-tool budget accounting">
+<h3>Owner-day budget</h3>
+<p id="budget-status" class="muted" role="status" aria-live="polite">Budget accounting is being checked.</p>
+<div id="budget-accounting" hidden></div>
+</section>
 <p class="muted">Latest 20 tasks in this browser session. Stops wait for a safe boundary and do not undo calls already started. Cost is based on your configured estimate, not a vendor bill.</p>
 <button id="task-refresh" type="button" disabled>Refresh tasks</button>
 <p id="task-status" class="muted" role="status" aria-live="polite">Connect to view tasks.</p>
@@ -254,8 +269,50 @@ export const WEB_JS = `(() => {
   const controlling = new Set();
   const receiptDrafts = new Map();
   const usd = value => { const n = BigInt(value); return (n / 1000000n).toString() + "." + (n % 1000000n).toString().padStart(6, "0"); };
+  let budgetLoading = false, budgetFingerprint = "";
+  const budgetValue = value => Number.isSafeInteger(value) && value >= 0;
+  function validBudgetTotals(value) {
+    return value && typeof value === "object" && !Array.isArray(value) && ["tokens","costMicros","heldTokens","heldCostMicros","calls","heldCalls","unpricedCalls"].every(key => budgetValue(value[key])) && value.limits && typeof value.limits === "object" && !Array.isArray(value.limits) && Object.values(value.limits).every(budgetValue) && ["remainingCalls","remainingTokens","remainingCostMicros"].every(key => value[key] === undefined || budgetValue(value[key]));
+  }
+  async function loadBudgets() {
+    if (!token || !connected || budgetLoading) return;
+    budgetLoading = true;
+    const status = document.getElementById("budget-status"), content = document.getElementById("budget-accounting");
+    try {
+      const response = await fetch("/v1/budgets", { headers: headers() });
+      if (response.status === 404) { status.textContent = "Daily/per-tool accounting is not connected. No budget availability is established."; content.hidden = true; budgetFingerprint = ""; return; }
+      const body = await response.json(), period = body.period;
+      if (!response.ok || !period || typeof period.key !== "string" || typeof period.timeZone !== "string" || !Number.isSafeInteger(period.startsAt) || !Number.isSafeInteger(period.endsAt) || period.endsAt <= period.startsAt || !validBudgetTotals(body.daily) || !body.tools || typeof body.tools !== "object" || Array.isArray(body.tools) || Object.values(body.tools).some(value => !validBudgetTotals(value))) throw new Error();
+      const fingerprint = JSON.stringify(body);
+      if (fingerprint === budgetFingerprint) return;
+      const reset = new Intl.DateTimeFormat(undefined, { timeZone: period.timeZone, dateStyle: "medium", timeStyle: "short" }).format(new Date(period.endsAt));
+      status.textContent = period.key + " · " + period.timeZone + " · next reset " + reset;
+      const fragment = document.createDocumentFragment(), grid = document.createElement("dl"); grid.className = "budget-grid";
+      const metric = (label, value, detail) => { const cell = document.createElement("div"), title = document.createElement("dt"), amount = document.createElement("dd"), note = document.createElement("div"); title.textContent = label; amount.textContent = value; note.className = "muted"; note.textContent = detail; amount.appendChild(note); cell.append(title, amount); grid.appendChild(cell); };
+      const remaining = (value, money = false) => value === undefined ? "Limit not configured" : (money ? "USD " + usd(value) : value) + " remaining";
+      const allowance = (value, unit, money = false) => value === undefined ? unit + " limit not configured" : (money ? "USD " + usd(value) : value + " " + unit.toLowerCase()) + " remaining";
+      metric("Recorded tokens", body.daily.tokens + " recorded · " + body.daily.heldTokens + " held", remaining(body.daily.remainingTokens));
+      metric("Model / owner-quoted cost estimate", "USD " + usd(body.daily.costMicros) + " recorded · USD " + usd(body.daily.heldCostMicros) + " held", remaining(body.daily.remainingCostMicros, true));
+      fragment.appendChild(grid);
+      const note = document.createElement("p"); note.className = "muted"; note.textContent = "Holds reserve allowance, not settled charges. Model/owner quotes are estimates, not vendor invoices." + (body.daily.unpricedCalls ? " " + body.daily.unpricedCalls + " unpriced call(s): external API fees are unknown." : ""); fragment.appendChild(note);
+      const entries = Object.entries(body.tools), details = document.createElement("details"), summary = document.createElement("summary"), list = document.createElement("ul"); details.className = "budget-tools"; summary.textContent = "Per-tool usage (" + entries.length + ")";
+      for (const [id, tool] of entries) {
+        const item = document.createElement("li"), title = document.createElement("strong"), counts = document.createElement("p"), cost = document.createElement("p"), quote = document.createElement("p"); title.textContent = id;
+        counts.textContent = tool.calls + " calls · " + tool.heldCalls + " held · " + tool.tokens + " recorded tokens · " + tool.heldTokens + " held tokens";
+        cost.textContent = "USD " + usd(tool.costMicros) + " model/owner-quoted estimate · USD " + usd(tool.heldCostMicros) + " held";
+        quote.className = "muted"; quote.textContent = allowance(tool.remainingCalls, "Call") + "; " + allowance(tool.remainingTokens, "Token") + "; " + allowance(tool.remainingCostMicros, "Cost", true) + ". " + (tool.limits.callCostMicros === undefined ? "Call quote not configured; API fees not established." : "Owner call quote: USD " + usd(tool.limits.callCostMicros) + ". Not a vendor receipt.") + (tool.unpricedCalls ? " " + tool.unpricedCalls + " unpriced call(s)." : ""); item.append(title, counts, cost, quote); list.appendChild(item);
+      }
+      if (!entries.length) { const empty = document.createElement("li"); empty.textContent = "No tool usage or per-tool limits recorded for this owner day."; list.appendChild(empty); }
+      const restoreFocus = content.querySelector("summary") === document.activeElement;
+      details.open = content.querySelector("details")?.open === true; details.append(summary, list); fragment.appendChild(details);
+      content.replaceChildren(fragment); content.hidden = false; budgetFingerprint = fingerprint;
+      if (restoreFocus) summary.focus({ preventScroll: true });
+    } catch { status.textContent = "Budget accounting unavailable. Remaining allowance is not established."; content.hidden = true; budgetFingerprint = ""; }
+    finally { budgetLoading = false; }
+  }
   async function loadTasks() {
     if (!token || taskLoading) return;
+    void loadBudgets();
     taskLoading = true;
     try {
       const response = await fetch("/v1/runs?channel=" + who.channel + "&user=" + who.user + "&limit=20", { headers: headers() });

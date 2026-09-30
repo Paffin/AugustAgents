@@ -214,7 +214,7 @@ describe("McpHost", () => {
   test("the sanitised name maps back to the server's own name", async () => {
     const { host: h } = host();
     await h.add(spec(), "known");
-    expect((await h.call("fake.delete_file_", {})).content).toBe("boom");
+    expect(await h.call("fake.delete_file_", {})).toMatchObject({content:"boom",isError:true,outcome:"unknown"});
   });
 
   test("a poisoned tool description is blocked at install and the server is stopped", async () => {
@@ -241,9 +241,9 @@ describe("McpHost", () => {
   test("a dead server answers with an error result, not an exception", async () => {
     const { host: h } = host();
     await h.add(spec("crash"), "community");
-    expect((await h.call("fake.echo", {})).isError).toBe(true);
+    expect(await h.call("fake.echo", {})).toMatchObject({isError:true,outcome:"unknown"});
     const again = await h.call("fake.echo", {});
-    expect(again).toEqual({ content: "fake is not running", isError: true });
+    expect(again).toEqual({ content: "fake is not running", isError: true, outcome: "not_sent" });
   });
 
   test("unknown tools go to the fallback executor, or error", async () => {

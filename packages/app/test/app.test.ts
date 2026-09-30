@@ -209,6 +209,12 @@ function makeIo(home: string, answers: Array<string | null> = [], llm?: LlmProvi
 }
 
 describe("cli", () => {
+  test("owner budget inspection in chat needs no model and does not invent absent allowances",async()=>{
+    const home=tmp(),{io,out}=makeIo(home,["/budgets","/exit"],{name:"must-not-run",complete:async()=>{throw Error("budget command reached the model");}});
+    await main(["init"],io);configureTestPricing(home);
+    const cfg=loadConfig(defaultConfigPath(home));writeConfig(defaultConfigPath(home),{...cfg,budgets:{timeZone:"Asia/Kathmandu",tools:{"clock.now":{calls:3,callCostMicros:0}}}});
+    expect((await main(["chat"],io)).code).toBe(0);expect(out.join("\n")).toContain("Asia/Kathmandu");expect(out.join("\n")).toContain("remaining not configured");expect(out.join("\n")).toContain("clock.now: 0 call(s) + 0 held · calls remaining 3");
+  });
   test("Safety: web run views hide checkpoints and controls cannot cross sessions or resume uncertain effects", async () => {
     const home = tmp(); const { io } = makeIo(home, [], scriptedLlm({ tool: "none", args: {}, reply: "finished" }));
     await main(["init"], io); configureTestPricing(home);
@@ -403,6 +409,17 @@ describe("createApp", () => {
     expect(result.reply).toBe("free reply");
     expect(free.getRun(result.runId)?.usage.costMicros).toBe(0);
     free.close();
+  });
+  test("daily quoted completion cap reaches the actual adapter and rejects the next call before dispatch",async()=>{
+    const cfg=defaultConfig(tmp());cfg.llm.pricing={inputMicrosPerMillion:0,outputMicrosPerMillion:1_000_000,source:"owned regression quote",asOf:"2026-09-30"};cfg.budgets={timeZone:"UTC",daily:{costMicros:1}};
+    const limits:Array<number|undefined>=[];
+    const app=createApp(cfg,{env:{},llm:{name:"owned-cap-regression",complete:async(_messages,options)=>{limits.push(options?.maxTokens);await options?.onUsage?.({inputTokens:0,outputTokens:1,totalTokens:1});return JSON.stringify({choice:"none"});}}});
+    const reply=await app.handle(runtimeSession,"hello");expect(reply.stopReason).toBe("daily-budget");expect(limits).toEqual([1]);expect(app.runs.modelAttempts(reply.runId)).toHaveLength(1);expect(app.budgetSnapshot().daily).toMatchObject({costMicros:1,remainingCostMicros:0});app.close();
+  });
+  test("daily token exhaustion survives restart and starts no model request",async()=>{
+    const cfg=defaultConfig(tmp());cfg.budgets={timeZone:"UTC",daily:{tokens:2}};let calls=0;
+    const llm=contextualLlm(()=>{calls++;return "unused";});let app=createApp(cfg,{env:{},llm});const first=await app.handle(runtimeSession,"hello");expect(first.stopReason).toBe("daily-budget");expect(first.steps).toBe(0);app.close();
+    app=createApp(cfg,{env:{},llm:{name:"must-not-dispatch",complete:async()=>{calls++;return "unused";}}});const rejected=await app.handle(runtimeSession,"new request");expect(rejected.stopReason).toBe("daily-budget");expect(calls).toBe(1);expect(app.runs.modelAttempts(rejected.runId)).toHaveLength(0);app.close();
   });
 
   test("Safety/reliability invariant: missing usage fails and accounting persistence errors propagate", async () => {
