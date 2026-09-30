@@ -58,6 +58,7 @@ export interface Tombstone {
 }
 
 export interface RecallOptions {
+  signal?: AbortSignal;
   scope: string;
   query: string;
   classes?: readonly MemoryClass[];

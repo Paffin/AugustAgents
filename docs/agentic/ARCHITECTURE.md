@@ -55,8 +55,9 @@
 - `channels` and `gateway`: owner-facing interaction and approval surfaces.
 - `ladder`: promotion state plus compiled-plan routing integrated by `app`.
 - `learning`: verified-outcome eligibility, traces, verifier registry and export.
-- `memory`: scoped persistent memory and lexical retrieval; required editable
-  files, vector retrieval and complete live owner controls remain incomplete.
+- `memory`: scoped persistent memory, editable file adapter, FTS/cosine rank
+  fusion and opt-in local embedding transport. Source is integrated; complete
+  live retrieval quality and browser owner-control qualification are in progress.
 - `app`: configuration, secret store, composition, CLI, and process lifecycle.
 
 ## Interfaces
@@ -176,6 +177,53 @@ No model is used to route the CLI command. A dispatched tool transport exception
 or uncertain MCP error response keeps `tool_started/safeToResume=false` and
 stops further model/tool execution. Owner effect resolution does not silently
 release an unresolved fee hold.
+
+### Editable memory and local semantic retrieval
+
+Memory remains in `memory.db` behind `MemoryStore`. An optional derived
+`memory_vectors` table binds entry ID, configured weights/preprocessing identity
+and exact text SHA; it does not alter primary entry identities or fabricate
+semantic vectors. All store handles enable SQLite foreign keys, so forgetting
+removes vectors even when embeddings are disabled. Owner edits overwrite the
+active text/FTS and invalidate all cached vector identities. Queries filter
+scope, active status, expiry, class and trust before indexing/retrieval. Hybrid
+recall fuses lexical and cosine order by reciprocal rank, weighting lexical
+contribution by measured query-term coverage; `.recall` remains the
+lexical baseline and `recallHybrid` is the configured async path. Empty scopes
+send no embedding query. Cancellation and changed/deleted documents fail closed
+rather than associating a received vector with stale content.
+
+Owner-editable files live outside capability-writable roots, by default in
+`dataDir/memory/<scope-hash>/`. Semantic/procedural Markdown, `profile.yaml` and
+`episodes.jsonl` mirror the same scoped entries. Confirmed published identities
+track deletion; never-published DB writes are not erased after a publication
+failure. File edits synchronize before reads, retain untrusted provenance, and
+cannot resurrect tombstoned IDs. Reserved Markdown markers are escaped so tool
+text cannot manufacture new trusted records. Static symlinks, oversized files,
+duplicate IDs and credential-like text fail without resetting retained data.
+Optimistic file checks/atomic replacement do not constitute qualification for
+arbitrary concurrent editors or unsupported Windows filesystem behavior.
+
+`memory.embedding` requires explicit loopback endpoint, model and identity;
+query/document prefixes are configuration, never model-name exceptions. No
+embedding model, prices or semantic responses are compiled into the product.
+The default native HTTP(S) transport bypasses global proxy settings and enforces
+TLS verification; Bun 1.4.2 fetch `proxy:false` was observed not to do so.
+Loopback address validation is not proof of backend custody or network isolation.
+CLI `memory search-fts` compares the baseline; `search` and held-out `eval` use
+the configured hybrid path. Generative App composition still requires an owner
+quote even for memory-only commands; a zero unused-fixture quote is not an
+assertion about the foreign model's real tariff.
+
+The owner-bound web Memory API projects only notes and safe metadata for the
+fixed web/local scope. Trusted notes can be edited in place; untrusted notes are
+view/delete-only, with no automatic trust operation. Permanent deletion removes
+the lineage, FTS, vectors and mirrored text, leaving text-free tombstones. FTS
+merge and verified WAL truncation occur after commit before acknowledging
+physical erasure; a busy reader retains a durable pending marker and refuses
+success. Startup retries or closes its storage/runtime ownership on refusal.
+Source API/UI regressions and one real chat/edit/restart/recall/pre-close-delete
+journey pass locally; broader privacy/custody/platform qualification remains open.
 
 ### Owner credential controls
 

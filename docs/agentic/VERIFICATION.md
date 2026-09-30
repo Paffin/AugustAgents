@@ -104,6 +104,125 @@ only configuration intent.
 
 ## Current Baseline Evidence
 
+### Editable/local semantic memory and owner controls — source verified, live checks retained
+
+The final working-tree no-env-file gate on macOS arm64/Bun 1.4.2 passed 746 tests /
+12 Linux-only skips / 0 fail, 3271 assertions / 758 cases / 48 files in 26.84s;
+typecheck and host-native build passed. Public invariants cover exact vector
+identity/text binding, cold cache reuse, scope/trust filtering, edited/deleted
+document races, file formats, no trust laundering, stale-ID resurrection refusal,
+owner-bound HTTP projection/guards and pre-close physical erasure. Synthetic
+vectors in those regressions test cache/rank safety, not model quality.
+
+Real memory-only CLI commands used a unique encrypted home, actual stdin/stdout
+and public `main(argv, io)` with an explicit home; installed bin's OS-home-only
+selection was not overridden. No `io.llm`, `io.fetch`, forced routes or global
+environment changes were used. Generative composition required a stand-only
+unused adapter quote; its actual foreign tariff remains unknown. Generative
+requests/runs/attempts were zero. The embedding models were separately owned
+CPU processes and private text was not sent to the foreign Unsloth service.
+
+The first pinned community GGUF was a preserved negative: 6 fixed RU/EN gold
+queries, FTS zero correct matches, hybrid recall@5 17%, MRR 0.08. Loading and
+finite 384-vectors did not qualify it. Diagnostic metadata/tokenization showed
+WordPiece defaults 100/101/102 instead of the upstream Unigram special tokens;
+those IDs decoded to ordinary pieces and collapsed words incorrectly. The
+artifact was not patched on assumptions and the benchmark labels were not changed.
+
+An independent official CPU ONNX run pinned intfloat/multilingual-e5-small
+revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`, model SHA-256
+`ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665` and tokenizer
+SHA-256 `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39`.
+The real graph/tokenizer/pooling matched upstream; CPU 2 threads / inter-op 1 /
+one request, no global package changes or remote-code loading. On the same 10
+notes / same 6 frozen queries it achieved 5/6 recall@5, MRR 0.67. The implicit
+Russian locked-door query's English key note remained rank 6. An independently
+frozen five-question slice achieved 5/5, MRR 0.80; that separate result does not
+replace the original 83% slice. No selected embedding model is a product default.
+
+Actual public CLI cold restart, Markdown edit/reindex, profile YAML import/edit,
+untrusted-marker edit and file deletion/stale-file replay passed in retained
+owned fixtures. Entry/FTS/vector/mirrored text disappeared after deletion, and
+tombstoned IDs were not resurrected. Earlier lifecycle checks occurred after
+the CLI closed; they did not prove immediate pre-close physical erasure. The new
+strict public CLI pre-close check passed after the source repair below, with the
+marker first present in main DB, then absent from main DB/WAL and all retained
+entry/FTS/vector rows before application shutdown. Busy-reader refusal and
+startup retry also passed. Artifacts are
+under `august-memory-cli-upstream.qTCMzL`; the bad backend's 17% results and
+tokenizer cause are retained separately. Local tokenizer tokens are not fee receipts.
+
+The native transport's proxy and TLS checks use owned listeners and child-only
+environment changes: the installed Bun fetch still used HTTP_PROXY despite
+`proxy:false`; native HTTP(S) sent zero proxy requests, and explicit TLS
+verification refused a self-signed endpoint even under the child's insecure
+environment. No raw inputs/credentials were emitted in diagnostics.
+
+### Web memory journey and immediate erasure repair — bounded local live checks passed
+
+The real web task `e56d560a…` executed memory.remember, stored one trusted note,
+and completed with 4 real provider receipts / 5415 tokens. UI keyboard editing
+changed Cedar to Maple in place; exact ID/creation time remained, FTS/file old
+content disappeared, and an owned restart preserved the edited text. Real
+follow-up task `a40bb7dc…` executed memory.recall and answered with Maple, not
+Cedar: 4190 tokens. These are actual host tool executions, not seeded notes.
+Root independently inspected the edited card and axe 4.12.1 reported 0 violations /
+0 incomplete / 37 passes on that desktop state.
+
+The first UI deletion was a retained negative: rows/FTS/files were removed, but
+raw main memory.db still contained Maple before shutdown. The checkpoint had
+been attempted inside an active transaction and its failure ignored. Source
+now records a durable text-free erasure-pending marker, merges deleted FTS
+postings and verifies WAL TRUNCATE after commit, refusing confirmed success
+while a reader prevents completion. Startup retries pending work and closes
+both memory DB and runtime owner on refusal. File/API text replacement also
+purges prior bytes before acknowledgement. The repair follows SQLite's
+[FTS deletion/merge contract](https://www.sqlite.org/fts5.html#the_secure_delete_configuration_option)
+and [checkpoint completion rules](https://www.sqlite.org/pragma.html#pragma_wal_checkpoint),
+without resetting retained data or upgrading the FTS format for older readers.
+Pre-close, busy-reader, retry and failed-startup-owner-release regressions pass;
+a fresh real chat→UI-delete proof now passes: the new actual note `d6fa65ea…`
+was non-vacuously present in main memory.db after an idle restart, then the
+confirmed UI deletion removed its bytes from main DB, emptied WAL and removed
+entry/FTS/mirrored content while the owned gateway remained alive. No close
+masked the result. Three actual tasks / twelve receipts / 13970 tokens were
+retained; deletion added no model request. The original negative
+`after-ui-delete-physical.json` is preserved under `august-live-memory-ui.56UGaZ`.
+Separate labelled untrusted/XSS probes were not presented as real model
+acceptance: literal HTML rendered without images or script execution, untrusted
+cards offered no editing, and HTTP attempts to change trust or edit their text
+were refused. At 390px and desktop the A/AA axe probe had zero violations and
+zero incomplete results on that security-probe state; expanded offscreen
+tombstones in the final mobile state retained one incomplete contrast check.
+Keyboard focus, save/cancel and no horizontal overflow passed; console was clear.
+Owned browser/server processes were stopped; the foreign model was untouched.
+No claim covers earlier chat history, encrypted backups, arbitrary concurrent
+editors, legacy-sensitive entries, all platforms or the complete goal.
+
+### Generic lexical/semantic fusion correction — fixed metrics remain distinct
+
+A sparse lexical hit on an incidental word had outranked the intended semantic
+backup result. Lexical reciprocal-rank contribution is now weighted by actual
+matched distinct query-term coverage; there are no language stopword lists,
+canned paraphrases, query-name exceptions or changed gold labels. A public
+synthetic-vector regression checks this ranking invariant, not model quality.
+An independent real CPU post-fix run retained the original ten notes and all
+labels: original six still 5/6 recall@5 / MRR 0.67, known cross-language miss
+rank 6; the already-seen five still 5/5 with MRR improving from 0.80 to 0.90.
+Those reruns are explicitly post-fix, not new unseen qualification. Four further
+questions fixed before execution achieved 4/4, MRR 1.00. Results/negative
+snapshots are retained under `august-memory-cli-postfix.OjCipS`; no missing case
+was silently dropped and no top-k increase selected perfect accuracy.
+
+A separate review reproduced a trust race in the old indexed source: the final
+lexical file sync demoted a note after its semantic candidate had been built,
+yet the old trusted object was returned. The repair completes all file syncs
+before the authoritative candidate snapshot and revalidates identity/text against
+it. Both deletion and trust-demotion regressions pass; an independent actual
+CPU embedding probe returned no trusted candidate after demotion. This is a
+security/race check, not another retrieval-quality benchmark. Evidence is retained
+in `august-memory-cli-postfix.OjCipS/race-security.json`.
+
 ### Daily/per-tool budgets — bounded macOS live acceptance, 2026-09-30
 
 The owned `august-live-daily-ledger.pfoP6A` harness retained both earlier negatives

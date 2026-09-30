@@ -7,6 +7,8 @@ import { AgentCheckpointError, type ApprovalRequest } from "@august/agent";
 import { LlmAttemptObserverError } from "@august/brain";
 import { DurableRuntimeStore, IdempotencyConflictError, RunInProgressError, makeSessionKey } from "@august/core";
 import { LoopGuard } from "@august/policy";
+import { Database } from "bun:sqlite";
+import { MemoryStore } from "@august/memory";
 import {
   BuiltinExecutor,
   ConfigError,
@@ -316,6 +318,15 @@ describe("cli", () => {
 });
 
 describe("createApp", () => {
+  test("a busy pending-erasure startup fails closed and releases its runtime owner for retry",()=>{
+    const cfg=defaultConfig(tmp());mkdirSync(cfg.dataDir,{recursive:true});const path=join(cfg.dataDir,"memory.db"),store=new MemoryStore(path);
+    const entry=store.remember({scope:"owned",class:"semantic",text:"Owned pending erasure startup",origin:{kind:"user",source:"owner"},trust:"trusted",sensitivity:"personal"}).entry;
+    const reader=new Database(path);reader.run("BEGIN");reader.query("SELECT id FROM entries").all();
+    expect(()=>store.forget("owned",entry.id)).toThrow("physical erasure is pending");store.close();
+    try{expect(()=>createApp(cfg,{env:{},llm:contextualLlm(()=>"unused")})).toThrow("physical erasure is pending");const runtime=new Database(join(cfg.dataDir,"runtime.db"),{readonly:true});expect(runtime.query("SELECT value FROM runtime_meta WHERE key='runtime_owner'").get()).toBeNull();runtime.close();}
+    finally{reader.run("ROLLBACK");reader.close();}
+    const reopened=createApp(cfg,{env:{},llm:contextualLlm(()=>"unused")});expect(reopened.memory.get("owned",entry.id)).toBeUndefined();reopened.close();
+  });
   test("asks for the API key by name when it is missing, without echoing anything else", () => {
     const home = tmp();
     const cfg = defaultConfig(home);

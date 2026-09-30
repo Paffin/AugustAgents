@@ -68,10 +68,10 @@ export class MemoryExecutor implements ToolExecutor {
     return this.fallback.describeCall?.(tool, args) ?? Promise.resolve(undefined);
   }
 
-  private recall(scope: string, args: Record<string, unknown>): ToolResult {
+  private async recall(scope: string, args: Record<string, unknown>): Promise<ToolResult> {
     const kind = args.kind === undefined ? undefined : String(args.kind);
     if (kind !== undefined && !isMemoryClass(kind)) return fail("unknown kind");
-    const hits = this.store.recall({ scope, query: String(args.query), classes: kind ? [kind] : undefined, limit: typeof args.limit === "number" ? args.limit : 5 });
+    const hits = await this.store.recallHybrid({ scope, query: String(args.query), classes: kind ? [kind] : undefined, limit: typeof args.limit === "number" ? args.limit : 5 });
     if (hits.length === 0) return { content: "No matching memories.", parts: [{ text: "No matching memories.", origin: { kind: "builtin", source: "memory.recall" }, trust: "trusted", sensitivity: "public" }] };
     const parts: ContentPart[] = hits.map(({ entry }) => ({
       text: describe(entry),

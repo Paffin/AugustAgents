@@ -5,8 +5,8 @@ import type { ApprovalRequest, Approver } from "@august/agent";
 import { DecisionCascade, HeuristicEngine, NativeLayaTransport, nativeLayaIdentity } from "@august/brain";
 import { PendingApprovals, TelegramChannel, WEB_HTML, WEB_JS } from "@august/channels";
 import { DurableRuntimeStore, LaneQueue, RuntimeOwnerInUseError, makeSessionKey, type DurableRun } from "@august/core";
-import { startGateway, type GatewayRunView, type RunningGateway } from "@august/gateway";
-import { evaluateRetrieval, isMemoryClass, type RetrievalCase } from "@august/memory";
+import { startGateway, type GatewayMemoryView, type GatewayRunView, type RunningGateway } from "@august/gateway";
+import { evaluateRetrievalHybrid, isMemoryClass, type MemoryEntry, type RetrievalCase } from "@august/memory";
 import { detectSandbox, type SandboxKind } from "@august/mcp";
 import { createApp, type App, type AppDeps } from "./bootstrap.ts";
 import { ConfigError, EGRESS_ENTRY, defaultConfig, defaultConfigPath, loadConfig, parseConfig, writeConfig, type AugustConfig, type LlmPricing } from "./config.ts";
@@ -76,6 +76,11 @@ export function terminalApprover(io: Pick<CliIo, "print" | "ask">): Approver {
 
 const keyDirFor = (io: CliIo): string => io.env.AUGUST_KEY_DIR ?? join(io.home, ".config", "august");
 
+function memoryView(entry:MemoryEntry):GatewayMemoryView {
+  const {id,class:cls,text,trust,sensitivity,createdAt,updatedAt,expiresAt}=entry;
+  return {id,class:cls,text,trust,sensitivity,origin:{kind:entry.origin.kind},createdAt,updatedAt,...(expiresAt===undefined?{}:{expiresAt})};
+}
+
 function keyBoundaries(io: CliIo): string[] {
   const roots = [join(io.home, ".august")];
   // Keep recovery usable with broken config, but do not invent safety for its unknown workspace.
@@ -122,7 +127,7 @@ export async function main(argv: readonly string[], io: CliIo): Promise<CliResul
       case "audit":
         return await auditCommand(configPath, rest, io);
       case "memory":
-        return memoryCommand(configPath, rest, io);
+        return await memoryCommand(configPath, rest, io);
       case "patterns":
         return patterns(configPath, rest, io);
       default:
@@ -403,6 +408,12 @@ async function serve(configPath: string, io: CliIo): Promise<CliResult> {
     audit: () => app.audit.externalStatus(),
     providerHealth: () => app.providerHealth(),
     budgets:()=>app.budgetSnapshot(),
+    memory: {
+      list:()=>app.memory.list(makeSessionKey({workspace:config.workspace,channel:"web",user:"local"}),{limit:201}).map(memoryView),
+      update:(id,text)=>memoryView(app.memory.update(makeSessionKey({workspace:config.workspace,channel:"web",user:"local"}),id,text)),
+      forget:id=>{const scope=makeSessionKey({workspace:config.workspace,channel:"web",user:"local"});if(!app.memory.forget(scope,id)&&!app.memory.tombstones(scope).some(t=>t.id===id))throw Error("no owned memory identity");},
+      tombstones:()=>app.memory.tombstones(makeSessionKey({workspace:config.workspace,channel:"web",user:"local"})).slice(0,201).map(({id,class:cls,deletedAt})=>({id,class:cls,deletedAt})),
+    },
     // Telegram answers only through Telegram: a browser token must not be able to answer its approvals.
     approvals: approvals.forGateway(["telegram"]),
     webUi: config.channels.web ? { html: WEB_HTML, js: WEB_JS } : undefined,
@@ -821,7 +832,7 @@ function patterns(configPath: string, args: readonly string[], io: CliIo): CliRe
   }
 }
 
-function memoryCommand(configPath: string, args: readonly string[], io: CliIo): CliResult {
+async function memoryCommand(configPath: string, args: readonly string[], io: CliIo): Promise<CliResult> {
   const { config, app } = openLearningApp(configPath, io);
   try {
     const rest = [...args];
@@ -830,6 +841,8 @@ function memoryCommand(configPath: string, args: readonly string[], io: CliIo): 
     if (at >= 0) { scope = rest[at + 1] ?? ""; rest.splice(at, 2); }
     const [action, a, ...more] = rest;
     const m = app.memory;
+    if(action==="files"){io.print(m.filesDirectory(scope)??"Owner-editable files are not configured.");return {code:0};}
+    if(action==="sync"){m.syncFiles(scope);io.print("Owner memory files synchronized; untrusted provenance was not promoted.");return {code:0};}
     const line = (e: ReturnType<typeof m.list>[number]) => `${e.id}  ${e.class}${e.trust === "untrusted" ? " (untrusted)" : ""}${e.status === "superseded" ? " (superseded)" : ""}  ${new Date(e.updatedAt).toISOString().slice(0, 10)}  ${e.text.length > 100 ? `${e.text.slice(0, 100)}...` : e.text}`;
     if (action === undefined || action === "list") {
       const cls = a === undefined ? undefined : isMemoryClass(a) ? a : null;
@@ -841,7 +854,7 @@ function memoryCommand(configPath: string, args: readonly string[], io: CliIo): 
       io.print(`${st.semantic} semantic, ${st.procedural} procedural, ${st.episodic} episodic, ${st.working} working; ${st.untrusted} written under untrusted influence (review them, then: august memory trust ID)`);
       return { code: 0 };
     }
-    if (action === "search" && a) { const hits = m.recall({ scope, query: [a, ...more].join(" "), touch: false }); if (!hits.length) io.print("No matches."); for (const h of hits) io.print(line(h.entry)); return { code: 0 }; }
+    if ((action === "search"||action==="search-fts") && a) { const options={scope,query:[a,...more].join(" "),touch:false};const hits = action==="search-fts"?m.recall(options):await m.recallHybrid(options); if (!hits.length) io.print("No matches."); for (const h of hits) io.print(line(h.entry)); return { code: 0 }; }
     if (action === "show" && a) { const e = m.get(scope, a); if (!e) { io.print("No such memory."); return { code: 1 }; } io.print(`${line(e)}\nOrigin: ${e.origin.kind} ${e.origin.source}${e.origin.locator ? ` (${e.origin.locator})` : ""}; sensitivity ${e.sensitivity}; used ${e.useCount} times${e.expiresAt ? `; expires ${new Date(e.expiresAt).toISOString().slice(0, 10)}` : ""}\n${e.text}`); return { code: 0 }; }
     if (action === "add" && (a === "semantic" || a === "procedural") && more.length) { const r = m.remember({ scope, class: a, text: more.join(" "), origin: { kind: "user", source: "owner" }, trust: "trusted", sensitivity: "personal" }); io.print(`${r.created ? "Remembered" : "Already remembered"}: ${r.entry.id}`); return { code: 0 }; }
     if (action === "trust" && a) { io.print(m.trust(scope, a) ? "Marked as trusted." : "Nothing to change."); return { code: 0 }; }
@@ -851,12 +864,12 @@ function memoryCommand(configPath: string, args: readonly string[], io: CliIo): 
     if (action === "sweep") { io.print(`Removed ${m.sweep()} expired item(s).`); return { code: 0 }; }
     if (action === "eval" && a) {
       const cases = JSON.parse(readFileSync(a, "utf8")) as RetrievalCase[];
-      const r = evaluateRetrieval(m, scope, cases);
+      const r = await evaluateRetrievalHybrid(m, scope, cases);
       io.print(`Retrieval on ${r.cases} questions: recall@${r.k} ${(r.recallAtK * 100).toFixed(0)}%, MRR ${r.mrr.toFixed(2)}`);
       for (const q of r.misses) io.print(`  missed: ${q}`);
       return { code: 0 };
     }
-    io.print("Usage: august memory [--session KEY] list [KIND] | search WORDS | show ID | add semantic|procedural TEXT | trust ID | forget ID | forget-source SOURCE | erase --yes | sweep | eval FILE");
+    io.print("Usage: august memory [--session KEY] files | sync | list [KIND] | search WORDS | search-fts WORDS | show ID | add semantic|procedural TEXT | trust ID | forget ID | forget-source SOURCE | erase --yes | sweep | eval FILE");
     return { code: 1 };
   } catch (error) {
     io.print((error as Error).message);

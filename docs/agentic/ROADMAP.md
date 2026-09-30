@@ -76,7 +76,7 @@ are product/verification prerequisites, not documentation ceremonies.
 **Dependencies:** OUT-002, OUT-006
 **Readiness:** Blocked
 **State:** Proposed
-**Current Evidence:** bccd5d9 adds integrated compilation source; fresh real-model matched-task promotion/demotion acceptance is outstanding.
+**Current Evidence:** bccd5d9 added integrated compilation source. One actual clock procedure now climbed through 3 LLM / 3 skill / 3 workflow verified runs to reflex, then executed with zero LLM under exhausted budget; benign resource refusal did not demote it (#4). Broader task families, controlled-effect approval/audit, matched savings and complete outcome acceptance remain outstanding.
 
 ### OUT-008: Provenance-aware memory engine
 
@@ -85,8 +85,8 @@ are product/verification prerequisites, not documentation ceremonies.
 **Decision Prerequisites:** DEC-0005, DEC-0006
 **Dependencies:** OUT-002, OUT-003
 **Readiness:** Blocked
-**State:** Proposed
-**Current Evidence:** a7d4b02 adds memory source. Live isolation/lifecycle acceptance and the requested vector/file-backed contract remain outstanding.
+**State:** Implementing
+**Current Evidence:** a7d4b02 added memory source. Editable scoped files, opt-in local hybrid retrieval, invalidation/deletion and owner-bound web/API controls now exist. Actual CLI lifecycle passes; one frozen RU/EN retrieval slice is 83% and independent slices 100%, with a known original miss retained. Real web remember/edit/restart/recall passed; immediate physical deletion first exposed a WAL checkpoint defect, then passed non-vacuous pre-close live proof after repair. Full memory quality/custody/platform/outcome acceptance remains open.
 
 ### OUT-009: Tamper-evident audit and encrypted secret fallback
 

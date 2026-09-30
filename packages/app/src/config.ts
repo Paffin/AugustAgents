@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { validateNativeLayaBundle, type NativeLayaBundle } from "@august/brain";
 import type { BudgetPolicy } from "@august/core";
+import { LocalEmbeddingClient } from "@august/memory";
 
 export interface AugustConfig {
   /** Workspace part of session keys. */
@@ -35,6 +36,9 @@ export interface AugustConfig {
 }
 
 export interface MemoryConfig {
+  /** Optional explicit owner-editable mirror directory. Default: dataDir/memory, outside workspace tools. */
+  filesDir?: string;
+  embedding?: { baseUrl:string;model:string;identity:string;apiKeyEnv?:string;queryPrefix?:string;documentPrefix?:string;timeoutMs?:number };
   /** Keep a short record of each finished run (your request, the tools used, the outcome) as episodic memory. Default off. */
   episodic?: boolean;
   /** How long episodic records live. Default 90. */
@@ -274,9 +278,17 @@ function parseAuditExternal(value: unknown): NonNullable<AugustConfig["auditExte
 function parseMemory(value: unknown): MemoryConfig {
   const m = value as Partial<MemoryConfig> | null;
   if (!m || typeof m !== "object" || Array.isArray(m)) throw new ConfigError("memory must be an object");
-  for (const key of Object.keys(m)) if (!["episodic", "episodicDays", "recall"].includes(key)) throw new ConfigError(`memory.${key} is not a known setting`);
+  for (const key of Object.keys(m)) if (!["episodic", "episodicDays", "recall", "filesDir", "embedding"].includes(key)) throw new ConfigError(`memory.${key} is not a known setting`);
   for (const key of ["episodic", "recall"] as const) if (m[key] !== undefined && typeof m[key] !== "boolean") throw new ConfigError(`memory.${key} must be true or false`);
   if (m.episodicDays !== undefined && (!Number.isInteger(m.episodicDays) || m.episodicDays < 1 || m.episodicDays > 3650)) throw new ConfigError("memory.episodicDays must be a whole number of days, 1-3650");
+  if(m.filesDir!==undefined&&(typeof m.filesDir!=="string"||!m.filesDir.startsWith("/")&& !/^[A-Za-z]:[\\/]/.test(m.filesDir)))throw new ConfigError("memory.filesDir must be an absolute owner directory");
+  if(m.embedding!==undefined){
+    const e=m.embedding;
+    if(!e||typeof e!=="object"||Array.isArray(e)||Object.keys(e).some(k=>!["baseUrl","model","identity","apiKeyEnv","queryPrefix","documentPrefix","timeoutMs"].includes(k)))throw new ConfigError("invalid memory.embedding configuration");
+    if(e.apiKeyEnv!==undefined&&!/^[A-Z][A-Z0-9_]{0,63}$/.test(e.apiKeyEnv))throw new ConfigError("memory.embedding.apiKeyEnv must be a secret reference");
+    for(const prefix of [e.queryPrefix,e.documentPrefix])if(prefix!==undefined&&(typeof prefix!=="string"||prefix.length>256))throw new ConfigError("embedding prefixes must be bounded explicit strings");
+    try{new LocalEmbeddingClient(e);}catch{throw new ConfigError("memory.embedding needs an explicit loopback endpoint, model, identity and valid timeout");}
+  }
   return { ...m };
 }
 

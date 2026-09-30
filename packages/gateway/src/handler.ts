@@ -55,6 +55,25 @@ export interface GatewaySecrets {
 
 const SECRET_API_NAME = /^(?:[A-Za-z0-9_-]{1,64}\.)?[A-Z_][A-Z0-9_]{0,127}$/;
 
+/** Owner notes only: no session identifiers, file paths, provider secrets or vector cache. */
+export interface GatewayMemoryView {
+  id: string; class: "working" | "episodic" | "semantic" | "procedural"; text: string;
+  trust: "trusted" | "untrusted"; sensitivity: string;
+  origin: { kind: string }; createdAt: number; updatedAt: number; expiresAt?: number;
+}
+export interface GatewayMemoryTombstone { id: string; class: GatewayMemoryView["class"]; deletedAt: number }
+export interface GatewayMemory {
+  /** Scope is fixed by the App closure, never chosen by a browser request. */
+  list(): readonly GatewayMemoryView[];
+  update(id: string, text: string): GatewayMemoryView;
+  forget(id: string): void;
+  tombstones?(): readonly GatewayMemoryTombstone[];
+}
+const MEMORY_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+function memoryView(entry: GatewayMemoryView): GatewayMemoryView {
+  return { id:entry.id,class:entry.class,text:entry.text,trust:entry.trust,sensitivity:entry.sensitivity,origin:{kind:entry.origin.kind},createdAt:entry.createdAt,updatedAt:entry.updatedAt,...(entry.expiresAt===undefined?{}:{expiresAt:entry.expiresAt}) };
+}
+
 export interface GatewayRunView {
   id: string; state: RunState; request: string; steps: number; usage: RunUsage;
   budget: RunBudget; canResume: boolean; reply?: string; feedbackId?: string; feedbackRecorded?: boolean; updatedAt: number;
@@ -86,6 +105,7 @@ export interface GatewayOptions extends BindConfig {
   providerHealth?: () => Array<{ provider: string; state: "closed" | "open" | "half-open"; failures: number; retryAt?: number }>;
   /** Owner-global budget accounting; holds and quotes are not settled vendor charges. */
   budgets?: () => import("@august/core").BudgetSnapshot;
+  memory?: GatewayMemory;
 }
 
 function json(status: number, body: unknown): Response {
@@ -182,6 +202,33 @@ export function createGatewayHandler(options: GatewayOptions): (request: Request
       if (!options.budgets) return json(404, { error: "budget accounting unavailable" });
       try { return json(200, options.budgets()); }
       catch { return json(503, { error: "budget accounting unavailable" }); }
+    }
+    if (url.pathname === "/v1/memory" && request.method === "GET") {
+      if (!options.memory) return json(404, { error: "memory controls unavailable" });
+      if (url.search) return json(400, { error: "memory scope is owner-bound; query parameters are not supported" });
+      try {
+        const entries=options.memory.list(), tombstones=options.memory.tombstones?.()??[],limit=200;
+        return json(200,{entries:entries.slice(0,limit).map(memoryView),tombstones:tombstones.slice(0,limit).map(t=>({id:t.id,class:t.class,deletedAt:t.deletedAt})),limit,truncated:entries.length>limit||tombstones.length>limit});
+      } catch { return json(503, { error: "memory controls unavailable" }); }
+    }
+    if (url.pathname.startsWith("/v1/memory/") && ["PATCH","DELETE"].includes(request.method)) {
+      if (!options.memory) return json(404, { error: "memory controls unavailable" });
+      const id=url.pathname.slice("/v1/memory/".length);
+      if (!MEMORY_ID.test(id)||url.search) return json(400,{error:"invalid memory id or query"});
+      if (!(request.headers.get("content-type")??"").toLowerCase().startsWith("application/json")) return json(415,{error:"content-type must be application/json"});
+      const raw=await readBody(request);if(raw===null)return json(413,{error:"body too large"});
+      let body:Record<string,unknown>;
+      try {body=JSON.parse(raw);if(!body||typeof body!=="object"||Array.isArray(body))throw Error();}catch{return json(400,{error:"invalid JSON"});}
+      if(request.method==="DELETE") {
+        if(body.confirm!==true||Object.keys(body).some(key=>key!=="confirm"))return json(400,{error:"explicit deletion confirmation is required"});
+        try{options.memory.forget(id);return json(200,{deleted:true});}catch{return json(503,{error:"memory deletion could not be confirmed; refresh before retrying"});}
+      }
+      if(typeof body.text!=="string"||!body.text.trim()||body.text.trim().length>2000||Object.keys(body).some(key=>key!=="text"))return json(400,{error:"provide only note text, between 1 and 2000 characters"});
+      try {
+        const existing=options.memory.list().find(entry=>entry.id===id);
+        if(!existing||existing.trust!=="trusted")return json(409,{error:"note unavailable or read-only"});
+        return json(200,{entry:memoryView(options.memory.update(id,body.text.trim()))});
+      } catch { return json(409,{error:"note could not be updated; refresh the authoritative version before retrying"}); }
     }
     if (url.pathname === "/v1/runs" && request.method === "GET") {
       if (!options.runs) return json(404, { error: "run controls unavailable" });

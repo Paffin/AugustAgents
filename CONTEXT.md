@@ -64,8 +64,15 @@ nine verified tasks to real reflex, zero-LLM execution under exhausted budget an
 per-tool refusal/no-demotion now pass live (#4). Full outcome/platform acceptance
 is not established. Prompt-input quantities
 and vendor invoices remain unknown before receipt, not a strict billing ceiling.
-Next implementation is editable memory files and opt-in local hybrid semantic
-retrieval (#5); source is under verification, not yet delivered live.
+Editable scoped memory files, opt-in real local hybrid retrieval (#5) and a
+web Memory editor (#6) are implemented. Actual CLI file/cache lifecycle and
+one real web remember/edit/restart/recall/delete journey now pass; an immediate
+physical-erasure failure was retained and repaired with post-commit verified
+checkpointing. The original multilingual retrieval slice remains 83% with one
+miss, while separate unseen slices pass; it is not perfect/general qualification.
+Final source/type/build checks and bounded UI safety evidence pass; source
+publication and remaining outcomes continue. Hybrid recall also revalidates the
+current trust/text snapshot after file sync, rather than returning stale candidates.
 
 ## Active Risks
 

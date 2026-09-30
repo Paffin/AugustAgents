@@ -38,6 +38,10 @@
   a host tool reservation. It is not a vendor usage receipt or an MCP assertion.
 - **Budget availability:** configured allowance less received estimates and
   unresolved holds. Unconfigured limits and unpriced fees are not free usage.
+- **Owner file edit:** a scoped local-file change; existing untrusted provenance
+  cannot become trusted merely because its text or ID marker was edited.
+- **Semantic index identity:** the configured embedding weights/preprocessing
+  fingerprint plus exact document hash, not a model alias or inferred fee.
 
 ## Definitions
 

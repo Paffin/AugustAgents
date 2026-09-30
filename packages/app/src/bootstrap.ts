@@ -23,7 +23,7 @@ import { CapabilityRegistry } from "@august/capabilities";
 import { BudgetAdmissionError, DurableRuntimeStore, type BudgetSnapshot, type DurableRun, type RunBudgetRequest, type RunState, AnchorLog, AuditAnchorer, AuditKey, EventJournal, makeSessionKey, verifyAudit, type AuditAnchor, type AuditReport, type SessionKey } from "@august/core";
 import { RegistryClient, installNpm, resolveNpm, verifyInstalled, type InstallPlan } from "@august/discovery";
 import { EGRESS_BRIDGE_JS, EgressProxy, McpHost, detectSandbox, parseEgress, sandboxHome, sandboxSpec, type NetworkAccess, type SandboxKind } from "@august/mcp";
-import { MemoryExecutor, MemoryStore, memoryManifest } from "@august/memory";
+import { LocalEmbeddingClient, MemoryExecutor, MemoryStore, memoryManifest } from "@august/memory";
 import { maxSensitivity } from "@august/policy";
 import { DistillationEngine, PatternStore, type Route } from "@august/ladder";
 import { LearningStore,VerifierSet, calibrationSamples, engineOf, evaluateActivation, recordOwnerFeedback, type ActivationReport } from "@august/learning";
@@ -199,7 +199,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
   const configured = [...config.mcp];
   const broker = new SecretBroker(secrets, deps.env);
   // Everything that must never appear in a checkpoint: August's own keys by name, and each capability's own secrets.
-  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.llm.backup?.apiKeyEnv, config.channels.telegram?.tokenSecret, config.auditExternal?.tokenEnv].filter((name): name is string => Boolean(name)));
+  const ownSecretNames = new Set([config.llm.apiKeyEnv, config.llm.backup?.apiKeyEnv, config.channels.telegram?.tokenSecret, config.auditExternal?.tokenEnv,config.memory?.embedding?.apiKeyEnv].filter((name): name is string => Boolean(name)));
   const capabilitySecrets = new Map<string, { trust: DeliveryContext["trust"]; names: Set<string> }>();
   const registerCheckpointSecrets = (entry: McpServerConfig) => {
     const names = [...(entry.envFrom ?? []), ...Object.values(entry.headersFrom ?? {})];
@@ -287,7 +287,14 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
     return wrapped.isolation;
   };
 
-  const memory = new MemoryStore(join(config.dataDir, "memory.db"), { containsSecret: (text) => secretValues().some((value) => value.length >= 6 && text.includes(value)) });
+  const memoryFilesDir=config.memory?.filesDir??join(config.dataDir,"memory");
+  try{assertKeyDirectoryOutside(memoryFilesDir,[config.root]);}catch{runs.close();throw new ConfigError("Owner-editable memory files must live outside capability-writable workspace roots");}
+  const embedding=config.memory?.embedding;
+  const embeddingKey=embedding?.apiKeyEnv?resolveSecret(embedding.apiKeyEnv,secrets,deps.env):undefined;
+  if(embedding?.apiKeyEnv&&!embeddingKey){runs.close();throw new ConfigError("Local embedding credential is unavailable; configure its secret reference");}
+  let memory:MemoryStore;
+  try {memory=new MemoryStore(join(config.dataDir, "memory.db"), { filesDir:memoryFilesDir,...(embedding?{embeddings:{client:new LocalEmbeddingClient({...embedding,apiKey:embeddingKey}),queryPrefix:embedding.queryPrefix,documentPrefix:embedding.documentPrefix}}:{}),containsSecret: (text) => secretValues().some((value) => value.length >= 6 && text.includes(value)) });}
+  catch(error){runs.close();throw error;}
   const meta = new MetaExecutor({
     registry,
     registryClient,
@@ -432,7 +439,7 @@ export function createApp(config: AugustConfig, deps: AppDeps): App {
       // Only a fresh run may start from a learned pattern; a resumed one continues exactly where its checkpoint says.
       const route: Route = checkpoint ? { stage: "llm" } : distill.route(run.request, registry.enabledTools());
       // Notes the owner's own words put in memory go in front of the model. Anything written under untrusted influence does not: it is reachable only through memory.recall, where it taints the run.
-      const notes = checkpoint || config.memory?.recall === false ? [] : memory.recall({ scope: run.session, query: run.request, classes: ["semantic", "procedural", "working"], trustedOnly: true, limit: 4 });
+      const notes = checkpoint || config.memory?.recall === false ? [] : await memory.recallHybrid({ scope: run.session, query: run.request, classes: ["semantic", "procedural", "working"], trustedOnly: true, limit: 4,signal:controller.signal });
       const noted = notes.map(({ entry }) => `Memory (${entry.class}, kept by the owner): ${entry.text}`);
       const sensitivity = notes.reduce<"public" | "personal" | "secret">((max, { entry }) => maxSensitivity(max, entry.sensitivity), priorProvenance.sensitivity);
       let reply = await agent.handle(run.session, run.request, {

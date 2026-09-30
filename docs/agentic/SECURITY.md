@@ -155,6 +155,19 @@ the encryption/theft/tamper/recovery contract while fixing test isolation. Befor
 any later host credential test, use its own disposable backend/account namespace.
 No runtime secret values are written into review packages or screenshots.
 
+Owner-editable memory files are kept outside tool-writable roots. File sync does
+not elevate untrusted records or restore forgotten IDs; direct web edits require
+existing trusted state and never expose a trust endpoint. Credential-like content
+(including fine-grained GitHub PAT shapes) is rejected before memory/vector writes.
+Semantic indexing filters owner scope/trust before sending text to a configured
+loopback service. Native requests ignore global proxies and verify HTTPS even
+when the process environment disables TLS verification; both boundaries have
+owned-listener/child-process regression evidence. Endpoint locality alone does
+not attest backend weights, custody, no-forwarding behavior or air-gap isolation.
+Full concurrent-file, legacy-sensitive-data and native Windows erasure/custody
+qualification remain open. Memory/vector backups are not claimed to be encrypted
+or irreversibly purged by this increment.
+
 The broader action contract includes REQ-SEC-005, browser/worker/device adapters,
 A2A wallet mandates and opt-in collective immunity. All consume common effects,
 provenance, identity and budget checks below model reasoning. External services,
